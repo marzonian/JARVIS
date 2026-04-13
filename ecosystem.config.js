@@ -1,0 +1,63 @@
+module.exports = {
+  apps: [
+    {
+      name: 'mcnair-daily-signals',
+      script: './scripts/mcnair_daily_signals.js',
+      cwd: '/Users/m3130/3130-runtime/mcnair-mindset',
+      autorestart: false,
+      time: true,
+      cron_restart: '25 9 * * 1-5',
+      env: {
+        TZ: 'America/New_York',
+        SIGNAL_BASE_URL: 'http://localhost:3131',
+      },
+    },
+    {
+      name: 'mcnair-daily-signals-stop',
+      script: './scripts/mcnair_daily_signals_stop.js',
+      cwd: '/Users/m3130/3130-runtime/mcnair-mindset',
+      autorestart: false,
+      time: true,
+      cron_restart: '45 10 * * 1-5',
+      env: {
+        TZ: 'America/New_York',
+      },
+    },
+    {
+      name: 'mcnair-auto-heal',
+      script: './scripts/auto_fix_supervisor.js',
+      cwd: '/Users/m3130/3130-runtime/mcnair-mindset',
+      autorestart: false,
+      time: true,
+      cron_restart: '*/5 * * * 1-5',
+      env: {
+        TZ: 'America/New_York',
+        AUTO_FIX_BASE_URL: 'http://localhost:3131',
+        AUTO_FIX_MAX_ATTEMPTS: '2',
+        AUTO_FIX_GRACE_RETRIES: '3',
+        AUTO_FIX_GRACE_DELAY_MS: '1200',
+      },
+    },
+    {
+      name: 'mcnair-logic-guardian',
+      script: './scripts/logic_guardian.js',
+      cwd: '/Users/m3130/3130-runtime/mcnair-mindset',
+      autorestart: false,
+      time: true,
+      cron_restart: '*/15 9-16 * * 1-5',
+      env: {
+        TZ: 'America/New_York',
+        LOGIC_GUARD_WINDOW_DAYS: '14',
+        LOGIC_GUARD_MAX_WINDOW_DAYS: '120',
+        LOGIC_GUARD_MIN_SAMPLE: '12',
+        LOGIC_GUARD_MIN_DECISIVE_SAMPLE: '6',
+        LOGIC_GUARD_MIN_DECISIVE_DAYS: '4',
+        LOGIC_GUARD_COOLDOWN_MIN: '180',
+        LOGIC_GUARD_LOCK_MIN: '12',
+        LOGIC_GUARD_MIN_HEALTHY_RELAX: '2',
+        LOGIC_GUARD_MAX_CHANGES_PER_DAY: '1',
+        LOGIC_GUARD_RECENCY_HALF_LIFE: '12',
+      },
+    },
+  ],
+};

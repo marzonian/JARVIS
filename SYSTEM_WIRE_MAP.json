@@ -1,0 +1,708 @@
+{
+  "generatedAt": "2026-03-11T19:46:57.832Z",
+  "repoRoot": "/Users/m3130/3130-runtime/mcnair-mindset",
+  "version": 1,
+  "requiredWireIds": [
+    "endpoint.jarvis.query",
+    "endpoint.market.health",
+    "endpoint.location.update",
+    "endpoint.location.status",
+    "endpoint.jarvis.diag.latest",
+    "endpoint.jarvis.complaints.create",
+    "endpoint.jarvis.complaints.list",
+    "endpoint.jarvis.improvements.suggest",
+    "client.voice.submit",
+    "client.voice.route.indicator",
+    "orchestrator.intent.classifier",
+    "orchestrator.intent.router",
+    "orchestrator.skill.shopping",
+    "orchestrator.skill.project",
+    "orchestrator.skill.complaint",
+    "orchestrator.skill.improvement",
+    "tool.risk",
+    "tool.health",
+    "tool.analyst",
+    "tool.web",
+    "fsm.consent.pending",
+    "store.location.ttl",
+    "gate.voice.endpoint.guard",
+    "gate.content.firewall",
+    "gate.finalize.earbud",
+    "trace.store",
+    "trace.diag.latest"
+  ],
+  "wires": [
+    {
+      "id": "endpoint.jarvis.query",
+      "stage": "entrypoint",
+      "type": "endpoint",
+      "file": "server/index.js",
+      "line": 29391,
+      "anchor": "app.post('/api/jarvis/query'",
+      "guarantee": "All voice requests are routed through Jarvis orchestrator response pipeline.",
+      "silentFailure": "Voice hitting legacy endpoints can bypass Jarvis if guard is removed.",
+      "proof": {
+        "traceFields": [
+          "endpoint",
+          "traceId",
+          "routePathTag"
+        ],
+        "tests": [
+          "test-jarvis-voice-guard",
+          "test-jarvis-voice-real-e2e"
+        ]
+      }
+    },
+    {
+      "id": "endpoint.market.health",
+      "stage": "health",
+      "type": "endpoint",
+      "file": "server/index.js",
+      "line": 38924,
+      "anchor": "app.get(['/api/market/health', '/api/topstep/bars/health']",
+      "guarantee": "Market health snapshot is available to voice and dashboard pollers.",
+      "silentFailure": "Stale bars can be misread as healthy if endpoint is disconnected.",
+      "proof": {
+        "traceFields": [
+          "healthStatusUsed",
+          "lastHealthAgeSeconds"
+        ],
+        "tests": [
+          "test-health-tool",
+          "test-jarvis-voice-session-mode"
+        ]
+      }
+    },
+    {
+      "id": "endpoint.location.update",
+      "stage": "location",
+      "type": "endpoint",
+      "file": "server/index.js",
+      "line": 29222,
+      "anchor": "app.post('/api/jarvis/location/update'",
+      "guarantee": "Phone/browser location updates are validated and stored for session-scoped use.",
+      "silentFailure": "Web local search asks for consent but has no usable location.",
+      "proof": {
+        "traceFields": [
+          "traceId"
+        ],
+        "tests": [
+          "test-jarvis-location-bridge",
+          "test-jarvis-web-consent"
+        ]
+      }
+    },
+    {
+      "id": "endpoint.location.status",
+      "stage": "location",
+      "type": "endpoint",
+      "file": "server/index.js",
+      "line": 29366,
+      "anchor": "app.get('/api/jarvis/location/status'",
+      "guarantee": "Client can verify whether session location is present and fresh.",
+      "silentFailure": "UI thinks location exists when TTL has expired.",
+      "proof": {
+        "traceFields": [
+          "sessionId"
+        ],
+        "tests": [
+          "test-jarvis-location-bridge"
+        ]
+      }
+    },
+    {
+      "id": "endpoint.jarvis.diag.latest",
+      "stage": "observability",
+      "type": "endpoint",
+      "file": "server/index.js",
+      "line": 30368,
+      "anchor": "app.get('/api/jarvis/diag/latest'",
+      "guarantee": "Latest trace can be queried by traceId or session to prove runtime path.",
+      "silentFailure": "Cannot prove what route/tools generated bad voice output.",
+      "proof": {
+        "traceFields": [
+          "intent",
+          "toolsUsed",
+          "routePathTag",
+          "precedenceMode"
+        ],
+        "tests": [
+          "test-jarvis-trace-schema"
+        ]
+      }
+    },
+    {
+      "id": "endpoint.jarvis.complaints.create",
+      "stage": "feedback",
+      "type": "endpoint",
+      "file": "server/index.js",
+      "line": 30401,
+      "anchor": "app.post('/api/jarvis/complaints'",
+      "guarantee": "Voice/UI can persist low-quality response complaints with trace metadata.",
+      "silentFailure": "Bad responses are not captured for improvement review.",
+      "proof": {
+        "traceFields": [
+          "traceId"
+        ],
+        "tests": [
+          "test-jarvis-complaints"
+        ]
+      }
+    },
+    {
+      "id": "endpoint.jarvis.complaints.list",
+      "stage": "feedback",
+      "type": "endpoint",
+      "file": "server/index.js",
+      "line": 30440,
+      "anchor": "app.get('/api/jarvis/complaints'",
+      "guarantee": "Complaint records are queryable and exportable for review loops.",
+      "silentFailure": "Improvement engine runs without real complaint evidence.",
+      "proof": {
+        "traceFields": [
+          "selectedSkill",
+          "routePathTag"
+        ],
+        "tests": [
+          "test-jarvis-complaints"
+        ]
+      }
+    },
+    {
+      "id": "endpoint.jarvis.improvements.suggest",
+      "stage": "improvement",
+      "type": "endpoint",
+      "file": "server/index.js",
+      "line": 30495,
+      "anchor": "app.get('/api/jarvis/improvements/suggest'",
+      "guarantee": "Jarvis can propose changes from complaint patterns without auto-applying.",
+      "silentFailure": "System improvement requests produce generic answers with no evidence.",
+      "proof": {
+        "traceFields": [
+          "toolsUsed",
+          "selectedSkill"
+        ],
+        "tests": [
+          "test-jarvis-improvement-engine"
+        ]
+      }
+    },
+    {
+      "id": "endpoint.voice.speak",
+      "stage": "voice-output",
+      "type": "endpoint",
+      "file": "server/index.js",
+      "line": 31223,
+      "anchor": "app.post('/api/assistant/voice/speak'",
+      "guarantee": "Spoken payload parity is auditable against reply text.",
+      "silentFailure": "TTS speaks stale or unsanitized text from different field.",
+      "proof": {
+        "traceFields": [
+          "spokenTextPreview",
+          "serverEqualsReply"
+        ],
+        "tests": [
+          "test-jarvis-voice-real-e2e"
+        ]
+      }
+    },
+    {
+      "id": "client.voice.submit",
+      "stage": "client-entry",
+      "type": "client",
+      "file": "client/src/App.jsx",
+      "line": 2017,
+      "anchor": "const url = '/api/jarvis/query';",
+      "guarantee": "Voice submit path calls Jarvis endpoint directly.",
+      "silentFailure": "Fallback to legacy assistant endpoint causes leakage.",
+      "proof": {
+        "traceFields": [
+          "endpoint",
+          "traceId"
+        ],
+        "tests": [
+          "test-jarvis-voice-guard",
+          "test-jarvis-voice-real-e2e"
+        ]
+      }
+    },
+    {
+      "id": "client.voice.route.indicator",
+      "stage": "client-observability",
+      "type": "client",
+      "file": "client/src/App.jsx",
+      "line": 2803,
+      "anchor": "Jarvis: ON",
+      "guarantee": "UI discloses whether voice route is Jarvis or legacy.",
+      "silentFailure": "User cannot detect old bundle / wrong route.",
+      "proof": {
+        "traceFields": [
+          "routePathTag"
+        ],
+        "tests": [
+          "test-jarvis-voice-real-e2e"
+        ]
+      }
+    },
+    {
+      "id": "client.voice.tools.line",
+      "stage": "client-observability",
+      "type": "client",
+      "file": "client/src/App.jsx",
+      "line": 2953,
+      "anchor": "Jarvis Used Tools",
+      "guarantee": "UI shows which tools answered the request.",
+      "silentFailure": "Hallucinated tool usage is not visible.",
+      "proof": {
+        "traceFields": [
+          "toolsUsed"
+        ],
+        "tests": [
+          "test-jarvis-trace-schema",
+          "test-jarvis-voice-real-e2e"
+        ]
+      }
+    },
+    {
+      "id": "client.voice.consent.status",
+      "stage": "client-consent",
+      "type": "client",
+      "file": "client/src/App.jsx",
+      "line": 2976,
+      "anchor": "Jarvis Authorization",
+      "guarantee": "Voice panel shows explicit consent pending state for web actions.",
+      "silentFailure": "Web actions can appear stalled without user-visible reason.",
+      "proof": {
+        "traceFields": [
+          "consentPending",
+          "consentKind"
+        ],
+        "tests": [
+          "test-jarvis-web-consent"
+        ]
+      }
+    },
+    {
+      "id": "orchestrator.intent.classifier",
+      "stage": "router",
+      "type": "server",
+      "file": "server/jarvis-orchestrator.js",
+      "line": 137,
+      "anchor": "function classifyJarvisIntent(message, options = {})",
+      "guarantee": "Natural language is converted to intent before tool execution.",
+      "silentFailure": "Misclassification routes chat to wrong tools.",
+      "proof": {
+        "traceFields": [
+          "intent"
+        ],
+        "tests": [
+          "test-jarvis-orchestrator",
+          "test-jarvis-audit-fuzz"
+        ]
+      }
+    },
+    {
+      "id": "orchestrator.intent.router",
+      "stage": "router",
+      "type": "server",
+      "file": "server/jarvis-orchestrator.js",
+      "line": 1173,
+      "anchor": "async function run(request = {})",
+      "guarantee": "Intent-specific tool routing path is deterministic and traceable.",
+      "silentFailure": "Wrong tool executes despite correct intent.",
+      "proof": {
+        "traceFields": [
+          "routePathTag",
+          "toolsUsed"
+        ],
+        "tests": [
+          "test-jarvis-orchestrator",
+          "test-jarvis-e2e-integrity"
+        ]
+      }
+    },
+    {
+      "id": "orchestrator.precedence.resolve",
+      "stage": "precedence",
+      "type": "server",
+      "file": "server/analyst-precedence.js",
+      "line": 29,
+      "anchor": "function resolveAnalystPrecedence",
+      "guarantee": "Deterministic order: position > health > risk > normal.",
+      "silentFailure": "Risk block can override open-position management incorrectly.",
+      "proof": {
+        "traceFields": [
+          "precedenceMode",
+          "decisionBlockedBy"
+        ],
+        "tests": [
+          "test-analyst-precedence",
+          "test-jarvis-voice-real-e2e"
+        ]
+      }
+    },
+    {
+      "id": "orchestrator.skill.shopping",
+      "stage": "skill-routing",
+      "type": "server",
+      "file": "server/jarvis-orchestrator.js",
+      "line": 1505,
+      "anchor": "if (intent === 'shopping_advisor')",
+      "guarantee": "Shopping requests route into advisor intake flow and not trading tools.",
+      "silentFailure": "Shopping prompts degrade into unclear/general chat or trading paths.",
+      "proof": {
+        "traceFields": [
+          "selectedSkill",
+          "decisionMode"
+        ],
+        "tests": [
+          "test-jarvis-orchestrator",
+          "test-jarvis-intent-routing"
+        ]
+      }
+    },
+    {
+      "id": "orchestrator.skill.project",
+      "stage": "skill-routing",
+      "type": "server",
+      "file": "server/jarvis-orchestrator.js",
+      "line": 1561,
+      "anchor": "if (intent === 'project_planner')",
+      "guarantee": "Project design/planning prompts run project intake and brief generation flow.",
+      "silentFailure": "Project prompts collapse into vague clarify responses.",
+      "proof": {
+        "traceFields": [
+          "selectedSkill",
+          "skillState"
+        ],
+        "tests": [
+          "test-jarvis-orchestrator",
+          "test-jarvis-intent-routing"
+        ]
+      }
+    },
+    {
+      "id": "orchestrator.skill.complaint",
+      "stage": "skill-routing",
+      "type": "server",
+      "file": "server/jarvis-orchestrator.js",
+      "line": 1617,
+      "anchor": "if (intent === 'complaint_log')",
+      "guarantee": "Complaint intents route to complaint persistence flow.",
+      "silentFailure": "Negative feedback is dropped and cannot be analyzed.",
+      "proof": {
+        "traceFields": [
+          "selectedSkill",
+          "toolsUsed"
+        ],
+        "tests": [
+          "test-jarvis-intent-routing",
+          "test-jarvis-complaints"
+        ]
+      }
+    },
+    {
+      "id": "orchestrator.skill.improvement",
+      "stage": "skill-routing",
+      "type": "server",
+      "file": "server/jarvis-orchestrator.js",
+      "line": 1650,
+      "anchor": "if (intent === 'improvement_review')",
+      "guarantee": "Improvement review requests run analysis against complaint patterns.",
+      "silentFailure": "Improvement requests provide non-actionable generic text.",
+      "proof": {
+        "traceFields": [
+          "selectedSkill",
+          "toolsUsed"
+        ],
+        "tests": [
+          "test-jarvis-intent-routing",
+          "test-jarvis-improvement-engine"
+        ]
+      }
+    },
+    {
+      "id": "tool.risk",
+      "stage": "tools",
+      "type": "server",
+      "file": "server/tools/riskTool.js",
+      "line": 138,
+      "anchor": "async function runRiskTool(ctx = {})",
+      "guarantee": "Risk verdict and explain payload are produced for session.",
+      "silentFailure": "Blocked condition not cached, explain follow-up fails.",
+      "proof": {
+        "traceFields": [
+          "riskVerdict",
+          "precedenceMode"
+        ],
+        "tests": [
+          "test-risk-tool",
+          "test-jarvis-voice-real-e2e"
+        ]
+      }
+    },
+    {
+      "id": "tool.health",
+      "stage": "tools",
+      "type": "server",
+      "file": "server/tools/healthTool.js",
+      "line": 73,
+      "anchor": "async function runHealthTool(ctx = {})",
+      "guarantee": "Health status is hardened against stale/today mismatch.",
+      "silentFailure": "Trading analysis runs on stale bars.",
+      "proof": {
+        "traceFields": [
+          "healthStatusUsed",
+          "lastHealthAgeSeconds"
+        ],
+        "tests": [
+          "test-health-tool",
+          "test-jarvis-voice-session-mode"
+        ]
+      }
+    },
+    {
+      "id": "tool.analyst",
+      "stage": "tools",
+      "type": "server",
+      "file": "server/tools/analystTool.js",
+      "line": 537,
+      "anchor": "async function runAnalystTool(ctx = {})",
+      "guarantee": "Decision/status narratives are generated from structured snapshots.",
+      "silentFailure": "Narrative returns preamble or stale ORB claim.",
+      "proof": {
+        "traceFields": [
+          "source",
+          "routePathTag"
+        ],
+        "tests": [
+          "test-analyst-tool",
+          "test-jarvis-voice-real-e2e"
+        ]
+      }
+    },
+    {
+      "id": "tool.web",
+      "stage": "tools",
+      "type": "server",
+      "file": "server/tools/webTool.js",
+      "line": 823,
+      "anchor": "async function runWebTool(ctx = {})",
+      "guarantee": "Web lookup returns explicit provider/stub behavior and sources.",
+      "silentFailure": "Jarvis claims web lookup without execution receipt.",
+      "proof": {
+        "traceFields": [
+          "web",
+          "toolReceipts"
+        ],
+        "tests": [
+          "test-jarvis-web-consent",
+          "test-jarvis-e2e-integrity"
+        ]
+      }
+    },
+    {
+      "id": "fsm.consent.pending",
+      "stage": "consent",
+      "type": "server",
+      "file": "server/jarvis-core/consent.js",
+      "line": 521,
+      "anchor": "function createJarvisConsentManager",
+      "guarantee": "Consent state transitions are session-scoped with TTL.",
+      "silentFailure": "Web/OS/trade actions execute without explicit yes.",
+      "proof": {
+        "traceFields": [
+          "consentPending",
+          "consentKind"
+        ],
+        "tests": [
+          "test-jarvis-web-consent",
+          "test-jarvis-failure-injection"
+        ]
+      }
+    },
+    {
+      "id": "store.location.ttl",
+      "stage": "location",
+      "type": "server",
+      "file": "server/jarvis-core/location-store.js",
+      "line": 43,
+      "anchor": "function createJarvisLocationStore",
+      "guarantee": "Session location is retained with TTL and expires safely.",
+      "silentFailure": "Stale location is treated as fresh for local search.",
+      "proof": {
+        "traceFields": [
+          "sessionId"
+        ],
+        "tests": [
+          "test-jarvis-location-bridge",
+          "test-jarvis-failure-injection"
+        ]
+      }
+    },
+    {
+      "id": "gate.voice.endpoint.guard",
+      "stage": "guardrail",
+      "type": "server",
+      "file": "server/index.js",
+      "line": 623,
+      "anchor": "function enforceVoiceJarvisEndpointGuard",
+      "guarantee": "voiceMode requests on non-Jarvis endpoints are rejected with 409.",
+      "silentFailure": "Legacy endpoint bypass leaks old formatting.",
+      "proof": {
+        "traceFields": [
+          "requiredEndpoint",
+          "endpoint"
+        ],
+        "tests": [
+          "test-jarvis-voice-guard"
+        ]
+      }
+    },
+    {
+      "id": "gate.content.firewall",
+      "stage": "guardrail",
+      "type": "server",
+      "file": "server/index.js",
+      "line": 28575,
+      "anchor": "function applyGeneralChatReplyContentFirewall",
+      "guarantee": "general_chat replies cannot leak trading token classes.",
+      "silentFailure": "General chat speaks ORB/Topstep guidance.",
+      "proof": {
+        "traceFields": [
+          "contentFirewallApplied",
+          "detectedForbiddenTokens"
+        ],
+        "tests": [
+          "test-jarvis-voice-real-e2e",
+          "test-jarvis-e2e-integrity"
+        ]
+      }
+    },
+    {
+      "id": "gate.finalize.earbud",
+      "stage": "finalization",
+      "type": "server",
+      "file": "server/index.js",
+      "line": 30055,
+      "anchor": "const finalGate = finalizeJarvisVoiceReply",
+      "guarantee": "Every voice response is finalized and invariant-checked before send.",
+      "silentFailure": "Legacy verdict tokens or preambles reach TTS/UI.",
+      "proof": {
+        "traceFields": [
+          "didFinalize",
+          "formatterUsed",
+          "invariantsPass",
+          "failedRules"
+        ],
+        "tests": [
+          "test-jarvis-finalize-telemetry",
+          "test-jarvis-audit-e2e"
+        ]
+      }
+    },
+    {
+      "id": "trace.store",
+      "stage": "observability",
+      "type": "server",
+      "file": "server/jarvis-core/trace.js",
+      "line": 112,
+      "anchor": "function createTraceStore(options = {})",
+      "guarantee": "Trace records persist by traceId and session selectors.",
+      "silentFailure": "Cannot correlate multi-turn failures.",
+      "proof": {
+        "traceFields": [
+          "traceId",
+          "sessionId",
+          "sessionKey"
+        ],
+        "tests": [
+          "test-jarvis-trace-schema"
+        ]
+      }
+    },
+    {
+      "id": "trace.diag.latest",
+      "stage": "observability",
+      "type": "server",
+      "file": "server/index.js",
+      "line": 30380,
+      "anchor": "jarvisTraceStore.getLatest",
+      "guarantee": "Diagnostic endpoint returns latest sanitized trace by trace/session filters.",
+      "silentFailure": "Debug tooling reads wrong request and misses root cause.",
+      "proof": {
+        "traceFields": [
+          "intent",
+          "routePathTag",
+          "toolsUsed",
+          "precedenceMode"
+        ],
+        "tests": [
+          "test-jarvis-trace-schema",
+          "test-jarvis-voice-real-e2e"
+        ]
+      }
+    },
+    {
+      "id": "session.voice.health.poll",
+      "stage": "voice-session",
+      "type": "server",
+      "file": "server/jarvis-core/voice-session.js",
+      "line": 161,
+      "anchor": "function createVoiceTradingSessionManager",
+      "guarantee": "Voice session mode refreshes health snapshots by ET phase and interval.",
+      "silentFailure": "Trading responses use stale health despite active voice session.",
+      "proof": {
+        "traceFields": [
+          "voiceSessionModeActive",
+          "lastHealthAgeSeconds",
+          "timePhase"
+        ],
+        "tests": [
+          "test-jarvis-voice-session-mode",
+          "test-jarvis-voice-real-e2e"
+        ]
+      }
+    },
+    {
+      "id": "registry.skill.local_search",
+      "stage": "skill-registry",
+      "type": "server",
+      "file": "server/jarvis-core/skill-registry.js",
+      "line": 41,
+      "anchor": "const LOCAL_SEARCH_SKILL = freezeSkill({",
+      "guarantee": "LocalSearch behavior is contract-based and entity-agnostic.",
+      "silentFailure": "Entity-specific patches drift behavior away from universal local search.",
+      "proof": {
+        "traceFields": [
+          "intent",
+          "consentKind",
+          "routePathTag"
+        ],
+        "tests": [
+          "test-jarvis-localsearch-matrix",
+          "test-jarvis-failure-localsearch"
+        ]
+      }
+    },
+    {
+      "id": "client.health.widget.polling",
+      "stage": "client-health",
+      "type": "client",
+      "file": "client/src/App.jsx",
+      "line": 260,
+      "anchor": "const url = `/api/market/health?forceFresh=",
+      "guarantee": "Dashboard health widget polls market health with interval + lock policy.",
+      "silentFailure": "Widget freezes and voice preflight uses outdated status.",
+      "proof": {
+        "traceFields": [
+          "healthStatusUsed"
+        ],
+        "tests": [
+          "test-health-audio",
+          "test-jarvis-voice-session-mode"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+orchestrator:
+  mode: hybrid
+  roles:
+    executor:
+      provider: codex
+      title: lead_execution_engineer
+    architect:
+      provider: codex
+      title: chief_architect
+  routing:
+    plan_phase:
+      reasoner_provider: codex
+      require_architecture_prompt: true
+    execute_phase:
+      runner_provider: codex
+      terminal_owner: codex
+  runtime:
+    canonical_project_dir: /absolute/path/to/mcnair-mindset
+    mirror_project_dir: /absolute/path/to/mirror
+    launcher_url: http://localhost:3131
