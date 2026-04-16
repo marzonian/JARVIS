@@ -156,6 +156,45 @@ function run() {
   assert(preOpenCenter.shadowMockTradeDecision.eligible === false, 'pre-open should be ineligible for mock execution');
   assert(preOpenCenter.shadowMockTradeDecision.reason === 'outside_shadow_action_window', 'pre-open should map to outside_shadow_action_window');
 
+  const outsideWindowTransitionState = { candidateStates: Object.create(null), lastSnapshotAt: null, lastActionableTransition: null };
+  const outsideWindowSeed = buildCommandCenterPanels({
+    ...buildInput({
+      signal: 'WAIT',
+      blockers: [],
+      sessionPhase: 'entry_window',
+      latestSession: {
+        orb: { high: 22135, low: 22095, range_ticks: 160 },
+        no_trade_reason: 'no_confirmation',
+      },
+    }),
+    liveCandidateStateMonitorState: outsideWindowTransitionState,
+  });
+  assert(outsideWindowSeed.liveCandidateStateMonitor && outsideWindowSeed.liveCandidateStateMonitor.actionableTransitionDetected === false, 'seed snapshot should not transition');
+
+  const outsideWindowFollow = buildCommandCenterPanels({
+    ...buildInput({
+      signal: 'TRADE',
+      blockers: [],
+      sessionPhase: 'outside_window',
+      latestSession: {
+        orb: { high: 22135, low: 22095, range_ticks: 160 },
+        trade: {
+          direction: 'long',
+          entry_time: '2026-04-16 11:24',
+          entry_price: 22142,
+          sl_price: 22098,
+          tp_price: 22205,
+        },
+        no_trade_reason: 'entry_after_max_hour',
+      },
+    }),
+    liveCandidateStateMonitorState: outsideWindowTransitionState,
+  });
+  assert(outsideWindowFollow.liveCandidateStateMonitor && outsideWindowFollow.liveCandidateStateMonitor.actionableTransitionDetected === false, 'outside window should not emit actionable transition');
+  assert(outsideWindowFollow.shadowMockTradeDecision && outsideWindowFollow.shadowMockTradeDecision.eligible === true, 'outside window follow-up should remain queue-eligible');
+  assert(outsideWindowFollow.shadowMockTradeDecision.status === 'queued_next_session', 'outside window follow-up should queue next session');
+  assert(outsideWindowFollow.shadowMockTradeDecision.triggeredByActionableTransition === false, 'outside window queue should not be transition-triggered');
+
   assert(eligibleCenter.todayRecommendation.shadowMockTradeDecision && typeof eligibleCenter.todayRecommendation.shadowMockTradeDecision === 'object', 'todayRecommendation mirror missing shadowMockTradeDecision');
   assert(eligibleCenter.decisionBoard.shadowMockTradeLedger && typeof eligibleCenter.decisionBoard.shadowMockTradeLedger === 'object', 'decisionBoard mirror missing shadowMockTradeLedger');
 

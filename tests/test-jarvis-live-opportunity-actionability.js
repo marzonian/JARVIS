@@ -228,6 +228,119 @@ function run() {
   assert(['poor_structure', 'no_clean_retest', 'weak_follow_through', 'blocked_context'].includes(String(poorStructureCenter.liveOpportunityCandidates.noActionableReasonCode || '')), 'poor structure case should expose sharp structure-based no-actionable reason');
   assert(poorStructureCenter.shadowMockTradeDecision && poorStructureCenter.shadowMockTradeDecision.eligible === false, 'poor structure case should keep mock-trade ineligible');
 
+  const transitionState = { candidateStates: Object.create(null), lastSnapshotAt: null, lastActionableTransition: null };
+  const transitionPoor = buildCommandCenterPanels({
+    strategyLayers,
+    liveCandidateStateMonitorState: transitionState,
+    decision: {
+      signal: 'WAIT',
+      signalLabel: 'WAIT',
+      blockers: [],
+      topSetups: [{
+        setupId: 'orb_retest_long',
+        name: 'ORB Retest Long',
+        probability: 0.4,
+        expectedValueDollars: -20,
+        annualizedTrades: 90,
+      }],
+    },
+    latestSession: { no_trade_reason: 'no_confirmation' },
+    todayContext: {
+      nowEt: '2026-04-16 10:10',
+      sessionPhase: 'entry_window',
+      timeBucket: 'entry_window',
+      regime: 'ranging|extreme|wide',
+      trend: 'uptrend',
+      volatility: 'high',
+      orbRangeTicks: 160,
+    },
+    commandSnapshot: {
+      elite: {
+        winModel: { point: 56.1, confidencePct: 66 },
+      },
+    },
+  });
+  assert(transitionPoor.liveCandidateStateMonitor && transitionPoor.liveCandidateStateMonitor.actionableTransitionDetected === false, 'first poor snapshot should not fire actionable transition');
+  assert(transitionPoor.liveOpportunityCandidates.hasActionableCandidateNow === false, 'first poor snapshot should remain non-actionable');
+
+  const transitionGood = buildCommandCenterPanels({
+    strategyLayers,
+    liveCandidateStateMonitorState: transitionState,
+    decision: {
+      signal: 'TRADE',
+      signalLabel: 'TRADE',
+      blockers: [],
+      topSetups: [{
+        setupId: 'orb_retest_long',
+        name: 'ORB Retest Long',
+        probability: 0.79,
+        expectedValueDollars: 72,
+        annualizedTrades: 170,
+      }],
+    },
+    latestSession: {
+      trade: {
+        direction: 'long',
+        entry_price: 22140,
+        sl_price: 22095,
+        tp_price: 22200,
+        entry_time: '2026-04-16 10:12',
+      },
+    },
+    todayContext: {
+      nowEt: '2026-04-16 10:12',
+      sessionPhase: 'entry_window',
+      timeBucket: 'entry_window',
+      regime: 'ranging|extreme|wide',
+      trend: 'uptrend',
+      volatility: 'high',
+      orbRangeTicks: 160,
+    },
+    commandSnapshot: {
+      elite: {
+        winModel: { point: 60.4, confidencePct: 71 },
+      },
+    },
+  });
+  assert(transitionGood.liveCandidateStateMonitor && transitionGood.liveCandidateStateMonitor.actionableTransitionDetected === true, 'improved structure snapshot should fire actionable transition');
+  assert(typeof transitionGood.liveCandidateStateMonitor.candidateKey === 'string' && transitionGood.liveCandidateStateMonitor.candidateKey.length > 0, 'actionable transition should include candidate key');
+  assert(transitionGood.shadowMockTradeDecision && transitionGood.shadowMockTradeDecision.eligible === true, 'actionable transition should allow shadow mock trade');
+  assert(transitionGood.shadowMockTradeDecision.triggeredByActionableTransition === true, 'mock trade should be marked as transition-triggered');
+  assert(transitionGood.shadowMockTradeDecision.status === 'eligible_ready_transition', 'transition-triggered trade should use eligible_ready_transition status');
+
+  const transitionPoorAgain = buildCommandCenterPanels({
+    strategyLayers,
+    liveCandidateStateMonitorState: transitionState,
+    decision: {
+      signal: 'WAIT',
+      signalLabel: 'WAIT',
+      blockers: [],
+      topSetups: [{
+        setupId: 'orb_retest_long',
+        name: 'ORB Retest Long',
+        probability: 0.4,
+        expectedValueDollars: -20,
+        annualizedTrades: 90,
+      }],
+    },
+    latestSession: { no_trade_reason: 'no_confirmation' },
+    todayContext: {
+      nowEt: '2026-04-16 10:18',
+      sessionPhase: 'entry_window',
+      timeBucket: 'entry_window',
+      regime: 'ranging|extreme|wide',
+      trend: 'uptrend',
+      volatility: 'high',
+      orbRangeTicks: 160,
+    },
+    commandSnapshot: {
+      elite: {
+        winModel: { point: 56.1, confidencePct: 66 },
+      },
+    },
+  });
+  assert(transitionPoorAgain.liveCandidateStateMonitor && transitionPoorAgain.liveCandidateStateMonitor.actionableTransitionDetected === false, 'poor structure should not create false actionable transition');
+
   console.log('Jarvis live opportunity actionability ranking test passed.');
 }
 

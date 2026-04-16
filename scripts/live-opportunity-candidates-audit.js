@@ -39,6 +39,7 @@ function summarizeCandidates(snapshot = {}) {
     noActionableReasonLine: candidates.noActionableReasonLine || null,
     candidateSourceCounts: candidates.candidateSourceCounts || sourceCounts,
     candidateDiversitySummaryLine: candidates.candidateDiversitySummaryLine || null,
+    liveCandidateStateMonitor: snapshot?.liveCandidateStateMonitor || null,
     strategyCandidateOpportunityBridge: snapshot?.strategyCandidateOpportunityBridge || null,
     topCandidate: topRow ? {
       candidateKey: topRow.candidateKey || null,

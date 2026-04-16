@@ -63,6 +63,12 @@ const DEFAULT_VARIANT_SPECS = Object.freeze([
   },
 ]);
 
+const LIVE_CANDIDATE_STATE_MONITOR_STATE = {
+  candidateStates: Object.create(null),
+  lastSnapshotAt: null,
+  lastActionableTransition: null,
+};
+
 function clampNumber(value, min, max) {
   const n = Number(value);
   if (!Number.isFinite(n)) return min;
@@ -1533,6 +1539,127 @@ function buildLiveOpportunityCandidates(input = {}) {
   };
 }
 
+function buildLiveCandidateStateMonitor(input = {}) {
+  const liveOpportunityCandidates = input?.liveOpportunityCandidates && typeof input.liveOpportunityCandidates === 'object'
+    ? input.liveOpportunityCandidates
+    : {};
+  const todayContext = input?.todayContext && typeof input.todayContext === 'object'
+    ? input.todayContext
+    : {};
+  const monitorState = input?.monitorState && typeof input.monitorState === 'object'
+    ? input.monitorState
+    : LIVE_CANDIDATE_STATE_MONITOR_STATE;
+  if (!monitorState.candidateStates || typeof monitorState.candidateStates !== 'object') {
+    monitorState.candidateStates = Object.create(null);
+  }
+  const allCandidates = Array.isArray(liveOpportunityCandidates?.candidates)
+    ? liveOpportunityCandidates.candidates
+    : [];
+  const monitored = allCandidates.slice(0, 3);
+  const nowEt = String(todayContext?.nowEt || '').trim() || new Date().toISOString();
+  const phase = String(todayContext?.sessionPhase || '').trim().toLowerCase();
+  const insideApprovedActionWindow = isApprovedShadowActionWindow(phase);
+
+  const monitoredCandidates = monitored.map((candidate) => {
+    const key = String(candidate?.candidateKey || '').trim();
+    const prev = key ? monitorState.candidateStates[key] : null;
+    const hasPreviousState = Boolean(prev && typeof prev === 'object');
+    const currentStatus = String(candidate?.candidateStatus || '').trim().toLowerCase() || null;
+    const previousStatus = String(prev?.status || '').trim().toLowerCase() || null;
+    const currentStructureQualityScore = Number.isFinite(Number(candidate?.structureQualityScore))
+      ? round2(Number(candidate.structureQualityScore))
+      : null;
+    const previousStructureQualityScore = Number.isFinite(Number(prev?.structureQualityScore))
+      ? round2(Number(prev.structureQualityScore))
+      : null;
+    const currentActionable = isCandidateActionableNow(candidate, {
+      negativeEvTolerance: -15,
+      minStructureQualityScore: 58,
+    });
+    const previousActionable = prev?.isActionableNow === true;
+    let structureDirection = 'unchanged';
+    if (!Number.isFinite(previousStructureQualityScore) && Number.isFinite(currentStructureQualityScore)) {
+      structureDirection = 'improved';
+    } else if (Number.isFinite(previousStructureQualityScore) && Number.isFinite(currentStructureQualityScore)) {
+      if (currentStructureQualityScore > previousStructureQualityScore + 0.25) structureDirection = 'improved';
+      else if (currentStructureQualityScore < previousStructureQualityScore - 0.25) structureDirection = 'worsened';
+    }
+    const crossedIntoActionable = hasPreviousState && currentActionable && !previousActionable;
+    const transitionSummaryLine = crossedIntoActionable
+      ? `${String(candidate?.strategyName || candidate?.strategyKey || 'Candidate').trim()} crossed into actionable structure.`
+      : `${String(candidate?.strategyName || candidate?.strategyKey || 'Candidate').trim()} structure ${structureDirection}.`;
+    return {
+      candidateKey: key || null,
+      strategyKey: String(candidate?.strategyKey || '').trim() || null,
+      candidateSource: String(candidate?.candidateSource || '').trim() || null,
+      previousStatus,
+      currentStatus,
+      previousStructureQualityScore,
+      currentStructureQualityScore,
+      structureDirection,
+      previousActionable,
+      currentActionable,
+      crossedIntoActionable,
+      transitionSummaryLine,
+    };
+  });
+
+  const transitionCandidate = monitoredCandidates.find((row) => row.crossedIntoActionable) || null;
+  const actionableTransitionDetected = Boolean(transitionCandidate && insideApprovedActionWindow);
+  const actionableTransitionReason = actionableTransitionDetected
+    ? 'structure_improved_to_actionable'
+    : (transitionCandidate ? 'transition_outside_approved_window' : 'no_actionable_transition');
+  const actionableTransitionTimestamp = actionableTransitionDetected
+    ? nowEt
+    : null;
+  const actionableTransitionCandidateKey = actionableTransitionDetected
+    ? transitionCandidate?.candidateKey || null
+    : null;
+  const transitionSummaryLine = actionableTransitionDetected
+    ? `Actionable transition: ${transitionCandidate?.strategyKey || transitionCandidate?.candidateKey || 'candidate'} became actionable.`
+    : (transitionCandidate
+      ? 'Transition detected but outside approved action window.'
+      : 'No actionable transition detected.');
+
+  const stateRows = allCandidates.slice(0, 10);
+  const nextState = Object.create(null);
+  for (const row of stateRows) {
+    const key = String(row?.candidateKey || '').trim();
+    if (!key) continue;
+    nextState[key] = {
+      status: String(row?.candidateStatus || '').trim().toLowerCase() || null,
+      structureQualityScore: Number.isFinite(Number(row?.structureQualityScore))
+        ? round2(Number(row.structureQualityScore))
+        : null,
+      isActionableNow: isCandidateActionableNow(row, {
+        negativeEvTolerance: -15,
+        minStructureQualityScore: 58,
+      }),
+      updatedAt: nowEt,
+    };
+  }
+  monitorState.candidateStates = nextState;
+  monitorState.lastSnapshotAt = nowEt;
+  if (actionableTransitionDetected) {
+    monitorState.lastActionableTransition = {
+      candidateKey: actionableTransitionCandidateKey,
+      timestamp: actionableTransitionTimestamp,
+      reason: actionableTransitionReason,
+    };
+  }
+
+  return {
+    monitoredCandidates,
+    actionableTransitionDetected,
+    actionableTransitionReason,
+    actionableTransitionTimestamp,
+    candidateKey: actionableTransitionCandidateKey,
+    insideApprovedActionWindow,
+    summaryLine: transitionSummaryLine,
+    advisoryOnly: true,
+  };
+}
+
 function normalizeMockTradeReference(type = '', price = null, context = {}) {
   const normalizedType = String(type || '').trim().toLowerCase() || null;
   const numericPrice = Number(price);
@@ -1635,6 +1762,9 @@ function buildShadowMockTradeDecision(input = {}) {
   const latestSession = input?.latestSession && typeof input.latestSession === 'object'
     ? input.latestSession
     : {};
+  const liveCandidateStateMonitor = input?.liveCandidateStateMonitor && typeof input.liveCandidateStateMonitor === 'object'
+    ? input.liveCandidateStateMonitor
+    : null;
   const topCandidateActionableNow = liveOpportunityCandidates?.topCandidateActionableNow
     && typeof liveOpportunityCandidates.topCandidateActionableNow === 'object'
     ? liveOpportunityCandidates.topCandidateActionableNow
@@ -1643,7 +1773,16 @@ function buildShadowMockTradeDecision(input = {}) {
     && typeof liveOpportunityCandidates.topCandidateOverall === 'object'
     ? liveOpportunityCandidates.topCandidateOverall
     : (Array.isArray(liveOpportunityCandidates?.candidates) ? liveOpportunityCandidates.candidates[0] : null);
+  const transitionCandidateKey = String(liveCandidateStateMonitor?.candidateKey || '').trim();
+  const transitionCandidate = transitionCandidateKey && Array.isArray(liveOpportunityCandidates?.candidates)
+    ? liveOpportunityCandidates.candidates.find((row) => String(row?.candidateKey || '').trim() === transitionCandidateKey) || null
+    : null;
   const topCandidate = topCandidateActionableNow
+    || (liveCandidateStateMonitor?.actionableTransitionDetected === true
+      && liveCandidateStateMonitor?.insideApprovedActionWindow === true
+      && transitionCandidate
+      ? transitionCandidate
+      : null)
     || (String(topCandidateOverall?.candidateStatus || '').trim().toLowerCase() === 'await_next_session'
       ? topCandidateOverall
       : null);
@@ -1659,6 +1798,10 @@ function buildShadowMockTradeDecision(input = {}) {
     stopReference: null,
     targetReference: null,
     riskReward: null,
+    triggeredByActionableTransition: false,
+    actionableTransitionCandidateKey: null,
+    actionableTransitionTimestamp: null,
+    actionableTransitionReason: null,
     tradePlanSummaryLine: 'Shadow mock-trade: no actionable candidate available.',
     advisoryOnly: true,
   };
@@ -1807,17 +1950,26 @@ function buildShadowMockTradeDecision(input = {}) {
 
   const status = nextSessionQueued ? 'queued_next_session' : 'eligible_ready';
   const reason = nextSessionQueued ? 'queued_for_next_session' : 'eligible_for_shadow_execution';
+  const triggeredByActionableTransition = Boolean(
+    !nextSessionQueued
+    && liveCandidateStateMonitor?.actionableTransitionDetected === true
+    && String(liveCandidateStateMonitor?.candidateKey || '').trim() !== ''
+    && String(topCandidate?.candidateKey || '').trim() === String(liveCandidateStateMonitor?.candidateKey || '').trim()
+  );
+  const normalizedStatus = triggeredByActionableTransition ? 'eligible_ready_transition' : status;
   const entryPriceText = Number.isFinite(structure.entryReference?.price) ? structure.entryReference.price : 'n/a';
   const stopPriceText = Number.isFinite(structure.stopReference?.price) ? structure.stopReference.price : 'n/a';
   const targetPriceText = Number.isFinite(structure.targetReference?.price) ? structure.targetReference.price : 'n/a';
   const rrText = Number.isFinite(structure.riskReward) ? structure.riskReward : 'n/a';
   const tradePlanSummaryLine = nextSessionQueued
     ? `Shadow mock-trade queued: ${String(topCandidate?.strategyName || topCandidate?.strategyKey || 'candidate')} ${String(structure.direction || 'long').toUpperCase()} next session | entry ${entryPriceText}, stop ${stopPriceText}, target ${targetPriceText}, RR ${rrText}.`
-    : `Shadow mock-trade ready: ${String(topCandidate?.strategyName || topCandidate?.strategyKey || 'candidate')} ${String(structure.direction || 'long').toUpperCase()} | entry ${entryPriceText}, stop ${stopPriceText}, target ${targetPriceText}, RR ${rrText}.`;
+    : (triggeredByActionableTransition
+      ? `Shadow mock-trade ready on transition: ${String(topCandidate?.strategyName || topCandidate?.strategyKey || 'candidate')} ${String(structure.direction || 'long').toUpperCase()} | entry ${entryPriceText}, stop ${stopPriceText}, target ${targetPriceText}, RR ${rrText}.`
+      : `Shadow mock-trade ready: ${String(topCandidate?.strategyName || topCandidate?.strategyKey || 'candidate')} ${String(structure.direction || 'long').toUpperCase()} | entry ${entryPriceText}, stop ${stopPriceText}, target ${targetPriceText}, RR ${rrText}.`);
 
   return {
     eligible: true,
-    status,
+    status: normalizedStatus,
     reason,
     candidateKey: topCandidate?.candidateKey || null,
     strategyKey: topCandidate?.strategyKey || null,
@@ -1826,6 +1978,16 @@ function buildShadowMockTradeDecision(input = {}) {
     stopReference: structure.stopReference,
     targetReference: structure.targetReference,
     riskReward: structure.riskReward,
+    triggeredByActionableTransition,
+    actionableTransitionCandidateKey: triggeredByActionableTransition
+      ? String(liveCandidateStateMonitor?.candidateKey || '').trim() || null
+      : null,
+    actionableTransitionTimestamp: triggeredByActionableTransition
+      ? String(liveCandidateStateMonitor?.actionableTransitionTimestamp || '').trim() || null
+      : null,
+    actionableTransitionReason: triggeredByActionableTransition
+      ? String(liveCandidateStateMonitor?.actionableTransitionReason || '').trim() || null
+      : null,
     tradePlanSummaryLine,
     advisoryOnly: true,
   };
@@ -3303,12 +3465,20 @@ function buildCommandCenterPanels(input = {}) {
     regimeLabel,
     projectedWinChance,
   });
+  const liveCandidateStateMonitor = buildLiveCandidateStateMonitor({
+    liveOpportunityCandidates,
+    todayContext,
+    monitorState: input?.liveCandidateStateMonitorState && typeof input.liveCandidateStateMonitorState === 'object'
+      ? input.liveCandidateStateMonitorState
+      : null,
+  });
   const strategyCandidateOpportunityBridge = buildStrategyCandidateBridge({
     opportunityScoring,
     liveOpportunityCandidates,
   });
   const shadowMockTradeDecision = buildShadowMockTradeDecision({
     liveOpportunityCandidates,
+    liveCandidateStateMonitor,
     todayContext,
     latestSession,
   });
@@ -3506,6 +3676,7 @@ function buildCommandCenterPanels(input = {}) {
     ? cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison)
     : null;
   todayRecommendation.liveOpportunityCandidates = cloneData(liveOpportunityCandidates, liveOpportunityCandidates);
+  todayRecommendation.liveCandidateStateMonitor = cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor);
   todayRecommendation.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -3543,6 +3714,7 @@ function buildCommandCenterPanels(input = {}) {
     ? cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison)
     : null;
   decisionBoard.liveOpportunityCandidates = cloneData(liveOpportunityCandidates, liveOpportunityCandidates);
+  decisionBoard.liveCandidateStateMonitor = cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor);
   decisionBoard.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -3587,6 +3759,7 @@ function buildCommandCenterPanels(input = {}) {
       ? cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison)
       : null,
     liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
+    liveCandidateStateMonitor: cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor),
     strategyCandidateOpportunityBridge: cloneData(
       strategyCandidateOpportunityBridge,
       strategyCandidateOpportunityBridge

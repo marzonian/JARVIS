@@ -34841,6 +34841,16 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
   const liveOpportunityCandidates = liveOpportunityCandidatesSource
     ? cloneData(liveOpportunityCandidatesSource, liveOpportunityCandidatesSource)
     : null;
+  const liveCandidateStateMonitorSource = (
+    commandCenter?.liveCandidateStateMonitor && typeof commandCenter.liveCandidateStateMonitor === 'object'
+      ? commandCenter.liveCandidateStateMonitor
+      : (strategyLayers?.liveCandidateStateMonitor && typeof strategyLayers.liveCandidateStateMonitor === 'object'
+        ? strategyLayers.liveCandidateStateMonitor
+        : null)
+  );
+  const liveCandidateStateMonitor = liveCandidateStateMonitorSource
+    ? cloneData(liveCandidateStateMonitorSource, liveCandidateStateMonitorSource)
+    : null;
   const strategyCandidateOpportunityBridgeSource = (
     commandCenter?.strategyCandidateOpportunityBridge && typeof commandCenter.strategyCandidateOpportunityBridge === 'object'
       ? commandCenter.strategyCandidateOpportunityBridge
@@ -34896,6 +34906,7 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     opportunityScoreSummaryLine: opportunityScoreSummaryLine || null,
     heuristicVsOpportunityComparison,
     liveOpportunityCandidates,
+    liveCandidateStateMonitor,
     strategyCandidateOpportunityBridge,
     shadowMockTradeDecision,
     shadowMockTradeLedger,
@@ -34921,6 +34932,7 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       opportunityScoreSummaryLine: opportunityScoreSummaryLine || null,
       heuristicVsOpportunityComparison: cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison),
       liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
+      liveCandidateStateMonitor: cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor),
       strategyCandidateOpportunityBridge: cloneData(
         strategyCandidateOpportunityBridge,
         strategyCandidateOpportunityBridge
@@ -34951,6 +34963,7 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       opportunityScoreSummaryLine: opportunityScoreSummaryLine || null,
       heuristicVsOpportunityComparison: cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison),
       liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
+      liveCandidateStateMonitor: cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor),
       strategyCandidateOpportunityBridge: cloneData(
         strategyCandidateOpportunityBridge,
         strategyCandidateOpportunityBridge
@@ -34995,6 +35008,10 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
   commandCenter.liveOpportunityCandidates = cloneData(
     strategyLayerSnapshot.liveOpportunityCandidates,
     strategyLayerSnapshot.liveOpportunityCandidates
+  );
+  commandCenter.liveCandidateStateMonitor = cloneData(
+    strategyLayerSnapshot.liveCandidateStateMonitor,
+    strategyLayerSnapshot.liveCandidateStateMonitor
   );
   commandCenter.strategyCandidateOpportunityBridge = cloneData(
     strategyLayerSnapshot.strategyCandidateOpportunityBridge,
@@ -35099,6 +35116,10 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
         strategyLayerSnapshot.liveOpportunityCandidates,
         strategyLayerSnapshot.liveOpportunityCandidates
       );
+      recommendationPerformance.liveCandidateStateMonitor = cloneData(
+        strategyLayerSnapshot.liveCandidateStateMonitor,
+        strategyLayerSnapshot.liveCandidateStateMonitor
+      );
       recommendationPerformance.strategyCandidateOpportunityBridge = cloneData(
         strategyLayerSnapshot.strategyCandidateOpportunityBridge,
         strategyLayerSnapshot.strategyCandidateOpportunityBridge
@@ -35148,6 +35169,7 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       opportunityScoreSummaryLine: strategyLayerSnapshot?.opportunityScoreSummaryLine || null,
       heuristicVsOpportunityComparison: strategyLayerSnapshot?.heuristicVsOpportunityComparison || null,
       liveOpportunityCandidates: strategyLayerSnapshot?.liveOpportunityCandidates || null,
+      liveCandidateStateMonitor: strategyLayerSnapshot?.liveCandidateStateMonitor || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
       shadowMockTradeDecision: strategyLayerSnapshot?.shadowMockTradeDecision || null,
       shadowMockTradeLedger: strategyLayerSnapshot?.shadowMockTradeLedger || null,
@@ -35716,6 +35738,7 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       opportunityScoreSummaryLine: strategyLayerSnapshot?.opportunityScoreSummaryLine || null,
       heuristicVsOpportunityComparison: strategyLayerSnapshot?.heuristicVsOpportunityComparison || null,
       liveOpportunityCandidates: strategyLayerSnapshot?.liveOpportunityCandidates || null,
+      liveCandidateStateMonitor: strategyLayerSnapshot?.liveCandidateStateMonitor || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
       shadowMockTradeDecision: strategyLayerSnapshot?.shadowMockTradeDecision || null,
       shadowMockTradeLedger: strategyLayerSnapshot?.shadowMockTradeLedger || null,
