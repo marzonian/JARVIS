@@ -777,6 +777,68 @@ function deriveCandidateType(strategyLayer = '', strategyKey = '') {
   return 'orb_continuation_retest';
 }
 
+function deriveTopSetupCandidateType(topSetup = null) {
+  const setupId = String(topSetup?.setupId || '').trim().toLowerCase();
+  const setupName = String(topSetup?.name || '').trim().toLowerCase();
+  const text = `${setupId} ${setupName}`;
+  if (!text) return 'decision_setup_watch';
+  if (text.includes('reversal') || text.includes('fade')) return 'failed_extension_reversal';
+  if (text.includes('retest')) return 'retest_continuation';
+  if (text.includes('breakout') || text.includes('continuation')) return 'breakout_continuation';
+  return 'decision_setup_watch';
+}
+
+function classifyPriceLocationVsOrb({ referencePrice = null, orbHigh = null, orbLow = null } = {}) {
+  const px = Number(referencePrice);
+  const hi = Number(orbHigh);
+  const lo = Number(orbLow);
+  if (!Number.isFinite(px) || !Number.isFinite(hi) || !Number.isFinite(lo)) return 'unknown';
+  if (hi <= lo) return 'unknown';
+  const orbRange = hi - lo;
+  const extensionThreshold = orbRange * 0.12;
+  const mid = lo + (orbRange / 2);
+  if (px >= hi + extensionThreshold) return 'above_orb_high_extended';
+  if (px > hi) return 'above_orb_high';
+  if (px <= lo - extensionThreshold) return 'below_orb_low_extended';
+  if (px < lo) return 'below_orb_low';
+  if (px >= mid) return 'inside_orb_upper';
+  return 'inside_orb_lower';
+}
+
+function inferLiveStructureCandidateType({
+  topSetup = null,
+  todayContext = {},
+  latestSession = {},
+  signal = '',
+  blockerCount = 0,
+} = {}) {
+  const topSetupType = deriveTopSetupCandidateType(topSetup);
+  if (topSetupType === 'failed_extension_reversal' || topSetupType === 'retest_continuation' || topSetupType === 'breakout_continuation') {
+    return topSetupType;
+  }
+  const normalizedSignal = normalizeDecisionSignal(signal);
+  const noTradeReason = String(latestSession?.no_trade_reason || '').trim().toLowerCase();
+  const phase = String(todayContext?.sessionPhase || '').trim().toLowerCase();
+  const trend = String(todayContext?.trend || todayContext?.marketTrend || '').trim().toLowerCase();
+  if (blockerCount > 0) return 'blocked_context_watch';
+  if (noTradeReason.includes('entry_after_max_hour') || phase === 'outside_window' || phase === 'late_window') return 'late_session_structure_watch';
+  if (noTradeReason.includes('no_confirmation') || normalizedSignal === 'WAIT') return 'retest_continuation_watch';
+  if (trend.includes('up') || trend.includes('down') || normalizedSignal === 'TRADE') return 'breakout_continuation';
+  return 'range_reversion_watch';
+}
+
+function inferLiveStructureDirection({
+  decision = {},
+  todayContext = {},
+  topSetup = null,
+  priceLocationVsOrb = 'unknown',
+} = {}) {
+  const setupDirection = inferCandidateDirection(decision, todayContext, topSetup);
+  if (priceLocationVsOrb === 'above_orb_high_extended') return 'short';
+  if (priceLocationVsOrb === 'below_orb_low_extended') return 'long';
+  return setupDirection;
+}
+
 function classifyCandidateStatus({ signal = '', blockerCount = 0, sessionPhase = '', isRecommendedStrategy = false }) {
   const normalizedSignal = normalizeDecisionSignal(signal);
   const phase = String(sessionPhase || '').trim().toLowerCase();
@@ -898,6 +960,7 @@ function buildLiveOpportunityCandidates(input = {}) {
   const recommendationKey = String(input?.recommendationKey || '').trim();
   const decision = input?.decision && typeof input.decision === 'object' ? input.decision : {};
   const todayContext = input?.todayContext && typeof input.todayContext === 'object' ? input.todayContext : {};
+  const latestSession = input?.latestSession && typeof input.latestSession === 'object' ? input.latestSession : {};
   const regimeLabel = String(input?.regimeLabel || todayContext?.regime || todayContext?.marketRegime || 'unknown').trim();
   const projectedWinChance = Number(input?.projectedWinChance);
   const blockers = Array.isArray(decision?.blockers)
@@ -918,18 +981,44 @@ function buildLiveOpportunityCandidates(input = {}) {
   const topSetupAnnualizedTrades = Number.isFinite(Number(topSetup?.annualizedTrades))
     ? Number(topSetup.annualizedTrades)
     : null;
+  const topSetupCandidateType = deriveTopSetupCandidateType(topSetup);
 
   const opportunityByStrategyKey = new Map(
     (Array.isArray(opportunityScoring?.comparisonRows) ? opportunityScoring.comparisonRows : [])
       .map((row) => [String(row?.key || '').trim(), row])
   );
-  const candidates = strategyStack.map((entry) => {
-    const strategyKey = String(entry?.key || '').trim();
-    const strategyLayer = String(entry?.layer || '').trim().toLowerCase();
-    const strategyName = String(entry?.name || strategyKey || 'Strategy').trim();
-    const candidateType = deriveCandidateType(strategyLayer, strategyKey);
-    const direction = inferCandidateDirection(decision, todayContext, topSetup);
-    const isRecommendedStrategy = recommendationKey && strategyKey === recommendationKey;
+  const recommendationOpportunityRow = opportunityByStrategyKey.get(recommendationKey) || {};
+  const orbHigh = Number(latestSession?.orb?.high);
+  const orbLow = Number(latestSession?.orb?.low);
+  const orbMid = Number.isFinite(orbHigh) && Number.isFinite(orbLow)
+    ? round2((orbHigh + orbLow) / 2)
+    : null;
+  const referencePrice = Number.isFinite(Number(latestSession?.trade?.entry_price))
+    ? Number(latestSession.trade.entry_price)
+    : (Number.isFinite(Number(latestSession?.trade?.exit_price)) ? Number(latestSession.trade.exit_price) : null);
+  const priceLocationVsOrb = classifyPriceLocationVsOrb({
+    referencePrice,
+    orbHigh: Number.isFinite(orbHigh) ? orbHigh : null,
+    orbLow: Number.isFinite(orbLow) ? orbLow : null,
+  });
+
+  const buildCandidateRow = ({
+    strategyKey = '',
+    strategyLayer = '',
+    strategyName = '',
+    candidateType = 'context_candidate',
+    candidateSource = 'strategy_stack',
+    direction = 'long',
+    isRecommendedStrategy = false,
+    opportunityRow = {},
+    candidateWinProbOverride = null,
+    candidateExpectedValueOverride = null,
+    probBias = 0,
+    evBias = 0,
+    scoreBias = 0,
+    triggerStructureExtras = {},
+    featureVectorExtras = {},
+  } = {}) => {
     const candidateStatus = classifyCandidateStatus({
       signal,
       blockerCount: blockers.length,
@@ -937,8 +1026,6 @@ function buildLiveOpportunityCandidates(input = {}) {
       isRecommendedStrategy,
     });
     const statusAdjustment = statusToCandidateAdjustment(candidateStatus);
-    const opportunityRow = opportunityByStrategyKey.get(strategyKey) || {};
-
     const strategyWinProb = Number.isFinite(Number(opportunityRow?.opportunityWinProb))
       ? Number(opportunityRow.opportunityWinProb)
       : 50;
@@ -948,17 +1035,26 @@ function buildLiveOpportunityCandidates(input = {}) {
     const blendedSetupProb = Number.isFinite(topSetupProbability)
       ? ((strategyWinProb * 0.72) + (topSetupProbability * 0.28))
       : strategyWinProb;
-    let candidateWinProb = blendedSetupProb;
+    let candidateWinProbBase = Number.isFinite(Number(candidateWinProbOverride))
+      ? Number(candidateWinProbOverride)
+      : blendedSetupProb;
     if (Number.isFinite(projectedWinChance)) {
-      candidateWinProb = (candidateWinProb * 0.84) + (projectedWinChance * 0.16);
+      candidateWinProbBase = (candidateWinProbBase * 0.84) + (projectedWinChance * 0.16);
     }
-    candidateWinProb = round2(clampNumber(candidateWinProb + statusAdjustment.winProb, 1, 99));
-    const candidateExpectedValue = round2(
-      (strategyExpectedValue * 0.7)
-      + ((Number.isFinite(topSetupExpectedValue) ? topSetupExpectedValue : strategyExpectedValue) * 0.3)
-      + statusAdjustment.ev
-    );
-    const strategyTrades = Number(entry?.metrics?.totalTrades || 0);
+    const candidateWinProb = round2(clampNumber(
+      candidateWinProbBase + statusAdjustment.winProb + Number(probBias || 0),
+      1,
+      99
+    ));
+    const candidateExpectedValueBase = Number.isFinite(Number(candidateExpectedValueOverride))
+      ? Number(candidateExpectedValueOverride)
+      : ((strategyExpectedValue * 0.7)
+        + ((Number.isFinite(topSetupExpectedValue) ? topSetupExpectedValue : strategyExpectedValue) * 0.3));
+    const candidateExpectedValue = round2(candidateExpectedValueBase + statusAdjustment.ev + Number(evBias || 0));
+
+    const strategyTradesFallback = strategyStack.find((s) => String(s?.key || '').trim() === String(strategyKey || '').trim())?.metrics?.totalTrades;
+    const strategyTradesRaw = featureVectorExtras?.strategyTotalTrades ?? strategyTradesFallback ?? 0;
+    const strategyTrades = Number(strategyTradesRaw);
     const temporalSamples = Number(opportunityRow?.opportunityFeatureVector?.temporalContextSamples || 0);
     const annualizedSample = Number.isFinite(topSetupAnnualizedTrades)
       ? Math.max(0, Math.min(120, Math.round(topSetupAnnualizedTrades / 12)))
@@ -977,7 +1073,8 @@ function buildLiveOpportunityCandidates(input = {}) {
       (candidateWinProb * 0.6)
       + (evNormalized * 0.3)
       + (strategyScore * 0.1)
-      + statusAdjustment.score,
+      + statusAdjustment.score
+      + Number(scoreBias || 0),
       0,
       100
     ));
@@ -986,6 +1083,7 @@ function buildLiveOpportunityCandidates(input = {}) {
       0,
       100
     ));
+
     const triggerStructure = {
       signal: normalizeDecisionSignal(signal),
       topSetupId: String(topSetup?.setupId || '').trim() || null,
@@ -994,8 +1092,9 @@ function buildLiveOpportunityCandidates(input = {}) {
       topSetupExpectedValue: Number.isFinite(topSetupExpectedValue) ? round2(topSetupExpectedValue) : null,
       entryConditions: Array.isArray(decision?.entryConditions) ? decision.entryConditions.slice(0, 3) : [],
       blockers: blockers.slice(0, 3),
+      ...triggerStructureExtras,
     };
-    const candidateKey = `${strategyKey || 'strategy'}:${candidateType}:${direction}:${timeBucket.id}`;
+    const candidateKey = `${candidateSource}:${strategyKey || 'strategy'}:${candidateType}:${direction}:${timeBucket.id}`;
     const entryWindow = timeBucket.id === 'next_session_setup'
       ? 'Next session 09:30-11:00 ET'
       : timeBucket.id === 'pre_open_watch'
@@ -1004,6 +1103,7 @@ function buildLiveOpportunityCandidates(input = {}) {
     const candidateFeatureVector = {
       strategyKey: strategyKey || null,
       strategyLayer: strategyLayer || null,
+      candidateSource,
       candidateType,
       direction,
       sessionPhase: String(todayContext?.sessionPhase || '').trim().toLowerCase() || null,
@@ -1023,13 +1123,15 @@ function buildLiveOpportunityCandidates(input = {}) {
         ? round2(Number(opportunityRow.opportunityExpectedValue))
         : null,
       strategyTotalTrades: Number.isFinite(strategyTrades) ? Math.round(strategyTrades) : null,
+      ...featureVectorExtras,
     };
     const candidateScoreSummaryLine = `Win ${candidateWinProb}% | EV $${candidateExpectedValue} | ${candidateCalibrationBand} calibration`;
     const candidateRow = {
       candidateKey,
       strategyKey: strategyKey || null,
-      strategyName,
+      strategyName: strategyName || strategyKey || 'Strategy',
       strategyLayer: strategyLayer || null,
+      candidateSource,
       candidateType,
       direction,
       entryWindow,
@@ -1051,7 +1153,117 @@ function buildLiveOpportunityCandidates(input = {}) {
     };
     candidateRow.candidateSummaryLine = buildCandidateSummaryLine(candidateRow, blockers);
     return candidateRow;
-  }).sort((a, b) => Number(b.candidateCompositeScore || 0) - Number(a.candidateCompositeScore || 0));
+  };
+
+  const strategyCandidates = strategyStack.map((entry) => {
+    const strategyKey = String(entry?.key || '').trim();
+    const strategyLayer = String(entry?.layer || '').trim().toLowerCase();
+    const strategyName = String(entry?.name || strategyKey || 'Strategy').trim();
+    const candidateType = deriveCandidateType(strategyLayer, strategyKey);
+    const direction = inferCandidateDirection(decision, todayContext, topSetup);
+    const isRecommendedStrategy = recommendationKey && strategyKey === recommendationKey;
+    const opportunityRow = opportunityByStrategyKey.get(strategyKey) || {};
+    return buildCandidateRow({
+      strategyKey,
+      strategyLayer,
+      strategyName,
+      candidateType,
+      candidateSource: 'strategy_stack',
+      direction,
+      isRecommendedStrategy,
+      opportunityRow,
+      featureVectorExtras: {
+        strategyTotalTrades: Number(entry?.metrics?.totalTrades || 0),
+      },
+    });
+  });
+
+  const supplementalCandidates = [];
+  if (topSetup && typeof topSetup === 'object') {
+    supplementalCandidates.push(buildCandidateRow({
+      strategyKey: String(topSetup?.setupId || '').trim() || recommendationKey || 'decision_top_setup',
+      strategyLayer: 'decision',
+      strategyName: String(topSetup?.name || '').trim() || 'Decision top setup',
+      candidateType: topSetupCandidateType,
+      candidateSource: 'decision_top_setup',
+      direction: inferCandidateDirection(decision, todayContext, topSetup),
+      isRecommendedStrategy: true,
+      opportunityRow: recommendationOpportunityRow,
+      candidateWinProbOverride: Number.isFinite(topSetupProbability) ? topSetupProbability : null,
+      candidateExpectedValueOverride: Number.isFinite(topSetupExpectedValue) ? topSetupExpectedValue : null,
+      probBias: Number.isFinite(topSetupProbability) && topSetupProbability >= 60 ? 0.8 : 0,
+      evBias: Number.isFinite(topSetupExpectedValue) && topSetupExpectedValue > 0 ? 3 : 0,
+      scoreBias: 1.5,
+      triggerStructureExtras: {
+        source: 'decision_top_setup',
+      },
+      featureVectorExtras: {
+        sourceSignal: 'decision_top_setup',
+        annualizedTradeEstimate: Number.isFinite(topSetupAnnualizedTrades) ? round2(topSetupAnnualizedTrades) : null,
+      },
+    }));
+  }
+
+  const structureCandidateType = inferLiveStructureCandidateType({
+    topSetup,
+    todayContext,
+    latestSession,
+    signal,
+    blockerCount: blockers.length,
+  });
+  const structureDirection = inferLiveStructureDirection({
+    decision,
+    todayContext,
+    topSetup,
+    priceLocationVsOrb,
+  });
+  const structureNoTradeReason = String(latestSession?.no_trade_reason || '').trim().toLowerCase() || null;
+  const structureBiasMap = {
+    failed_extension_reversal: { prob: 1.4, ev: 8, score: 2.8 },
+    breakout_continuation: { prob: 0.9, ev: 5, score: 1.9 },
+    retest_continuation: { prob: 0.5, ev: 3, score: 1.2 },
+    retest_continuation_watch: { prob: 0.2, ev: 1, score: 0.6 },
+    range_reversion_watch: { prob: 0.4, ev: 2, score: 0.9 },
+    late_session_structure_watch: { prob: -0.8, ev: -6, score: -2.1 },
+    blocked_context_watch: { prob: -2.2, ev: -14, score: -4.5 },
+  };
+  const structureBias = structureBiasMap[structureCandidateType] || { prob: 0, ev: 0, score: 0 };
+  supplementalCandidates.push(buildCandidateRow({
+    strategyKey: recommendationKey || 'live_structure_context',
+    strategyLayer: 'structure',
+    strategyName: `Live structure: ${humanizeUnderscoreText(structureCandidateType)}`,
+    candidateType: structureCandidateType,
+    candidateSource: 'live_structure',
+    direction: structureDirection,
+    isRecommendedStrategy: blockers.length === 0,
+    opportunityRow: recommendationOpportunityRow,
+    candidateExpectedValueOverride: Number.isFinite(topSetupExpectedValue)
+      ? round2(topSetupExpectedValue * 0.85)
+      : null,
+    probBias: structureBias.prob,
+    evBias: structureBias.ev,
+    scoreBias: structureBias.score,
+    triggerStructureExtras: {
+      source: 'live_structure',
+      noTradeReason: structureNoTradeReason,
+      priceLocationVsOrb,
+      orbHigh: Number.isFinite(orbHigh) ? round2(orbHigh) : null,
+      orbLow: Number.isFinite(orbLow) ? round2(orbLow) : null,
+      orbMid,
+    },
+    featureVectorExtras: {
+      sourceSignal: 'live_structure',
+      priceLocationVsOrb,
+      orbHigh: Number.isFinite(orbHigh) ? round2(orbHigh) : null,
+      orbLow: Number.isFinite(orbLow) ? round2(orbLow) : null,
+      orbMid,
+      structureNoTradeReason,
+    },
+  }));
+
+  const candidates = [...strategyCandidates, ...supplementalCandidates]
+    .filter((row) => row && typeof row === 'object')
+    .sort((a, b) => Number(b.candidateCompositeScore || 0) - Number(a.candidateCompositeScore || 0));
 
   const topCandidateOverall = candidates[0] || null;
   const actionableCandidates = candidates.filter((candidate) => isCandidateActionableNow(candidate, { negativeEvTolerance: -15 }));
@@ -1059,11 +1271,72 @@ function buildLiveOpportunityCandidates(input = {}) {
   const topCandidateKey = topCandidateOverall?.candidateKey || null;
   const topCandidateSummaryLine = topCandidateOverall?.candidateSummaryLine || null;
   const hasActionableCandidateNow = Boolean(topCandidateActionableNow);
+  const sourceCounts = candidates.reduce((acc, row) => {
+    const key = String(row?.candidateSource || 'unknown').trim().toLowerCase() || 'unknown';
+    acc[key] = Number(acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const candidateSourceCounts = sourceCounts;
+  const candidateDiversitySummaryLine = Object.keys(candidateSourceCounts).length > 0
+    ? `Sources: ${Object.entries(candidateSourceCounts).map(([key, count]) => `${key}(${count})`).join(', ')}.`
+    : 'Sources: none.';
+
+  const deriveNoActionableReason = () => {
+    if (!topCandidateOverall) {
+      return {
+        code: 'no_strong_live_candidate',
+        line: 'no strong live candidate',
+      };
+    }
+    const status = String(topCandidateOverall?.candidateStatus || '').trim().toLowerCase();
+    const phase = String(topCandidateOverall?.sessionPhase || '').trim().toLowerCase();
+    const type = String(topCandidateOverall?.candidateType || '').trim().toLowerCase();
+    const qualityReasons = Array.isArray(topCandidateOverall?.candidateQualityReasonCodes)
+      ? topCandidateOverall.candidateQualityReasonCodes.map((item) => String(item || '').trim().toLowerCase())
+      : [];
+    const expectedValue = Number(topCandidateOverall?.candidateExpectedValue);
+    if (status === 'blocked' || qualityReasons.includes('blocked_candidate')) {
+      return {
+        code: 'blocked_context',
+        line: 'blocked context',
+      };
+    }
+    if ((phase === 'outside_window' || phase === 'late_window' || status === 'await_next_session')
+      && !isApprovedShadowActionWindow(phase)) {
+      return {
+        code: 'outside_actionable_window',
+        line: 'outside actionable window',
+      };
+    }
+    if (Number.isFinite(expectedValue) && expectedValue < -15) {
+      return {
+        code: 'weak_expected_value',
+        line: 'weak expected value',
+      };
+    }
+    if (status === 'watch_trigger' || status === 'pre_open_watch') {
+      return {
+        code: 'no_clean_trigger',
+        line: 'no clean trigger',
+      };
+    }
+    if (type.includes('blocked_context') || type.includes('range_reversion_watch')) {
+      return {
+        code: 'bad_market_structure',
+        line: 'bad market structure',
+      };
+    }
+    return {
+      code: 'no_strong_live_candidate',
+      line: 'no strong live candidate',
+    };
+  };
+  const noActionableReason = hasActionableCandidateNow ? null : deriveNoActionableReason();
   const actionableNowSummaryLine = hasActionableCandidateNow
     ? `Actionable now: ${topCandidateActionableNow.strategyName} (${topCandidateActionableNow.direction?.toUpperCase() || 'LONG'}) | ${topCandidateActionableNow.candidateScoreSummaryLine}.`
-    : `Actionable now: none (${String(topCandidateOverall?.candidateStatus || 'no_candidate').replace(/_/g, ' ')}).`;
+    : `Actionable now: none (${String(noActionableReason?.line || 'no candidate').trim().toLowerCase()}).`;
   const summaryLine = topCandidateOverall
-    ? `Watchlist top: ${topCandidateOverall.strategyName} (${topCandidateOverall.direction?.toUpperCase() || 'LONG'}) | ${topCandidateOverall.candidateScoreSummaryLine}. ${actionableNowSummaryLine}`
+    ? `Watchlist top: ${topCandidateOverall.strategyName} (${topCandidateOverall.direction?.toUpperCase() || 'LONG'}) | ${topCandidateOverall.candidateScoreSummaryLine}. ${actionableNowSummaryLine} ${candidateDiversitySummaryLine}`
     : 'No live candidate opportunities available.';
   return {
     candidates,
@@ -1073,6 +1346,10 @@ function buildLiveOpportunityCandidates(input = {}) {
     topCandidateKey,
     topCandidateSummaryLine,
     actionableNowSummaryLine,
+    noActionableReasonCode: noActionableReason?.code || null,
+    noActionableReasonLine: noActionableReason?.line || null,
+    candidateSourceCounts,
+    candidateDiversitySummaryLine,
     summaryLine,
     advisoryOnly: true,
   };
@@ -2823,6 +3100,7 @@ function buildCommandCenterPanels(input = {}) {
     recommendationKey,
     decision,
     todayContext,
+    latestSession,
     regimeLabel,
     projectedWinChance,
   });

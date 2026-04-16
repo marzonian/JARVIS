@@ -91,10 +91,15 @@ function run() {
   assert(commandCenter.liveOpportunityCandidates.topCandidateActionableNow === null || typeof commandCenter.liveOpportunityCandidates.topCandidateActionableNow === 'object', 'topCandidateActionableNow should be object|null');
   assert(typeof commandCenter.liveOpportunityCandidates.hasActionableCandidateNow === 'boolean', 'hasActionableCandidateNow missing');
   assert(typeof commandCenter.liveOpportunityCandidates.actionableNowSummaryLine === 'string' && commandCenter.liveOpportunityCandidates.actionableNowSummaryLine.length > 0, 'actionableNowSummaryLine missing');
+  assert(Object.prototype.hasOwnProperty.call(commandCenter.liveOpportunityCandidates, 'noActionableReasonCode'), 'noActionableReasonCode missing');
+  assert(Object.prototype.hasOwnProperty.call(commandCenter.liveOpportunityCandidates, 'noActionableReasonLine'), 'noActionableReasonLine missing');
+  assert(commandCenter.liveOpportunityCandidates.candidateSourceCounts && typeof commandCenter.liveOpportunityCandidates.candidateSourceCounts === 'object', 'candidateSourceCounts missing');
+  assert(typeof commandCenter.liveOpportunityCandidates.candidateDiversitySummaryLine === 'string' && commandCenter.liveOpportunityCandidates.candidateDiversitySummaryLine.length > 0, 'candidateDiversitySummaryLine missing');
   assert(typeof commandCenter.liveOpportunityCandidates.summaryLine === 'string' && commandCenter.liveOpportunityCandidates.summaryLine.length > 0, 'liveOpportunityCandidates summaryLine missing');
 
   const topCandidate = commandCenter.liveOpportunityCandidates.candidates[0];
   assert(topCandidate && typeof topCandidate === 'object', 'top candidate missing');
+  assert(typeof topCandidate.candidateSource === 'string' && topCandidate.candidateSource.length > 0, 'candidateSource missing on top candidate');
   assert(topCandidate.timeBucket === 'next_session_setup', 'outside_window should map to next_session_setup instead of stale late_window');
   assert(typeof topCandidate.candidateSummaryLine === 'string' && topCandidate.candidateSummaryLine.length > 0, 'candidateSummaryLine missing');
   assert(Object.prototype.hasOwnProperty.call(topCandidate, 'candidateWinProb'), 'candidateWinProb missing');
@@ -106,6 +111,15 @@ function run() {
   assert(Array.isArray(topCandidate.candidateQualityReasonCodes), 'candidateQualityReasonCodes missing');
   assert(commandCenter.liveOpportunityCandidates.topCandidateActionableNow === null, 'outside_window should not expose actionable now candidate');
   assert(commandCenter.liveOpportunityCandidates.hasActionableCandidateNow === false, 'outside_window should report hasActionableCandidateNow=false');
+  assert(
+    ['outside_actionable_window', 'blocked_context', 'weak_expected_value', 'no_clean_trigger', 'bad_market_structure', 'no_strong_live_candidate'].includes(String(commandCenter.liveOpportunityCandidates.noActionableReasonCode || '')),
+    'outside_window should provide an honest no-actionable reason code'
+  );
+
+  const sourceSet = new Set(commandCenter.liveOpportunityCandidates.candidates.map((row) => String(row?.candidateSource || '').trim()));
+  assert(sourceSet.has('strategy_stack'), 'candidate list should include strategy_stack source');
+  assert(sourceSet.has('decision_top_setup'), 'candidate list should include decision_top_setup source');
+  assert(sourceSet.has('live_structure'), 'candidate list should include live_structure source');
 
   assert(commandCenter.strategyCandidateOpportunityBridge && typeof commandCenter.strategyCandidateOpportunityBridge === 'object', 'strategyCandidateOpportunityBridge missing');
   assert(['agree', 'disagree'].includes(String(commandCenter.strategyCandidateOpportunityBridge.status || '')), 'strategyCandidateOpportunityBridge status invalid');

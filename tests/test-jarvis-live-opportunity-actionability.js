@@ -162,14 +162,22 @@ function run() {
   assert(liveCandidates.topCandidateOverall && typeof liveCandidates.topCandidateOverall === 'object', 'topCandidateOverall missing');
   assert(liveCandidates.topCandidateActionableNow && typeof liveCandidates.topCandidateActionableNow === 'object', 'topCandidateActionableNow missing');
   assert(liveCandidates.hasActionableCandidateNow === true, 'hasActionableCandidateNow should be true');
+  assert(liveCandidates.candidateSourceCounts && typeof liveCandidates.candidateSourceCounts === 'object', 'candidateSourceCounts missing');
+  assert(typeof liveCandidates.candidateDiversitySummaryLine === 'string' && liveCandidates.candidateDiversitySummaryLine.length > 0, 'candidateDiversitySummaryLine missing');
 
   const topOverall = liveCandidates.topCandidateOverall;
   const topActionableNow = liveCandidates.topCandidateActionableNow;
+  assert(typeof topOverall.candidateSource === 'string' && topOverall.candidateSource.length > 0, 'topCandidateOverall candidateSource missing');
+  assert(typeof topActionableNow.candidateSource === 'string' && topActionableNow.candidateSource.length > 0, 'topCandidateActionableNow candidateSource missing');
   assert(topActionableNow.strategyKey !== bad.key, 'negative-EV candidate should not dominate actionable-now ranking');
   assert(topOverall.strategyKey !== bad.key, 'quality penalty should demote deep negative-EV candidate from overall top slot');
   assert(topOverall.candidateExpectedValue > -50, 'overall top should avoid deep negative EV where better options exist');
   assert(typeof liveCandidates.actionableNowSummaryLine === 'string' && liveCandidates.actionableNowSummaryLine.length > 0, 'actionableNowSummaryLine missing');
   assert(typeof liveCandidates.summaryLine === 'string' && liveCandidates.summaryLine.length > 0, 'summaryLine missing');
+  const sourceSet = new Set((Array.isArray(liveCandidates.candidates) ? liveCandidates.candidates : []).map((row) => String(row?.candidateSource || '').trim()));
+  assert(sourceSet.has('strategy_stack'), 'expected strategy_stack candidate source');
+  assert(sourceSet.has('decision_top_setup'), 'expected decision_top_setup candidate source');
+  assert(sourceSet.has('live_structure'), 'expected live_structure candidate source');
 
   console.log('Jarvis live opportunity actionability ranking test passed.');
 }

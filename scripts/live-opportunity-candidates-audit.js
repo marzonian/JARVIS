@@ -22,6 +22,11 @@ function summarizeCandidates(snapshot = {}) {
     : {};
   const rows = Array.isArray(candidates.candidates) ? candidates.candidates : [];
   const topRow = rows[0] || null;
+  const sourceCounts = rows.reduce((acc, row) => {
+    const key = String(row?.candidateSource || 'unknown').trim().toLowerCase() || 'unknown';
+    acc[key] = Number(acc[key] || 0) + 1;
+    return acc;
+  }, {});
   return {
     summaryLine: candidates.summaryLine || null,
     topCandidateKey: candidates.topCandidateKey || null,
@@ -30,11 +35,16 @@ function summarizeCandidates(snapshot = {}) {
     topCandidateActionableNow: candidates.topCandidateActionableNow || null,
     hasActionableCandidateNow: candidates.hasActionableCandidateNow === true,
     actionableNowSummaryLine: candidates.actionableNowSummaryLine || null,
+    noActionableReasonCode: candidates.noActionableReasonCode || null,
+    noActionableReasonLine: candidates.noActionableReasonLine || null,
+    candidateSourceCounts: candidates.candidateSourceCounts || sourceCounts,
+    candidateDiversitySummaryLine: candidates.candidateDiversitySummaryLine || null,
     strategyCandidateOpportunityBridge: snapshot?.strategyCandidateOpportunityBridge || null,
     topCandidate: topRow ? {
       candidateKey: topRow.candidateKey || null,
       strategyKey: topRow.strategyKey || null,
       strategyLayer: topRow.strategyLayer || null,
+      candidateSource: topRow.candidateSource || null,
       candidateType: topRow.candidateType || null,
       direction: topRow.direction || null,
       entryWindow: topRow.entryWindow || null,
@@ -51,6 +61,12 @@ function summarizeCandidates(snapshot = {}) {
       candidateScoreSummaryLine: topRow.candidateScoreSummaryLine || null,
       candidateSummaryLine: topRow.candidateSummaryLine || null,
     } : null,
+    candidateSourceSample: rows.slice(0, 6).map((row) => ({
+      candidateKey: row?.candidateKey || null,
+      candidateSource: row?.candidateSource || null,
+      candidateType: row?.candidateType || null,
+      candidateStatus: row?.candidateStatus || null,
+    })),
   };
 }
 

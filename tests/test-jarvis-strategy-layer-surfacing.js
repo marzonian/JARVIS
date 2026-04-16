@@ -64,6 +64,10 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(snapshot.liveOpportunityCandidates.topCandidateActionableNow === null || typeof snapshot.liveOpportunityCandidates.topCandidateActionableNow === 'object', `${label} liveOpportunityCandidates.topCandidateActionableNow should be object|null`, { snapshot });
   assert(typeof snapshot.liveOpportunityCandidates.hasActionableCandidateNow === 'boolean', `${label} liveOpportunityCandidates.hasActionableCandidateNow missing`, { snapshot });
   assert(typeof snapshot.liveOpportunityCandidates.actionableNowSummaryLine === 'string' && snapshot.liveOpportunityCandidates.actionableNowSummaryLine.length > 0, `${label} liveOpportunityCandidates.actionableNowSummaryLine missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveOpportunityCandidates, 'noActionableReasonCode'), `${label} liveOpportunityCandidates.noActionableReasonCode missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveOpportunityCandidates, 'noActionableReasonLine'), `${label} liveOpportunityCandidates.noActionableReasonLine missing`, { snapshot });
+  assert(snapshot.liveOpportunityCandidates.candidateSourceCounts && typeof snapshot.liveOpportunityCandidates.candidateSourceCounts === 'object', `${label} liveOpportunityCandidates.candidateSourceCounts missing`, { snapshot });
+  assert(typeof snapshot.liveOpportunityCandidates.candidateDiversitySummaryLine === 'string' && snapshot.liveOpportunityCandidates.candidateDiversitySummaryLine.length > 0, `${label} liveOpportunityCandidates.candidateDiversitySummaryLine missing`, { snapshot });
   assert(snapshot.strategyCandidateOpportunityBridge && typeof snapshot.strategyCandidateOpportunityBridge === 'object', `${label} strategyCandidateOpportunityBridge missing`, { snapshot });
   assert(['agree', 'disagree'].includes(String(snapshot.strategyCandidateOpportunityBridge.status || '')), `${label} strategyCandidateOpportunityBridge status missing`, { snapshot });
   assert(snapshot.shadowMockTradeDecision && typeof snapshot.shadowMockTradeDecision === 'object', `${label} shadowMockTradeDecision missing`, { snapshot });
@@ -147,6 +151,7 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(typeof row.candidateKey === 'string' && row.candidateKey.length > 0, `${label} candidate row candidateKey missing`, { row });
     assert(typeof row.strategyKey === 'string' && row.strategyKey.length > 0, `${label} candidate row strategyKey missing`, { row });
     assert(typeof row.strategyLayer === 'string' && row.strategyLayer.length > 0, `${label} candidate row strategyLayer missing`, { row });
+    assert(typeof row.candidateSource === 'string' && row.candidateSource.length > 0, `${label} candidate row candidateSource missing`, { row });
     assert(typeof row.candidateType === 'string' && row.candidateType.length > 0, `${label} candidate row candidateType missing`, { row });
     assert(typeof row.direction === 'string' && row.direction.length > 0, `${label} candidate row direction missing`, { row });
     assert(typeof row.entryWindow === 'string' && row.entryWindow.length > 0, `${label} candidate row entryWindow missing`, { row });
@@ -164,6 +169,10 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(Object.prototype.hasOwnProperty.call(row, 'candidateQualityPenalty'), `${label} candidate row quality penalty missing`, { row });
     assert(Array.isArray(row.candidateQualityReasonCodes), `${label} candidate row quality reasons missing`, { row });
   }
+  const sourceSet = new Set(candidateRows.map((row) => String(row?.candidateSource || '').trim()));
+  assert(sourceSet.has('strategy_stack'), `${label} candidate rows should include strategy_stack source`, { candidateRows });
+  assert(sourceSet.has('decision_top_setup'), `${label} candidate rows should include decision_top_setup source`, { candidateRows });
+  assert(sourceSet.has('live_structure'), `${label} candidate rows should include live_structure source`, { candidateRows });
 }
 
 (async () => {
