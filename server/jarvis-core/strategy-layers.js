@@ -980,6 +980,343 @@ function buildLiveOpportunityCandidates(input = {}) {
   };
 }
 
+function normalizeMockTradeReference(type = '', price = null, context = {}) {
+  const normalizedType = String(type || '').trim().toLowerCase() || null;
+  const numericPrice = Number(price);
+  return {
+    type: normalizedType,
+    price: Number.isFinite(numericPrice) ? round2(numericPrice) : null,
+    time: String(context?.time || '').trim() || null,
+    window: String(context?.window || '').trim() || null,
+    label: String(context?.label || '').trim() || null,
+  };
+}
+
+function buildMockTradeStructure({ topCandidate = null, latestSession = {} } = {}) {
+  const direction = String(topCandidate?.direction || 'long').trim().toLowerCase() === 'short'
+    ? 'short'
+    : 'long';
+  const trade = latestSession?.trade && typeof latestSession.trade === 'object'
+    ? latestSession.trade
+    : null;
+  const orb = latestSession?.orb && typeof latestSession.orb === 'object'
+    ? latestSession.orb
+    : {};
+  const orbHigh = Number(orb.high);
+  const orbLow = Number(orb.low);
+  const orbRangeTicksRaw = Number(orb.range_ticks);
+  const orbRangeTicks = Number.isFinite(orbRangeTicksRaw)
+    ? Math.abs(orbRangeTicksRaw)
+    : (Number.isFinite(orbHigh) && Number.isFinite(orbLow) ? Math.abs(orbHigh - orbLow) : null);
+
+  const entryPrice = Number.isFinite(Number(trade?.entry_price))
+    ? Number(trade.entry_price)
+    : (direction === 'short' ? (Number.isFinite(orbLow) ? orbLow : null) : (Number.isFinite(orbHigh) ? orbHigh : null));
+  const stopPrice = Number.isFinite(Number(trade?.sl_price))
+    ? Number(trade.sl_price)
+    : (direction === 'short' ? (Number.isFinite(orbHigh) ? orbHigh : null) : (Number.isFinite(orbLow) ? orbLow : null));
+  const targetPrice = Number.isFinite(Number(trade?.tp_price))
+    ? Number(trade.tp_price)
+    : (Number.isFinite(entryPrice) && Number.isFinite(orbRangeTicks)
+      ? (direction === 'short' ? (entryPrice - orbRangeTicks) : (entryPrice + orbRangeTicks))
+      : null);
+
+  const entryReference = normalizeMockTradeReference(
+    Number.isFinite(Number(trade?.entry_price)) ? 'session_trade_entry' : 'orb_level_reference',
+    entryPrice,
+    {
+      time: trade?.entry_time || null,
+      window: topCandidate?.entryWindow || null,
+      label: Number.isFinite(Number(trade?.entry_price))
+        ? 'Derived from latest session entry signal.'
+        : 'Derived from ORB reference level.',
+    }
+  );
+  const stopReference = normalizeMockTradeReference(
+    Number.isFinite(Number(trade?.sl_price)) ? 'session_trade_stop' : 'orb_invalidation_reference',
+    stopPrice,
+    {
+      label: Number.isFinite(Number(trade?.sl_price))
+        ? 'Derived from latest session stop level.'
+        : 'Derived from ORB invalidation level.',
+    }
+  );
+  const targetReference = normalizeMockTradeReference(
+    Number.isFinite(Number(trade?.tp_price)) ? 'session_trade_target' : 'orb_range_projection',
+    targetPrice,
+    {
+      label: Number.isFinite(Number(trade?.tp_price))
+        ? 'Derived from latest session target level.'
+        : 'Derived from ORB range projection.',
+    }
+  );
+
+  const risk = Number.isFinite(entryReference.price) && Number.isFinite(stopReference.price)
+    ? Math.abs(entryReference.price - stopReference.price)
+    : null;
+  const reward = Number.isFinite(entryReference.price) && Number.isFinite(targetReference.price)
+    ? Math.abs(targetReference.price - entryReference.price)
+    : null;
+  const riskReward = Number.isFinite(risk) && Number.isFinite(reward) && risk > 0
+    ? round2(reward / risk)
+    : null;
+
+  return {
+    direction,
+    entryReference,
+    stopReference,
+    targetReference,
+    riskReward,
+    complete: Number.isFinite(entryReference.price) && Number.isFinite(stopReference.price) && Number.isFinite(targetReference.price),
+    usesSessionTrade: Boolean(trade),
+  };
+}
+
+function buildShadowMockTradeDecision(input = {}) {
+  const liveOpportunityCandidates = input?.liveOpportunityCandidates && typeof input.liveOpportunityCandidates === 'object'
+    ? input.liveOpportunityCandidates
+    : {};
+  const todayContext = input?.todayContext && typeof input.todayContext === 'object'
+    ? input.todayContext
+    : {};
+  const latestSession = input?.latestSession && typeof input.latestSession === 'object'
+    ? input.latestSession
+    : {};
+  const topCandidate = Array.isArray(liveOpportunityCandidates?.candidates)
+    ? liveOpportunityCandidates.candidates[0]
+    : null;
+
+  const fallbackDecision = {
+    eligible: false,
+    status: 'ineligible',
+    reason: 'no_candidate_available',
+    candidateKey: null,
+    strategyKey: null,
+    direction: null,
+    entryReference: null,
+    stopReference: null,
+    targetReference: null,
+    riskReward: null,
+    tradePlanSummaryLine: 'Shadow mock-trade: no actionable candidate available.',
+    advisoryOnly: true,
+  };
+  if (!topCandidate || typeof topCandidate !== 'object') return fallbackDecision;
+
+  const candidateStatus = String(topCandidate?.candidateStatus || '').trim().toLowerCase();
+  const sessionPhase = String(topCandidate?.sessionPhase || todayContext?.sessionPhase || '').trim().toLowerCase();
+  const candidateExpectedValue = Number(topCandidate?.candidateExpectedValue);
+  const negativeEvTolerance = -15;
+  const actionableStatuses = new Set(['ready_now', 'secondary_watch', 'watch_trigger', 'await_next_session']);
+  const nextSessionQueued = candidateStatus === 'await_next_session';
+  const blocked = candidateStatus === 'blocked';
+
+  if (blocked) {
+    return {
+      ...fallbackDecision,
+      reason: 'candidate_blocked',
+      candidateKey: topCandidate?.candidateKey || null,
+      strategyKey: topCandidate?.strategyKey || null,
+      direction: topCandidate?.direction || null,
+      tradePlanSummaryLine: 'Shadow mock-trade: blocked candidate, no paper trade queued.',
+    };
+  }
+  if (!actionableStatuses.has(candidateStatus)) {
+    return {
+      ...fallbackDecision,
+      reason: 'candidate_not_actionable',
+      candidateKey: topCandidate?.candidateKey || null,
+      strategyKey: topCandidate?.strategyKey || null,
+      direction: topCandidate?.direction || null,
+      tradePlanSummaryLine: `Shadow mock-trade: candidate status ${candidateStatus || 'unknown'} is not actionable.`,
+    };
+  }
+  if ((sessionPhase === 'outside_window' || sessionPhase === 'late_window') && !nextSessionQueued) {
+    return {
+      ...fallbackDecision,
+      reason: 'outside_actionable_session_context',
+      candidateKey: topCandidate?.candidateKey || null,
+      strategyKey: topCandidate?.strategyKey || null,
+      direction: topCandidate?.direction || null,
+      tradePlanSummaryLine: 'Shadow mock-trade: outside actionable window and not queued for next session.',
+    };
+  }
+  if (Number.isFinite(candidateExpectedValue) && candidateExpectedValue < negativeEvTolerance) {
+    return {
+      ...fallbackDecision,
+      reason: 'negative_expected_value',
+      candidateKey: topCandidate?.candidateKey || null,
+      strategyKey: topCandidate?.strategyKey || null,
+      direction: topCandidate?.direction || null,
+      tradePlanSummaryLine: `Shadow mock-trade: EV $${round2(candidateExpectedValue)} is below tolerance.`,
+    };
+  }
+
+  const structure = buildMockTradeStructure({ topCandidate, latestSession });
+  if (!structure.complete) {
+    return {
+      ...fallbackDecision,
+      reason: 'insufficient_trade_structure',
+      candidateKey: topCandidate?.candidateKey || null,
+      strategyKey: topCandidate?.strategyKey || null,
+      direction: topCandidate?.direction || null,
+      entryReference: structure.entryReference,
+      stopReference: structure.stopReference,
+      targetReference: structure.targetReference,
+      riskReward: structure.riskReward,
+      tradePlanSummaryLine: 'Shadow mock-trade: missing entry/stop/target structure, not eligible.',
+    };
+  }
+
+  const status = nextSessionQueued ? 'queued_next_session' : 'eligible_ready';
+  const reason = nextSessionQueued ? 'queued_for_next_session' : 'eligible_for_shadow_execution';
+  const entryPriceText = Number.isFinite(structure.entryReference?.price) ? structure.entryReference.price : 'n/a';
+  const stopPriceText = Number.isFinite(structure.stopReference?.price) ? structure.stopReference.price : 'n/a';
+  const targetPriceText = Number.isFinite(structure.targetReference?.price) ? structure.targetReference.price : 'n/a';
+  const rrText = Number.isFinite(structure.riskReward) ? structure.riskReward : 'n/a';
+  const tradePlanSummaryLine = nextSessionQueued
+    ? `Shadow mock-trade queued: ${String(topCandidate?.strategyName || topCandidate?.strategyKey || 'candidate')} ${String(structure.direction || 'long').toUpperCase()} next session | entry ${entryPriceText}, stop ${stopPriceText}, target ${targetPriceText}, RR ${rrText}.`
+    : `Shadow mock-trade ready: ${String(topCandidate?.strategyName || topCandidate?.strategyKey || 'candidate')} ${String(structure.direction || 'long').toUpperCase()} | entry ${entryPriceText}, stop ${stopPriceText}, target ${targetPriceText}, RR ${rrText}.`;
+
+  return {
+    eligible: true,
+    status,
+    reason,
+    candidateKey: topCandidate?.candidateKey || null,
+    strategyKey: topCandidate?.strategyKey || null,
+    direction: structure.direction || String(topCandidate?.direction || '').trim().toLowerCase() || null,
+    entryReference: structure.entryReference,
+    stopReference: structure.stopReference,
+    targetReference: structure.targetReference,
+    riskReward: structure.riskReward,
+    tradePlanSummaryLine,
+    advisoryOnly: true,
+  };
+}
+
+function buildShadowMockTradeLedger(input = {}) {
+  const shadowMockTradeDecision = input?.shadowMockTradeDecision && typeof input.shadowMockTradeDecision === 'object'
+    ? input.shadowMockTradeDecision
+    : null;
+  const latestSession = input?.latestSession && typeof input.latestSession === 'object'
+    ? input.latestSession
+    : {};
+  const todayContext = input?.todayContext && typeof input.todayContext === 'object'
+    ? input.todayContext
+    : {};
+  const pending = [];
+  const open = [];
+  const closed = [];
+
+  if (!shadowMockTradeDecision || shadowMockTradeDecision.eligible !== true) {
+    return {
+      pending,
+      open,
+      closed,
+      latestTrade: null,
+      summaryLine: `Shadow mock ledger: no trade queued (${String(shadowMockTradeDecision?.reason || 'no_eligible_candidate').replace(/_/g, ' ')}).`,
+      advisoryOnly: true,
+    };
+  }
+
+  const tradeRecordBase = {
+    tradeId: `${String(todayContext?.nowEt || 'unknown').slice(0, 10)}:${String(shadowMockTradeDecision.candidateKey || 'candidate')}`,
+    candidateKey: shadowMockTradeDecision.candidateKey || null,
+    strategyKey: shadowMockTradeDecision.strategyKey || null,
+    direction: shadowMockTradeDecision.direction || null,
+    entryTime: shadowMockTradeDecision.entryReference?.time || null,
+    entryPriceReference: shadowMockTradeDecision.entryReference?.price ?? null,
+    stop: shadowMockTradeDecision.stopReference?.price ?? null,
+    target: shadowMockTradeDecision.targetReference?.price ?? null,
+    riskReward: shadowMockTradeDecision.riskReward ?? null,
+    exitTime: null,
+    exitPriceReference: null,
+    exitReason: null,
+    realizedPnl: null,
+    realizedOutcome: null,
+    linkedCandidateKey: shadowMockTradeDecision.candidateKey || null,
+    linkedStrategyKey: shadowMockTradeDecision.strategyKey || null,
+    advisoryOnly: true,
+  };
+
+  if (shadowMockTradeDecision.status === 'queued_next_session') {
+    pending.push({
+      ...tradeRecordBase,
+      status: 'pending',
+      exitReason: 'queued_next_session',
+      realizedOutcome: 'pending',
+      realizedPnl: 0,
+    });
+  } else {
+    const trade = latestSession?.trade && typeof latestSession.trade === 'object'
+      ? latestSession.trade
+      : null;
+    const normalizedResult = String(trade?.result || '').trim().toLowerCase();
+    if (trade && (normalizedResult === 'win' || normalizedResult === 'loss' || normalizedResult === 'breakeven')) {
+      closed.push({
+        ...tradeRecordBase,
+        status: 'closed',
+        entryTime: String(trade?.entry_time || tradeRecordBase.entryTime || '').trim() || null,
+        entryPriceReference: Number.isFinite(Number(trade?.entry_price)) ? Number(trade.entry_price) : tradeRecordBase.entryPriceReference,
+        stop: Number.isFinite(Number(trade?.sl_price)) ? Number(trade.sl_price) : tradeRecordBase.stop,
+        target: Number.isFinite(Number(trade?.tp_price)) ? Number(trade.tp_price) : tradeRecordBase.target,
+        exitTime: String(trade?.exit_time || '').trim() || null,
+        exitPriceReference: Number.isFinite(Number(trade?.exit_price)) ? Number(trade.exit_price) : null,
+        exitReason: String(trade?.exit_reason || normalizedResult).trim() || normalizedResult,
+        realizedPnl: Number.isFinite(Number(trade?.pnl_dollars)) ? round2(Number(trade.pnl_dollars)) : 0,
+        realizedOutcome: normalizedResult,
+      });
+    } else if (trade && normalizedResult === 'no_resolution') {
+      open.push({
+        ...tradeRecordBase,
+        status: 'open',
+        entryTime: String(trade?.entry_time || tradeRecordBase.entryTime || '').trim() || null,
+        entryPriceReference: Number.isFinite(Number(trade?.entry_price)) ? Number(trade.entry_price) : tradeRecordBase.entryPriceReference,
+        stop: Number.isFinite(Number(trade?.sl_price)) ? Number(trade.sl_price) : tradeRecordBase.stop,
+        target: Number.isFinite(Number(trade?.tp_price)) ? Number(trade.tp_price) : tradeRecordBase.target,
+        realizedOutcome: 'open',
+      });
+    } else {
+      const phase = String(todayContext?.sessionPhase || '').trim().toLowerCase();
+      if (phase === 'outside_window' || phase === 'late_window') {
+        closed.push({
+          ...tradeRecordBase,
+          status: 'closed',
+          exitReason: String(latestSession?.no_trade_reason || 'timeout_no_trigger').trim() || 'timeout_no_trigger',
+          realizedOutcome: 'no_trade',
+          realizedPnl: 0,
+        });
+      } else {
+        pending.push({
+          ...tradeRecordBase,
+          status: 'pending',
+          exitReason: String(latestSession?.no_trade_reason || 'awaiting_trigger').trim() || 'awaiting_trigger',
+          realizedOutcome: 'pending',
+          realizedPnl: 0,
+        });
+      }
+    }
+  }
+
+  const latestTrade = closed[0] || open[0] || pending[0] || null;
+  let summaryLine = 'Shadow mock ledger: no tracked mock trades.';
+  if (closed.length > 0) {
+    const first = closed[0];
+    summaryLine = `Shadow mock ledger: ${closed.length} closed (${String(first.realizedOutcome || 'no_trade').toUpperCase()} ${Number.isFinite(first.realizedPnl) ? `$${round2(first.realizedPnl)}` : '$0'}).`;
+  } else if (open.length > 0) {
+    summaryLine = `Shadow mock ledger: ${open.length} open mock trade${open.length > 1 ? 's' : ''}.`;
+  } else if (pending.length > 0) {
+    summaryLine = `Shadow mock ledger: ${pending.length} pending mock trade${pending.length > 1 ? 's' : ''}.`;
+  }
+  return {
+    pending,
+    open,
+    closed,
+    latestTrade,
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
 function buildStrategyCandidateBridge({ opportunityScoring = null, liveOpportunityCandidates = null } = {}) {
   const strategyTopKey = String(opportunityScoring?.recommendedByOpportunityKey || '').trim() || null;
   const strategyTopName = String(opportunityScoring?.recommendedByOpportunityName || '').trim() || null;
@@ -2326,6 +2663,16 @@ function buildCommandCenterPanels(input = {}) {
     opportunityScoring,
     liveOpportunityCandidates,
   });
+  const shadowMockTradeDecision = buildShadowMockTradeDecision({
+    liveOpportunityCandidates,
+    todayContext,
+    latestSession,
+  });
+  const shadowMockTradeLedger = buildShadowMockTradeLedger({
+    shadowMockTradeDecision,
+    latestSession,
+    todayContext,
+  });
 
   const mechanicsInsight = (() => {
     if (!mechanicsResearchSummary || !Array.isArray(mechanicsResearchSummary.mechanicsVariantTable)
@@ -2519,6 +2866,8 @@ function buildCommandCenterPanels(input = {}) {
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
   );
+  todayRecommendation.shadowMockTradeDecision = cloneData(shadowMockTradeDecision, shadowMockTradeDecision);
+  todayRecommendation.shadowMockTradeLedger = cloneData(shadowMockTradeLedger, shadowMockTradeLedger);
   const decisionBoard = buildDecisionBoard({
     originalPlan,
     bestAlternative,
@@ -2554,6 +2903,8 @@ function buildCommandCenterPanels(input = {}) {
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
   );
+  decisionBoard.shadowMockTradeDecision = cloneData(shadowMockTradeDecision, shadowMockTradeDecision);
+  decisionBoard.shadowMockTradeLedger = cloneData(shadowMockTradeLedger, shadowMockTradeLedger);
 
   return {
     layout: {
@@ -2596,6 +2947,8 @@ function buildCommandCenterPanels(input = {}) {
       strategyCandidateOpportunityBridge,
       strategyCandidateOpportunityBridge
     ),
+    shadowMockTradeDecision: cloneData(shadowMockTradeDecision, shadowMockTradeDecision),
+    shadowMockTradeLedger: cloneData(shadowMockTradeLedger, shadowMockTradeLedger),
     assistantDecisionBrief,
     assistantDecisionBriefText: assistantDecisionBrief.assistantText,
     recentAggressiveMissSentinel,

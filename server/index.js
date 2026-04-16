@@ -34851,6 +34851,26 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
   const strategyCandidateOpportunityBridge = strategyCandidateOpportunityBridgeSource
     ? cloneData(strategyCandidateOpportunityBridgeSource, strategyCandidateOpportunityBridgeSource)
     : null;
+  const shadowMockTradeDecisionSource = (
+    commandCenter?.shadowMockTradeDecision && typeof commandCenter.shadowMockTradeDecision === 'object'
+      ? commandCenter.shadowMockTradeDecision
+      : (strategyLayers?.shadowMockTradeDecision && typeof strategyLayers.shadowMockTradeDecision === 'object'
+        ? strategyLayers.shadowMockTradeDecision
+        : null)
+  );
+  const shadowMockTradeDecision = shadowMockTradeDecisionSource
+    ? cloneData(shadowMockTradeDecisionSource, shadowMockTradeDecisionSource)
+    : null;
+  const shadowMockTradeLedgerSource = (
+    commandCenter?.shadowMockTradeLedger && typeof commandCenter.shadowMockTradeLedger === 'object'
+      ? commandCenter.shadowMockTradeLedger
+      : (strategyLayers?.shadowMockTradeLedger && typeof strategyLayers.shadowMockTradeLedger === 'object'
+        ? strategyLayers.shadowMockTradeLedger
+        : null)
+  );
+  const shadowMockTradeLedger = shadowMockTradeLedgerSource
+    ? cloneData(shadowMockTradeLedgerSource, shadowMockTradeLedgerSource)
+    : null;
 
   return {
     snapshotVersion: 'v1',
@@ -34877,6 +34897,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     heuristicVsOpportunityComparison,
     liveOpportunityCandidates,
     strategyCandidateOpportunityBridge,
+    shadowMockTradeDecision,
+    shadowMockTradeLedger,
     todayRecommendationMirror: {
       originalPlan: cloneData(originalPlanCopy, originalPlanCopy),
       bestVariant: cloneData(bestVariantCopy, bestVariantCopy),
@@ -34903,6 +34925,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
         strategyCandidateOpportunityBridge,
         strategyCandidateOpportunityBridge
       ),
+      shadowMockTradeDecision: cloneData(shadowMockTradeDecision, shadowMockTradeDecision),
+      shadowMockTradeLedger: cloneData(shadowMockTradeLedger, shadowMockTradeLedger),
       advisoryOnly: true,
     },
     decisionBoardMirror: {
@@ -34931,6 +34955,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
         strategyCandidateOpportunityBridge,
         strategyCandidateOpportunityBridge
       ),
+      shadowMockTradeDecision: cloneData(shadowMockTradeDecision, shadowMockTradeDecision),
+      shadowMockTradeLedger: cloneData(shadowMockTradeLedger, shadowMockTradeLedger),
       advisoryOnly: true,
     },
     summaryLine: `Strategy snapshot: ${recommendationBasis.recommendedStrategyName || 'Original Trading Plan'} (${recommendationBasis.basisLabel || basisType}) | stance ${executionStanceCopy.stance}.`,
@@ -34973,6 +34999,14 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
   commandCenter.strategyCandidateOpportunityBridge = cloneData(
     strategyLayerSnapshot.strategyCandidateOpportunityBridge,
     strategyLayerSnapshot.strategyCandidateOpportunityBridge
+  );
+  commandCenter.shadowMockTradeDecision = cloneData(
+    strategyLayerSnapshot.shadowMockTradeDecision,
+    strategyLayerSnapshot.shadowMockTradeDecision
+  );
+  commandCenter.shadowMockTradeLedger = cloneData(
+    strategyLayerSnapshot.shadowMockTradeLedger,
+    strategyLayerSnapshot.shadowMockTradeLedger
   );
 
   if (commandCenter.todayRecommendation && typeof commandCenter.todayRecommendation === 'object') {
@@ -35069,6 +35103,14 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
         strategyLayerSnapshot.strategyCandidateOpportunityBridge,
         strategyLayerSnapshot.strategyCandidateOpportunityBridge
       );
+      recommendationPerformance.shadowMockTradeDecision = cloneData(
+        strategyLayerSnapshot.shadowMockTradeDecision,
+        strategyLayerSnapshot.shadowMockTradeDecision
+      );
+      recommendationPerformance.shadowMockTradeLedger = cloneData(
+        strategyLayerSnapshot.shadowMockTradeLedger,
+        strategyLayerSnapshot.shadowMockTradeLedger
+      );
       recommendationPerformance.todayRecommendation = cloneData(
         strategyLayerSnapshot.todayRecommendationMirror,
         strategyLayerSnapshot.todayRecommendationMirror
@@ -35107,6 +35149,8 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       heuristicVsOpportunityComparison: strategyLayerSnapshot?.heuristicVsOpportunityComparison || null,
       liveOpportunityCandidates: strategyLayerSnapshot?.liveOpportunityCandidates || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
+      shadowMockTradeDecision: strategyLayerSnapshot?.shadowMockTradeDecision || null,
+      shadowMockTradeLedger: strategyLayerSnapshot?.shadowMockTradeLedger || null,
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       generatedAt: performance?.generatedAt || new Date().toISOString(),
@@ -35673,6 +35717,8 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       heuristicVsOpportunityComparison: strategyLayerSnapshot?.heuristicVsOpportunityComparison || null,
       liveOpportunityCandidates: strategyLayerSnapshot?.liveOpportunityCandidates || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
+      shadowMockTradeDecision: strategyLayerSnapshot?.shadowMockTradeDecision || null,
+      shadowMockTradeLedger: strategyLayerSnapshot?.shadowMockTradeLedger || null,
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       strategyTracking: payload.strategyTracking || null,

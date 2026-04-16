@@ -62,6 +62,16 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(typeof snapshot.liveOpportunityCandidates.summaryLine === 'string' && snapshot.liveOpportunityCandidates.summaryLine.length > 0, `${label} liveOpportunityCandidates.summaryLine missing`, { snapshot });
   assert(snapshot.strategyCandidateOpportunityBridge && typeof snapshot.strategyCandidateOpportunityBridge === 'object', `${label} strategyCandidateOpportunityBridge missing`, { snapshot });
   assert(['agree', 'disagree'].includes(String(snapshot.strategyCandidateOpportunityBridge.status || '')), `${label} strategyCandidateOpportunityBridge status missing`, { snapshot });
+  assert(snapshot.shadowMockTradeDecision && typeof snapshot.shadowMockTradeDecision === 'object', `${label} shadowMockTradeDecision missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.shadowMockTradeDecision, 'eligible'), `${label} shadowMockTradeDecision.eligible missing`, { snapshot });
+  assert(typeof snapshot.shadowMockTradeDecision.status === 'string' && snapshot.shadowMockTradeDecision.status.length > 0, `${label} shadowMockTradeDecision.status missing`, { snapshot });
+  assert(typeof snapshot.shadowMockTradeDecision.reason === 'string' && snapshot.shadowMockTradeDecision.reason.length > 0, `${label} shadowMockTradeDecision.reason missing`, { snapshot });
+  assert(typeof snapshot.shadowMockTradeDecision.tradePlanSummaryLine === 'string' && snapshot.shadowMockTradeDecision.tradePlanSummaryLine.length > 0, `${label} shadowMockTradeDecision.tradePlanSummaryLine missing`, { snapshot });
+  assert(snapshot.shadowMockTradeLedger && typeof snapshot.shadowMockTradeLedger === 'object', `${label} shadowMockTradeLedger missing`, { snapshot });
+  assert(Array.isArray(snapshot.shadowMockTradeLedger.pending), `${label} shadowMockTradeLedger.pending missing`, { snapshot });
+  assert(Array.isArray(snapshot.shadowMockTradeLedger.open), `${label} shadowMockTradeLedger.open missing`, { snapshot });
+  assert(Array.isArray(snapshot.shadowMockTradeLedger.closed), `${label} shadowMockTradeLedger.closed missing`, { snapshot });
+  assert(typeof snapshot.shadowMockTradeLedger.summaryLine === 'string' && snapshot.shadowMockTradeLedger.summaryLine.length > 0, `${label} shadowMockTradeLedger.summaryLine missing`, { snapshot });
   assert(snapshot.todayRecommendationMirror && typeof snapshot.todayRecommendationMirror === 'object', `${label} todayRecommendationMirror missing`, { snapshot });
   assert(snapshot.decisionBoardMirror && typeof snapshot.decisionBoardMirror === 'object', `${label} decisionBoardMirror missing`, { snapshot });
 
@@ -199,6 +209,8 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.heuristicVsOpportunityComparison && typeof center.heuristicVsOpportunityComparison === 'object', 'command-center heuristicVsOpportunityComparison root field missing', { center });
     assert(center.liveOpportunityCandidates && typeof center.liveOpportunityCandidates === 'object', 'command-center liveOpportunityCandidates root field missing', { center });
     assert(center.strategyCandidateOpportunityBridge && typeof center.strategyCandidateOpportunityBridge === 'object', 'command-center strategyCandidateOpportunityBridge root field missing', { center });
+    assert(center.shadowMockTradeDecision && typeof center.shadowMockTradeDecision === 'object', 'command-center shadowMockTradeDecision root field missing', { center });
+    assert(center.shadowMockTradeLedger && typeof center.shadowMockTradeLedger === 'object', 'command-center shadowMockTradeLedger root field missing', { center });
     assert(center.todayRecommendation && typeof center.todayRecommendation === 'object', 'command-center todayRecommendation root mirror missing', { center });
     assert(center.decisionBoard && typeof center.decisionBoard === 'object', 'command-center decisionBoard root mirror missing', { center });
 
@@ -226,6 +238,10 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.commandCenter.decisionBoard.liveOpportunityCandidates && typeof center.commandCenter.decisionBoard.liveOpportunityCandidates === 'object', 'decisionBoard liveOpportunityCandidates mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.strategyCandidateOpportunityBridge && typeof center.commandCenter.todayRecommendation.strategyCandidateOpportunityBridge === 'object', 'todayRecommendation strategyCandidateOpportunityBridge mirror missing', { center });
     assert(center.commandCenter.decisionBoard.strategyCandidateOpportunityBridge && typeof center.commandCenter.decisionBoard.strategyCandidateOpportunityBridge === 'object', 'decisionBoard strategyCandidateOpportunityBridge mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.shadowMockTradeDecision && typeof center.commandCenter.todayRecommendation.shadowMockTradeDecision === 'object', 'todayRecommendation shadowMockTradeDecision mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.shadowMockTradeDecision && typeof center.commandCenter.decisionBoard.shadowMockTradeDecision === 'object', 'decisionBoard shadowMockTradeDecision mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.shadowMockTradeLedger && typeof center.commandCenter.todayRecommendation.shadowMockTradeLedger === 'object', 'todayRecommendation shadowMockTradeLedger mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.shadowMockTradeLedger && typeof center.commandCenter.decisionBoard.shadowMockTradeLedger === 'object', 'decisionBoard shadowMockTradeLedger mirror missing', { center });
     pass('command-center strategy-layer snapshot and mirrors');
 
     const perf = await getJson(server.baseUrl, '/api/jarvis/recommendation/performance?force=1');
@@ -253,6 +269,8 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(perf.recommendationPerformance.heuristicVsOpportunityComparison && typeof perf.recommendationPerformance.heuristicVsOpportunityComparison === 'object', 'recommendationPerformance.heuristicVsOpportunityComparison missing', { perf });
     assert(perf.recommendationPerformance.liveOpportunityCandidates && typeof perf.recommendationPerformance.liveOpportunityCandidates === 'object', 'recommendationPerformance.liveOpportunityCandidates missing', { perf });
     assert(perf.recommendationPerformance.strategyCandidateOpportunityBridge && typeof perf.recommendationPerformance.strategyCandidateOpportunityBridge === 'object', 'recommendationPerformance.strategyCandidateOpportunityBridge missing', { perf });
+    assert(perf.recommendationPerformance.shadowMockTradeDecision && typeof perf.recommendationPerformance.shadowMockTradeDecision === 'object', 'recommendationPerformance.shadowMockTradeDecision missing', { perf });
+    assert(perf.recommendationPerformance.shadowMockTradeLedger && typeof perf.recommendationPerformance.shadowMockTradeLedger === 'object', 'recommendationPerformance.shadowMockTradeLedger missing', { perf });
     pass('recommendation/performance strategy-layer snapshot contract');
 
     const stackRows = Array.isArray(center.strategyLayerSnapshot?.strategyStack)
