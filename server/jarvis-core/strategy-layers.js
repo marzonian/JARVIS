@@ -1250,6 +1250,81 @@ function buildRecentAggressiveMissSentinelNote(sentinel = null) {
   return `Recent miss pattern: too aggressive (${blockerState} state, ${posture}, ${tpMode}, ${confidence} confidence). Stay tighter with aggressive continuation setups until reviewed.`;
 }
 
+function buildDecisionQualityCard(input = {}) {
+  const decision = input?.decision && typeof input.decision === 'object' ? input.decision : {};
+  const todayRecommendation = input?.todayRecommendation && typeof input.todayRecommendation === 'object'
+    ? input.todayRecommendation
+    : {};
+  const assistantDecisionBrief = input?.assistantDecisionBrief && typeof input.assistantDecisionBrief === 'object'
+    ? input.assistantDecisionBrief
+    : {};
+  const todayContext = input?.todayContext && typeof input.todayContext === 'object'
+    ? input.todayContext
+    : {};
+  const primaryGuidance = todayRecommendation?.frontLinePrimaryBlockerGuidance
+    && typeof todayRecommendation.frontLinePrimaryBlockerGuidance === 'object'
+    ? todayRecommendation.frontLinePrimaryBlockerGuidance
+    : null;
+  const blockers = Array.isArray(decision?.blockers)
+    ? decision.blockers.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (!blockers.length && primaryGuidance?.blockerCode) blockers.push(String(primaryGuidance.blockerCode).trim());
+  const topAction = String(assistantDecisionBrief?.actionNow || '').trim()
+    || toActionNowLabel(
+      decision?.signalLabel || decision?.signal || decision?.verdict || todayRecommendation?.frontLineBlockerGateSignal || '',
+      todayRecommendation?.posture,
+      blockers.length > 0
+    );
+  const why = String(
+    assistantDecisionBrief?.why
+    || todayRecommendation?.postureReason
+    || decision?.signalLine
+    || ''
+  ).trim();
+  const recommendedStrategy = String(todayRecommendation?.recommendedStrategy || 'Original Trading Plan').trim() || 'Original Trading Plan';
+  const recommendedTpMode = String(todayRecommendation?.recommendedTpMode || 'Nearest').trim() || 'Nearest';
+  const recommendation = `${recommendedStrategy} / ${recommendedTpMode}`;
+  const frontLineRecommendationText = String(
+    assistantDecisionBrief?.assistantText
+    || todayRecommendation?.frontLineBlockerClearanceSummary
+    || ''
+  ).trim();
+  const marketStateLabel = [
+    todayContext?.sessionPhase ? `phase ${humanizeUnderscoreText(todayContext.sessionPhase)}` : '',
+    todayContext?.regime ? `regime ${String(todayContext.regime).trim()}` : '',
+    todayContext?.trend ? `trend ${String(todayContext.trend).trim()}` : '',
+    todayContext?.volatility ? `vol ${String(todayContext.volatility).trim()}` : '',
+  ].filter(Boolean).join(' | ');
+  const nowEt = String(todayContext?.nowEt || '').trim() || null;
+  const latestCheckpointTradeDate = String(
+    input?.latestCheckpointTradeDate
+    || todayContext?.latestCheckpointTradeDate
+    || decision?.latestCheckpointTradeDate
+    || ''
+  ).trim() || null;
+  const decisionSummary = `${topAction}${why ? ` ${why}` : ''}`.replace(/\s+/g, ' ').trim();
+  const summaryParts = [
+    `Action now: ${topAction}`,
+    `Recommendation: ${recommendation}`,
+    blockers.length ? `Blockers: ${blockers.join(', ')}` : 'Blockers: none',
+    why ? `Why: ${why}` : '',
+    primaryGuidance?.clearanceCondition ? `Clear when: ${primaryGuidance.clearanceCondition}` : '',
+    primaryGuidance?.nextCheckWindow ? `Check again: ${primaryGuidance.nextCheckWindow}` : '',
+  ].filter(Boolean);
+  return {
+    decisionSummary,
+    recommendation,
+    frontLineRecommendationText: frontLineRecommendationText || decisionSummary,
+    topAction,
+    blockers,
+    summaryLine: summaryParts.join(' | '),
+    marketStateLabel: marketStateLabel || null,
+    nowEt,
+    latestCheckpointTradeDate,
+    advisoryOnly: true,
+  };
+}
+
 function buildAssistantDecisionBrief(input = {}) {
   const decision = input?.decision && typeof input.decision === 'object' ? input.decision : {};
   const todayRecommendation = input?.todayRecommendation && typeof input.todayRecommendation === 'object'
@@ -1694,6 +1769,22 @@ function buildCommandCenterPanels(input = {}) {
   }
   todayRecommendation.assistantDecisionBrief = assistantDecisionBrief;
   todayRecommendation.assistantDecisionBriefText = assistantDecisionBrief.assistantText;
+  const decisionQualityCard = buildDecisionQualityCard({
+    decision,
+    todayRecommendation,
+    assistantDecisionBrief,
+    todayContext,
+    latestCheckpointTradeDate: input?.latestCheckpointTradeDate || null,
+  });
+  todayRecommendation.decisionSummary = decisionQualityCard.decisionSummary;
+  todayRecommendation.recommendation = decisionQualityCard.recommendation;
+  todayRecommendation.frontLineRecommendationText = decisionQualityCard.frontLineRecommendationText;
+  todayRecommendation.topAction = decisionQualityCard.topAction;
+  todayRecommendation.blockers = Array.isArray(decisionQualityCard.blockers) ? [...decisionQualityCard.blockers] : [];
+  todayRecommendation.summaryLine = decisionQualityCard.summaryLine;
+  todayRecommendation.marketStateLabel = decisionQualityCard.marketStateLabel;
+  todayRecommendation.nowEt = decisionQualityCard.nowEt;
+  todayRecommendation.latestCheckpointTradeDate = decisionQualityCard.latestCheckpointTradeDate;
   const decisionBoard = buildDecisionBoard({
     originalPlan,
     bestAlternative,
@@ -1705,6 +1796,15 @@ function buildCommandCenterPanels(input = {}) {
     newsQualifier,
     confidenceReason: `Posture: ${String(todayRecommendation.postureReason || '').trim() || 'n/a'} | TP: ${String(todayRecommendation.tpRecommendationReason || '').trim() || 'n/a'}`,
   });
+  decisionBoard.decisionSummary = decisionQualityCard.decisionSummary;
+  decisionBoard.recommendation = decisionQualityCard.recommendation;
+  decisionBoard.frontLineRecommendationText = decisionQualityCard.frontLineRecommendationText;
+  decisionBoard.topAction = decisionQualityCard.topAction;
+  decisionBoard.blockers = Array.isArray(decisionQualityCard.blockers) ? [...decisionQualityCard.blockers] : [];
+  decisionBoard.marketStateLabel = decisionQualityCard.marketStateLabel;
+  decisionBoard.nowEt = decisionQualityCard.nowEt;
+  decisionBoard.latestCheckpointTradeDate = decisionQualityCard.latestCheckpointTradeDate;
+  decisionBoard.topActionSummaryLine = decisionQualityCard.summaryLine;
 
   return {
     layout: {
@@ -1723,6 +1823,15 @@ function buildCommandCenterPanels(input = {}) {
     highValueBrief,
     decisionBoard,
     todayRecommendation,
+    decisionSummary: decisionQualityCard.decisionSummary,
+    recommendation: decisionQualityCard.recommendation,
+    frontLineRecommendationText: decisionQualityCard.frontLineRecommendationText,
+    topAction: decisionQualityCard.topAction,
+    blockers: Array.isArray(decisionQualityCard.blockers) ? [...decisionQualityCard.blockers] : [],
+    summaryLine: decisionQualityCard.summaryLine,
+    marketStateLabel: decisionQualityCard.marketStateLabel,
+    nowEt: decisionQualityCard.nowEt,
+    latestCheckpointTradeDate: decisionQualityCard.latestCheckpointTradeDate,
     assistantDecisionBrief,
     assistantDecisionBriefText: assistantDecisionBrief.assistantText,
     recentAggressiveMissSentinel,

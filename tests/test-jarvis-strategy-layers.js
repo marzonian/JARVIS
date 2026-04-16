@@ -159,8 +159,25 @@ function run() {
   assert(typeof commandCenter.assistantDecisionBrief.actionNow === 'string' && commandCenter.assistantDecisionBrief.actionNow.length > 0, 'assistantDecisionBrief.actionNow missing');
   assert(typeof commandCenter.assistantDecisionBrief.confidence === 'string' && commandCenter.assistantDecisionBrief.confidence.length > 0, 'assistantDecisionBrief.confidence missing');
   assert(typeof commandCenter.assistantDecisionBriefText === 'string' && commandCenter.assistantDecisionBriefText.length > 0, 'assistantDecisionBriefText missing');
+  assert(typeof commandCenter.decisionSummary === 'string' && commandCenter.decisionSummary.length > 0, 'commandCenter.decisionSummary missing');
+  assert(typeof commandCenter.recommendation === 'string' && /\/\s*/.test(commandCenter.recommendation), 'commandCenter.recommendation missing');
+  assert(typeof commandCenter.frontLineRecommendationText === 'string' && commandCenter.frontLineRecommendationText.length > 0, 'commandCenter.frontLineRecommendationText missing');
+  assert(typeof commandCenter.topAction === 'string' && commandCenter.topAction.length > 0, 'commandCenter.topAction missing');
+  assert(Array.isArray(commandCenter.blockers), 'commandCenter.blockers missing');
+  assert(typeof commandCenter.summaryLine === 'string' && commandCenter.summaryLine.includes('Action now:'), 'commandCenter.summaryLine missing');
+  assert(typeof commandCenter.marketStateLabel === 'string' && commandCenter.marketStateLabel.length > 0, 'commandCenter.marketStateLabel missing');
+  assert(commandCenter.nowEt === '2026-03-07 09:35', 'commandCenter.nowEt should mirror context');
+  assert(Object.prototype.hasOwnProperty.call(commandCenter, 'latestCheckpointTradeDate'), 'commandCenter.latestCheckpointTradeDate should exist');
   assert(commandCenter.todayRecommendation.assistantDecisionBrief && typeof commandCenter.todayRecommendation.assistantDecisionBrief === 'object', 'todayRecommendation missing assistantDecisionBrief mirror');
   assert(commandCenter.todayRecommendation.assistantDecisionBriefText === commandCenter.assistantDecisionBriefText, 'todayRecommendation assistantDecisionBriefText should mirror root brief text');
+  assert(commandCenter.todayRecommendation.topAction === commandCenter.topAction, 'todayRecommendation.topAction should mirror root topAction');
+  assert(commandCenter.todayRecommendation.recommendation === commandCenter.recommendation, 'todayRecommendation.recommendation should mirror root recommendation');
+  assert(Array.isArray(commandCenter.todayRecommendation.blockers), 'todayRecommendation.blockers missing');
+  assert(Object.prototype.hasOwnProperty.call(commandCenter.todayRecommendation, 'latestCheckpointTradeDate'), 'todayRecommendation.latestCheckpointTradeDate should exist');
+  assert(commandCenter.decisionBoard.topAction === commandCenter.topAction, 'decisionBoard.topAction should mirror root topAction');
+  assert(typeof commandCenter.decisionBoard.topActionSummaryLine === 'string' && commandCenter.decisionBoard.topActionSummaryLine.includes('Action now:'), 'decisionBoard.topActionSummaryLine missing');
+  assert(Array.isArray(commandCenter.decisionBoard.blockers), 'decisionBoard.blockers missing');
+  assert(Object.prototype.hasOwnProperty.call(commandCenter.decisionBoard, 'latestCheckpointTradeDate'), 'decisionBoard.latestCheckpointTradeDate should exist');
   assert(!/recent miss pattern: too aggressive/i.test(String(commandCenter.assistantDecisionBriefText || '')), 'no recent too-aggressive sentinel should leave brief text unchanged');
   assert(commandCenter.jarvisBrief.originalPlanStatus && /original trading plan/i.test(commandCenter.jarvisBrief.originalPlanStatus), 'jarvis brief must frame original plan explicitly');
   assert(commandCenter.jarvisBrief.overlayStatus && /overlay/i.test(commandCenter.jarvisBrief.overlayStatus), 'jarvis brief must frame overlay explicitly');
@@ -351,6 +368,10 @@ function run() {
   assert(/current vs clear: 45.73 vs 50/i.test(String(waitBlockedCommandCenter?.assistantDecisionBrief?.assistantText || '').toLowerCase()), 'blocked WAIT assistant brief should include numeric current-vs-clear guidance');
   assert(Array.isArray(waitBlockedCommandCenter?.assistantDecisionBrief?.assistantLines), 'assistant brief should include deterministic line array');
   assert(waitBlockedCommandCenter?.todayRecommendation?.frontLinePrimaryBlockerGuidance?.nextCheckWindow === 'Re-check at open and on the next decision refresh.', 'existing quantified blocker should keep deterministic next-check guidance');
+  assert(waitBlockedCommandCenter?.topAction === 'Wait for clearance.', 'blocked WAIT case should set topAction from assistant brief');
+  assert(Array.isArray(waitBlockedCommandCenter?.blockers) && waitBlockedCommandCenter.blockers.includes('prob_green_below_50'), 'blocked WAIT case should expose blocker list');
+  assert(/Action now: Wait for clearance\./.test(String(waitBlockedCommandCenter?.summaryLine || '')), 'blocked WAIT case summary line should include action now');
+  assert(/Blockers: prob_green_below_50/.test(String(waitBlockedCommandCenter?.summaryLine || '')), 'blocked WAIT case summary line should include blocker list');
 
   const noTradeBlockedCommandCenter = buildCommandCenterPanels({
     strategyLayers: snapshot,
