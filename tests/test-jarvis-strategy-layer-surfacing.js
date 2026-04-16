@@ -54,6 +54,9 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(snapshot.strategyComparisonReadout && typeof snapshot.strategyComparisonReadout === 'object', `${label} strategyComparisonReadout missing`, { snapshot });
   assert(typeof snapshot.strategyComparisonLine === 'string' && snapshot.strategyComparisonLine.length > 0, `${label} strategyComparisonLine missing`, { snapshot });
   assert(typeof snapshot.strategyComparisonVoiceLine === 'string' && snapshot.strategyComparisonVoiceLine.length > 0, `${label} strategyComparisonVoiceLine missing`, { snapshot });
+  assert(snapshot.opportunityScoring && typeof snapshot.opportunityScoring === 'object', `${label} opportunityScoring missing`, { snapshot });
+  assert(typeof snapshot.opportunityScoreSummaryLine === 'string' && snapshot.opportunityScoreSummaryLine.length > 0, `${label} opportunityScoreSummaryLine missing`, { snapshot });
+  assert(snapshot.heuristicVsOpportunityComparison && typeof snapshot.heuristicVsOpportunityComparison === 'object', `${label} heuristicVsOpportunityComparison missing`, { snapshot });
   assert(snapshot.todayRecommendationMirror && typeof snapshot.todayRecommendationMirror === 'object', `${label} todayRecommendationMirror missing`, { snapshot });
   assert(snapshot.decisionBoardMirror && typeof snapshot.decisionBoardMirror === 'object', `${label} decisionBoardMirror missing`, { snapshot });
 
@@ -101,6 +104,21 @@ function assertStrategySnapshotShape(label, snapshot) {
   }
   const nonRecommendedRows = comparisonRows.filter((row) => row?.isRecommended !== true);
   assert(nonRecommendedRows.every((row) => typeof row.whyChosenOrNot === 'string' && row.whyChosenOrNot.length > 0), `${label} non-recommended rows should include whyChosenOrNot`, { nonRecommendedRows });
+
+  const opportunityRows = Array.isArray(snapshot?.opportunityScoring?.comparisonRows)
+    ? snapshot.opportunityScoring.comparisonRows
+    : [];
+  assert(opportunityRows.length >= 1, `${label} opportunity scoring rows missing`, { opportunityRows });
+  for (const row of opportunityRows) {
+    assert(Object.prototype.hasOwnProperty.call(row, 'opportunityWinProb'), `${label} opportunity row missing win prob`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'opportunityExpectedValue'), `${label} opportunity row missing EV`, { row });
+    assert(typeof row.opportunityCalibrationBand === 'string' && row.opportunityCalibrationBand.length > 0, `${label} opportunity row missing calibration band`, { row });
+    assert(row.opportunityFeatureVector && typeof row.opportunityFeatureVector === 'object', `${label} opportunity row missing feature vector`, { row });
+    assert(typeof row.opportunityScoreSummaryLine === 'string' && row.opportunityScoreSummaryLine.length > 0, `${label} opportunity row missing summary line`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'heuristicCompositeScore'), `${label} opportunity row missing heuristic score`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'opportunityCompositeScore'), `${label} opportunity row missing opportunity score`, { row });
+    assert(row.heuristicVsOpportunityComparison && typeof row.heuristicVsOpportunityComparison === 'object', `${label} opportunity row missing comparison object`, { row });
+  }
 }
 
 (async () => {
@@ -147,6 +165,9 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.strategyComparisonReadout && typeof center.strategyComparisonReadout === 'object', 'command-center strategyComparisonReadout root field missing', { center });
     assert(typeof center.strategyComparisonLine === 'string' && center.strategyComparisonLine.length > 0, 'command-center strategyComparisonLine root field missing', { center });
     assert(typeof center.strategyComparisonVoiceLine === 'string' && center.strategyComparisonVoiceLine.length > 0, 'command-center strategyComparisonVoiceLine root field missing', { center });
+    assert(center.opportunityScoring && typeof center.opportunityScoring === 'object', 'command-center opportunityScoring root field missing', { center });
+    assert(typeof center.opportunityScoreSummaryLine === 'string' && center.opportunityScoreSummaryLine.length > 0, 'command-center opportunityScoreSummaryLine root field missing', { center });
+    assert(center.heuristicVsOpportunityComparison && typeof center.heuristicVsOpportunityComparison === 'object', 'command-center heuristicVsOpportunityComparison root field missing', { center });
     assert(center.todayRecommendation && typeof center.todayRecommendation === 'object', 'command-center todayRecommendation root mirror missing', { center });
     assert(center.decisionBoard && typeof center.decisionBoard === 'object', 'command-center decisionBoard root mirror missing', { center });
 
@@ -168,6 +189,8 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.commandCenter.decisionBoard.originalPlan && typeof center.commandCenter.decisionBoard.originalPlan === 'object', 'decisionBoard originalPlan mirror missing', { center });
     assert(center.commandCenter.decisionBoard.bestVariant && typeof center.commandCenter.decisionBoard.bestVariant === 'object', 'decisionBoard bestVariant mirror missing', { center });
     assert(center.commandCenter.decisionBoard.bestAlternative && typeof center.commandCenter.decisionBoard.bestAlternative === 'object', 'decisionBoard bestAlternative mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.opportunityScoring && typeof center.commandCenter.todayRecommendation.opportunityScoring === 'object', 'todayRecommendation opportunityScoring mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.opportunityScoring && typeof center.commandCenter.decisionBoard.opportunityScoring === 'object', 'decisionBoard opportunityScoring mirror missing', { center });
     pass('command-center strategy-layer snapshot and mirrors');
 
     const perf = await getJson(server.baseUrl, '/api/jarvis/recommendation/performance?force=1');
@@ -190,6 +213,9 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(perf.recommendationPerformance.strategyComparisonReadout && typeof perf.recommendationPerformance.strategyComparisonReadout === 'object', 'recommendationPerformance.strategyComparisonReadout missing', { perf });
     assert(typeof perf.recommendationPerformance.strategyComparisonLine === 'string' && perf.recommendationPerformance.strategyComparisonLine.length > 0, 'recommendationPerformance.strategyComparisonLine missing', { perf });
     assert(typeof perf.recommendationPerformance.strategyComparisonVoiceLine === 'string' && perf.recommendationPerformance.strategyComparisonVoiceLine.length > 0, 'recommendationPerformance.strategyComparisonVoiceLine missing', { perf });
+    assert(perf.recommendationPerformance.opportunityScoring && typeof perf.recommendationPerformance.opportunityScoring === 'object', 'recommendationPerformance.opportunityScoring missing', { perf });
+    assert(typeof perf.recommendationPerformance.opportunityScoreSummaryLine === 'string' && perf.recommendationPerformance.opportunityScoreSummaryLine.length > 0, 'recommendationPerformance.opportunityScoreSummaryLine missing', { perf });
+    assert(perf.recommendationPerformance.heuristicVsOpportunityComparison && typeof perf.recommendationPerformance.heuristicVsOpportunityComparison === 'object', 'recommendationPerformance.heuristicVsOpportunityComparison missing', { perf });
     pass('recommendation/performance strategy-layer snapshot contract');
 
     const stackRows = Array.isArray(center.strategyLayerSnapshot?.strategyStack)

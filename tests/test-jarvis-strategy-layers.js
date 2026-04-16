@@ -76,6 +76,17 @@ function run() {
   assert(snapshot.bestVariant && snapshot.bestVariant.layer === 'variant', 'bestVariant summary missing');
   assert(snapshot.bestAlternative === null, 'bestAlternative should be null when discovery disabled');
   assert(snapshot.recommendationBasis && typeof snapshot.recommendationBasis === 'object', 'recommendationBasis missing');
+  assert(snapshot.opportunityScoring && typeof snapshot.opportunityScoring === 'object', 'opportunityScoring missing');
+  assert(typeof snapshot.opportunityScoreSummaryLine === 'string' && snapshot.opportunityScoreSummaryLine.length > 0, 'opportunityScoreSummaryLine missing');
+  assert(snapshot.heuristicVsOpportunityComparison && typeof snapshot.heuristicVsOpportunityComparison === 'object', 'heuristicVsOpportunityComparison missing');
+  assert(Array.isArray(snapshot.opportunityScoring.comparisonRows) && snapshot.opportunityScoring.comparisonRows.length >= 2, 'opportunityScoring comparison rows missing');
+  for (const row of snapshot.opportunityScoring.comparisonRows) {
+    assert(Object.prototype.hasOwnProperty.call(row, 'opportunityWinProb'), 'opportunityWinProb missing on comparison row');
+    assert(Object.prototype.hasOwnProperty.call(row, 'opportunityExpectedValue'), 'opportunityExpectedValue missing on comparison row');
+    assert(typeof row.opportunityCalibrationBand === 'string' && row.opportunityCalibrationBand.length > 0, 'opportunityCalibrationBand missing on comparison row');
+    assert(row.opportunityFeatureVector && typeof row.opportunityFeatureVector === 'object', 'opportunityFeatureVector missing on comparison row');
+    assert(typeof row.opportunityScoreSummaryLine === 'string' && row.opportunityScoreSummaryLine.length > 0, 'opportunityScoreSummaryLine missing on comparison row');
+  }
   assert(['baseline', 'overlay', 'alternative'].includes(snapshot.recommendationBasis.basisType), 'invalid recommendationBasis type');
   assert(Array.isArray(snapshot.strategyStack) && snapshot.strategyStack.length >= 2, 'strategy stack should include original + variant');
   assert(snapshot.strategyStack.every((s) => typeof s.pineScript === 'string' && s.pineScript.includes('//@version=6')), 'pine export missing in strategy stack');
@@ -178,6 +189,11 @@ function run() {
   assert(Array.isArray(commandCenter.todayRecommendation.blockers), 'todayRecommendation.blockers missing');
   assert(Object.prototype.hasOwnProperty.call(commandCenter.todayRecommendation, 'latestCheckpointTradeDate'), 'todayRecommendation.latestCheckpointTradeDate should exist');
   assert(commandCenter.todayRecommendation.executionStanceCard && typeof commandCenter.todayRecommendation.executionStanceCard === 'object', 'todayRecommendation.executionStanceCard missing');
+  assert(commandCenter.opportunityScoring && typeof commandCenter.opportunityScoring === 'object', 'commandCenter.opportunityScoring missing');
+  assert(typeof commandCenter.opportunityScoreSummaryLine === 'string' && commandCenter.opportunityScoreSummaryLine.length > 0, 'commandCenter.opportunityScoreSummaryLine missing');
+  assert(commandCenter.heuristicVsOpportunityComparison && typeof commandCenter.heuristicVsOpportunityComparison === 'object', 'commandCenter.heuristicVsOpportunityComparison missing');
+  assert(commandCenter.todayRecommendation.opportunityScoring && typeof commandCenter.todayRecommendation.opportunityScoring === 'object', 'todayRecommendation.opportunityScoring mirror missing');
+  assert(commandCenter.decisionBoard.opportunityScoring && typeof commandCenter.decisionBoard.opportunityScoring === 'object', 'decisionBoard.opportunityScoring mirror missing');
   assert(commandCenter.decisionBoard.topAction === commandCenter.topAction, 'decisionBoard.topAction should mirror root topAction');
   assert(typeof commandCenter.decisionBoard.topActionSummaryLine === 'string' && commandCenter.decisionBoard.topActionSummaryLine.includes('Action now:'), 'decisionBoard.topActionSummaryLine missing');
   assert(Array.isArray(commandCenter.decisionBoard.blockers), 'decisionBoard.blockers missing');

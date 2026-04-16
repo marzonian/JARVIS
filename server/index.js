@@ -34803,6 +34803,34 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
   const strategyVoiceLine = strategyWhyRecommended.voiceSummaryLine || null;
   const strategyComparisonLine = strategyComparisonReadout.summaryLine || null;
   const strategyComparisonVoiceLine = strategyComparisonReadout.voiceSummaryLine || null;
+  const opportunityScoringSource = (
+    commandCenter?.opportunityScoring && typeof commandCenter.opportunityScoring === 'object'
+      ? commandCenter.opportunityScoring
+      : (strategyLayers?.opportunityScoring && typeof strategyLayers.opportunityScoring === 'object'
+        ? strategyLayers.opportunityScoring
+        : null)
+  );
+  const opportunityScoring = opportunityScoringSource
+    ? cloneData(opportunityScoringSource, opportunityScoringSource)
+    : null;
+  const opportunityScoreSummaryLine = asNullableText(
+    commandCenter?.opportunityScoreSummaryLine
+    || strategyLayers?.opportunityScoreSummaryLine
+    || opportunityScoring?.summaryLine
+    || ''
+  );
+  const heuristicVsOpportunityComparisonSource = (
+    commandCenter?.heuristicVsOpportunityComparison && typeof commandCenter.heuristicVsOpportunityComparison === 'object'
+      ? commandCenter.heuristicVsOpportunityComparison
+      : (strategyLayers?.heuristicVsOpportunityComparison && typeof strategyLayers.heuristicVsOpportunityComparison === 'object'
+        ? strategyLayers.heuristicVsOpportunityComparison
+        : (opportunityScoring?.heuristicVsOpportunityComparison && typeof opportunityScoring.heuristicVsOpportunityComparison === 'object'
+          ? opportunityScoring.heuristicVsOpportunityComparison
+          : null))
+  );
+  const heuristicVsOpportunityComparison = heuristicVsOpportunityComparisonSource
+    ? cloneData(heuristicVsOpportunityComparisonSource, heuristicVsOpportunityComparisonSource)
+    : null;
 
   return {
     snapshotVersion: 'v1',
@@ -34824,6 +34852,9 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     strategyComparisonReadout,
     strategyComparisonLine,
     strategyComparisonVoiceLine,
+    opportunityScoring,
+    opportunityScoreSummaryLine: opportunityScoreSummaryLine || null,
+    heuristicVsOpportunityComparison,
     todayRecommendationMirror: {
       originalPlan: cloneData(originalPlanCopy, originalPlanCopy),
       bestVariant: cloneData(bestVariantCopy, bestVariantCopy),
@@ -34842,6 +34873,9 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       strategyComparisonReadout: cloneData(strategyComparisonReadout, strategyComparisonReadout),
       strategyComparisonLine,
       strategyComparisonVoiceLine,
+      opportunityScoring: cloneData(opportunityScoring, opportunityScoring),
+      opportunityScoreSummaryLine: opportunityScoreSummaryLine || null,
+      heuristicVsOpportunityComparison: cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison),
       advisoryOnly: true,
     },
     decisionBoardMirror: {
@@ -34862,6 +34896,9 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       strategyComparisonReadout: cloneData(strategyComparisonReadout, strategyComparisonReadout),
       strategyComparisonLine,
       strategyComparisonVoiceLine,
+      opportunityScoring: cloneData(opportunityScoring, opportunityScoring),
+      opportunityScoreSummaryLine: opportunityScoreSummaryLine || null,
+      heuristicVsOpportunityComparison: cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison),
       advisoryOnly: true,
     },
     summaryLine: `Strategy snapshot: ${recommendationBasis.recommendedStrategyName || 'Original Trading Plan'} (${recommendationBasis.basisLabel || basisType}) | stance ${executionStanceCopy.stance}.`,
@@ -34891,6 +34928,12 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
   commandCenter.strategyComparisonReadout = cloneData(strategyLayerSnapshot.strategyComparisonReadout, strategyLayerSnapshot.strategyComparisonReadout);
   commandCenter.strategyComparisonLine = strategyLayerSnapshot.strategyComparisonLine || null;
   commandCenter.strategyComparisonVoiceLine = strategyLayerSnapshot.strategyComparisonVoiceLine || null;
+  commandCenter.opportunityScoring = cloneData(strategyLayerSnapshot.opportunityScoring, strategyLayerSnapshot.opportunityScoring);
+  commandCenter.opportunityScoreSummaryLine = strategyLayerSnapshot.opportunityScoreSummaryLine || null;
+  commandCenter.heuristicVsOpportunityComparison = cloneData(
+    strategyLayerSnapshot.heuristicVsOpportunityComparison,
+    strategyLayerSnapshot.heuristicVsOpportunityComparison
+  );
 
   if (commandCenter.todayRecommendation && typeof commandCenter.todayRecommendation === 'object') {
     Object.assign(commandCenter.todayRecommendation, cloneData(strategyLayerSnapshot.todayRecommendationMirror, strategyLayerSnapshot.todayRecommendationMirror));
@@ -34972,6 +35015,12 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       recommendationPerformance.strategyComparisonReadout = cloneData(strategyLayerSnapshot.strategyComparisonReadout, strategyLayerSnapshot.strategyComparisonReadout);
       recommendationPerformance.strategyComparisonLine = strategyLayerSnapshot.strategyComparisonLine || null;
       recommendationPerformance.strategyComparisonVoiceLine = strategyLayerSnapshot.strategyComparisonVoiceLine || null;
+      recommendationPerformance.opportunityScoring = cloneData(strategyLayerSnapshot.opportunityScoring, strategyLayerSnapshot.opportunityScoring);
+      recommendationPerformance.opportunityScoreSummaryLine = strategyLayerSnapshot.opportunityScoreSummaryLine || null;
+      recommendationPerformance.heuristicVsOpportunityComparison = cloneData(
+        strategyLayerSnapshot.heuristicVsOpportunityComparison,
+        strategyLayerSnapshot.heuristicVsOpportunityComparison
+      );
       recommendationPerformance.todayRecommendation = cloneData(
         strategyLayerSnapshot.todayRecommendationMirror,
         strategyLayerSnapshot.todayRecommendationMirror
@@ -35005,6 +35054,9 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       strategyComparisonReadout: strategyLayerSnapshot?.strategyComparisonReadout || null,
       strategyComparisonLine: strategyLayerSnapshot?.strategyComparisonLine || null,
       strategyComparisonVoiceLine: strategyLayerSnapshot?.strategyComparisonVoiceLine || null,
+      opportunityScoring: strategyLayerSnapshot?.opportunityScoring || null,
+      opportunityScoreSummaryLine: strategyLayerSnapshot?.opportunityScoreSummaryLine || null,
+      heuristicVsOpportunityComparison: strategyLayerSnapshot?.heuristicVsOpportunityComparison || null,
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       generatedAt: performance?.generatedAt || new Date().toISOString(),
@@ -35566,6 +35618,9 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       strategyComparisonReadout: strategyLayerSnapshot?.strategyComparisonReadout || null,
       strategyComparisonLine: strategyLayerSnapshot?.strategyComparisonLine || null,
       strategyComparisonVoiceLine: strategyLayerSnapshot?.strategyComparisonVoiceLine || null,
+      opportunityScoring: strategyLayerSnapshot?.opportunityScoring || null,
+      opportunityScoreSummaryLine: strategyLayerSnapshot?.opportunityScoreSummaryLine || null,
+      heuristicVsOpportunityComparison: strategyLayerSnapshot?.heuristicVsOpportunityComparison || null,
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       strategyTracking: payload.strategyTracking || null,

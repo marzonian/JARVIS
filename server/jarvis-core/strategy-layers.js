@@ -77,6 +77,14 @@ function round2(value) {
   return Math.round(n * 100) / 100;
 }
 
+function cloneData(value, fallback) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return fallback;
+  }
+}
+
 function toIntInRange(value, fallback, min, max) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -512,6 +520,226 @@ function computeRecommendationPriority(entry = {}, context = {}) {
   };
 }
 
+function selectTemporalContextSignal(temporalContext = {}) {
+  const byDayTime = temporalContext?.byDayTimeBucket && typeof temporalContext.byDayTimeBucket === 'object'
+    ? temporalContext.byDayTimeBucket
+    : null;
+  const byDay = temporalContext?.byDay && typeof temporalContext.byDay === 'object'
+    ? temporalContext.byDay
+    : null;
+  const byTime = temporalContext?.byTimeBucket && typeof temporalContext.byTimeBucket === 'object'
+    ? temporalContext.byTimeBucket
+    : null;
+
+  if (Number(byDayTime?.samples || 0) >= 4) {
+    return {
+      source: 'day_time_bucket',
+      samples: Number(byDayTime.samples || 0),
+      winRate: Number(byDayTime.winRate),
+    };
+  }
+  if (Number(byDay?.samples || 0) >= Number(byTime?.samples || 0)) {
+    return {
+      source: 'day',
+      samples: Number(byDay?.samples || 0),
+      winRate: Number(byDay?.winRate),
+    };
+  }
+  return {
+    source: 'time_bucket',
+    samples: Number(byTime?.samples || 0),
+    winRate: Number(byTime?.winRate),
+  };
+}
+
+function classifyOpportunityCalibrationBand(totalTrades = 0, temporalSamples = 0) {
+  const trades = Number(totalTrades || 0);
+  const temporal = Number(temporalSamples || 0);
+  if (trades >= 140 && temporal >= 14) return 'high';
+  if (trades >= 80 && temporal >= 8) return 'medium';
+  if (trades >= 40) return 'low';
+  return 'very_low';
+}
+
+function buildOpportunityScore(entry = {}, context = {}) {
+  const metrics = entry?.metrics && typeof entry.metrics === 'object' ? entry.metrics : {};
+  const drawdown = entry?.drawdown && typeof entry.drawdown === 'object' ? entry.drawdown : {};
+  const summary = entry?.summary && typeof entry.summary === 'object' ? entry.summary : {};
+  const temporalContext = entry?.temporalContext && typeof entry.temporalContext === 'object'
+    ? entry.temporalContext
+    : {};
+  const referenceContext = deriveReferenceContext(context?.nowEt);
+  const temporalSignal = selectTemporalContextSignal(temporalContext);
+
+  const totalTrades = Number(metrics.totalTrades || summary.sessionsWithTrade || 0);
+  const baseWinRate = Number.isFinite(Number(metrics.winRate))
+    ? Number(metrics.winRate)
+    : 50;
+  const temporalWinRate = Number.isFinite(Number(temporalSignal.winRate))
+    ? Number(temporalSignal.winRate)
+    : null;
+  const temporalSamples = Number(temporalSignal.samples || 0);
+  const sampleWeight = clampNumber(totalTrades / 180, 0.1, 0.72);
+  const temporalWeight = Number.isFinite(temporalWinRate)
+    ? clampNumber(temporalSamples / 60, 0, 0.22)
+    : 0;
+  const priorWeight = clampNumber(1 - sampleWeight - temporalWeight, 0.08, 0.85);
+  let opportunityWinProb = (50 * priorWeight) + (baseWinRate * sampleWeight) + ((temporalWinRate || 50) * temporalWeight);
+
+  const phase = String(context?.sessionPhase || '').trim().toLowerCase();
+  if (phase === 'orb_window' || phase === 'opening_window') opportunityWinProb += 1.5;
+  else if (phase === 'entry_window' || phase === 'post_orb') opportunityWinProb += 0.8;
+  else if (phase === 'pre_open') opportunityWinProb -= 2.5;
+  else if (phase === 'outside_window') opportunityWinProb -= 5;
+
+  const profitFactor = Number(metrics.profitFactor || 0);
+  opportunityWinProb += clampNumber((profitFactor - 1) * 4.5, -6, 8);
+
+  const expectancyDollars = Number(metrics.expectancyDollars || 0);
+  opportunityWinProb += clampNumber(expectancyDollars / 12, -5, 5);
+
+  const maxDrawdownDollars = Number(drawdown.maxDrawdownDollars || 0);
+  opportunityWinProb -= clampNumber((maxDrawdownDollars / 2500) * 4, 0, 4);
+
+  const suitability = Number(entry.suitability || 0);
+  if (Number.isFinite(suitability)) {
+    opportunityWinProb += clampNumber((suitability - 50) * 0.05, -3, 3);
+  }
+  opportunityWinProb = round2(clampNumber(opportunityWinProb, 1, 99));
+
+  const avgWinDollarsRaw = Math.abs(Number(metrics.avgWinDollars || 0));
+  const avgLossDollarsRaw = Math.abs(Number(metrics.avgLossDollars || 0));
+  const avgWinDollars = avgWinDollarsRaw > 0 ? avgWinDollarsRaw : Math.max(40, Math.abs(expectancyDollars) + 60);
+  const avgLossDollars = avgLossDollarsRaw > 0 ? avgLossDollarsRaw : Math.max(35, Math.abs(expectancyDollars) + 55);
+  const impliedExpectedValue = ((opportunityWinProb / 100) * avgWinDollars) - (((100 - opportunityWinProb) / 100) * avgLossDollars);
+  const opportunityExpectedValue = round2((expectancyDollars * 0.55) + (impliedExpectedValue * 0.45));
+
+  const evNormalized = clampNumber(((opportunityExpectedValue + 80) / 200) * 100, 0, 100);
+  const pfNormalized = clampNumber((profitFactor / 2.5) * 100, 0, 100);
+  const opportunityCompositeScore = round2(
+    (opportunityWinProb * 0.62)
+    + (evNormalized * 0.28)
+    + (pfNormalized * 0.10)
+  );
+  const opportunityCalibrationBand = classifyOpportunityCalibrationBand(totalTrades, temporalSamples);
+
+  const opportunityFeatureVector = {
+    strategyKey: String(entry?.key || '').trim() || null,
+    strategyLayer: String(entry?.layer || '').trim().toLowerCase() || null,
+    sessionPhase: phase || null,
+    referenceDay: referenceContext?.dayNameLower || null,
+    referenceTimeBucket: referenceContext?.bucketId || null,
+    regime: String(context?.regime || context?.marketRegime || '').trim() || null,
+    trend: String(context?.trend || context?.marketTrend || '').trim() || null,
+    volatility: String(context?.volatility || '').trim() || null,
+    orbRangeTicks: Number.isFinite(Number(context?.orbRangeTicks)) ? Number(context.orbRangeTicks) : null,
+    totalTrades: Number.isFinite(totalTrades) ? Math.round(totalTrades) : null,
+    winRate: round2(baseWinRate),
+    profitFactor: round2(profitFactor),
+    expectancyDollars: round2(expectancyDollars),
+    tradeFrequencyPct: Number.isFinite(Number(summary.tradeFrequencyPct)) ? round2(Number(summary.tradeFrequencyPct)) : null,
+    maxDrawdownDollars: Number.isFinite(maxDrawdownDollars) ? round2(maxDrawdownDollars) : null,
+    temporalContextSource: temporalSignal.source || null,
+    temporalContextSamples: Number.isFinite(temporalSamples) ? Math.round(temporalSamples) : null,
+    temporalContextWinRate: Number.isFinite(temporalWinRate) ? round2(temporalWinRate) : null,
+  };
+  const opportunityScoreSummaryLine = `Win ${opportunityWinProb}% | EV $${opportunityExpectedValue} | ${opportunityCalibrationBand} calibration`;
+
+  return {
+    opportunityWinProb,
+    opportunityExpectedValue,
+    opportunityCalibrationBand,
+    opportunityFeatureVector,
+    opportunityCompositeScore,
+    opportunityScoreSummaryLine,
+  };
+}
+
+function buildOpportunityScoringLayer({ strategyStack = [], context = {}, recommendation = null } = {}) {
+  const baseRows = (Array.isArray(strategyStack) ? strategyStack : []).map((entry) => {
+    const heuristic = computeRecommendationPriority(entry, context);
+    const opportunity = buildOpportunityScore(entry, context);
+    return {
+      key: String(entry?.key || '').trim() || null,
+      name: String(entry?.name || '').trim() || null,
+      layer: String(entry?.layer || '').trim().toLowerCase() || null,
+      heuristicCompositeScore: round2(Number(heuristic?.composite || entry?.suitability || entry?.score || 0)),
+      heuristicComponents: heuristic?.components || null,
+      ...opportunity,
+    };
+  });
+
+  const heuristicSorted = [...baseRows].sort(
+    (a, b) => Number(b.heuristicCompositeScore || 0) - Number(a.heuristicCompositeScore || 0)
+  );
+  const opportunitySorted = [...baseRows].sort(
+    (a, b) => Number(b.opportunityCompositeScore || 0) - Number(a.opportunityCompositeScore || 0)
+  );
+  const heuristicRankMap = new Map();
+  const opportunityRankMap = new Map();
+  heuristicSorted.forEach((row, index) => {
+    heuristicRankMap.set(String(row.key || ''), index + 1);
+  });
+  opportunitySorted.forEach((row, index) => {
+    opportunityRankMap.set(String(row.key || ''), index + 1);
+  });
+
+  const comparisonRows = baseRows.map((row) => {
+    const heuristicRank = Number(heuristicRankMap.get(String(row.key || '')) || null);
+    const opportunityRank = Number(opportunityRankMap.get(String(row.key || '')) || null);
+    const rankDelta = Number.isFinite(heuristicRank) && Number.isFinite(opportunityRank)
+      ? heuristicRank - opportunityRank
+      : null;
+    return {
+      ...row,
+      heuristicRank,
+      opportunityRank,
+      rankDelta,
+      heuristicVsOpportunityAgreement: heuristicRank === opportunityRank ? 'agree' : 'disagree',
+      heuristicVsOpportunityComparison: {
+        heuristicScore: row.heuristicCompositeScore,
+        opportunityScore: row.opportunityCompositeScore,
+        agreement: heuristicRank === opportunityRank,
+        status: heuristicRank === opportunityRank ? 'agree' : 'disagree',
+      },
+    };
+  });
+
+  const recommendedByHeuristic = heuristicSorted[0] || null;
+  const recommendedByOpportunity = opportunitySorted[0] || null;
+  const recommendationKey = String(recommendation?.strategyKey || '').trim();
+  const heuristicAgreement = String(recommendedByHeuristic?.key || '') === String(recommendedByOpportunity?.key || '');
+  const matchesLiveRecommendation = recommendationKey
+    ? recommendationKey === String(recommendedByOpportunity?.key || '')
+    : null;
+  const summaryLine = recommendedByOpportunity
+    ? `Opportunity shadow scorer: ${recommendedByOpportunity.name || recommendedByOpportunity.key} at ${round2(recommendedByOpportunity.opportunityWinProb)}% win, EV $${round2(recommendedByOpportunity.opportunityExpectedValue)} (${heuristicAgreement ? 'agrees' : 'disagrees'} with heuristic).`
+    : 'Opportunity shadow scorer unavailable.';
+
+  return {
+    recommendedByHeuristicKey: recommendedByHeuristic?.key || null,
+    recommendedByOpportunityKey: recommendedByOpportunity?.key || null,
+    recommendedByOpportunityName: recommendedByOpportunity?.name || null,
+    heuristicVsOpportunityAgreement: heuristicAgreement,
+    matchesLiveRecommendation,
+    heuristicVsOpportunityComparison: {
+      heuristicTopKey: recommendedByHeuristic?.key || null,
+      opportunityTopKey: recommendedByOpportunity?.key || null,
+      agreement: heuristicAgreement,
+      status: heuristicAgreement ? 'agree' : 'disagree',
+      matchesLiveRecommendation,
+      summaryLine: heuristicAgreement
+        ? `Heuristic and opportunity scorer align on ${recommendedByOpportunity?.name || recommendedByOpportunity?.key || 'current top strategy'}.`
+        : `Heuristic favors ${recommendedByHeuristic?.name || recommendedByHeuristic?.key || 'unknown'} while opportunity scorer favors ${recommendedByOpportunity?.name || recommendedByOpportunity?.key || 'unknown'}.`,
+    },
+    comparisonRows: comparisonRows.sort(
+      (a, b) => Number(a.opportunityRank || 999) - Number(b.opportunityRank || 999)
+    ),
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
 function chooseRecommendedStrategy({ original, bestVariant, bestDiscovery, context = {} }) {
   const candidates = [original, bestVariant, bestDiscovery].filter(Boolean).map((entry) => ({
     ...entry,
@@ -628,7 +856,7 @@ function buildStrategyLayerSnapshot(sessions = {}, options = {}) {
     context,
   });
 
-  const strategyStack = [
+  const baseStrategyStack = [
     {
       key: original.key,
       layer: 'original',
@@ -666,6 +894,37 @@ function buildStrategyLayerSnapshot(sessions = {}, options = {}) {
       pineScript: buildPineScriptForStrategy(bestDiscovery),
     } : null,
   ].filter(Boolean);
+  const opportunityScoring = buildOpportunityScoringLayer({
+    strategyStack: baseStrategyStack,
+    context,
+    recommendation,
+  });
+  const opportunityScoreByKey = new Map(
+    (Array.isArray(opportunityScoring?.comparisonRows) ? opportunityScoring.comparisonRows : [])
+      .map((row) => [String(row?.key || ''), row])
+  );
+  const strategyStack = baseStrategyStack.map((entry) => {
+    const opportunityRow = opportunityScoreByKey.get(String(entry?.key || ''));
+    return {
+      ...entry,
+      opportunityWinProb: Number.isFinite(Number(opportunityRow?.opportunityWinProb))
+        ? round2(Number(opportunityRow.opportunityWinProb))
+        : null,
+      opportunityExpectedValue: Number.isFinite(Number(opportunityRow?.opportunityExpectedValue))
+        ? round2(Number(opportunityRow.opportunityExpectedValue))
+        : null,
+      opportunityCalibrationBand: String(opportunityRow?.opportunityCalibrationBand || '').trim().toLowerCase() || null,
+      opportunityFeatureVector: opportunityRow?.opportunityFeatureVector || null,
+      opportunityScoreSummaryLine: String(opportunityRow?.opportunityScoreSummaryLine || '').trim() || null,
+      opportunityCompositeScore: Number.isFinite(Number(opportunityRow?.opportunityCompositeScore))
+        ? round2(Number(opportunityRow.opportunityCompositeScore))
+        : null,
+      heuristicCompositeScore: Number.isFinite(Number(opportunityRow?.heuristicCompositeScore))
+        ? round2(Number(opportunityRow.heuristicCompositeScore))
+        : null,
+      heuristicVsOpportunityComparison: opportunityRow?.heuristicVsOpportunityComparison || null,
+    };
+  });
 
   const originalPlan = strategyStack.find((s) => s.layer === 'original') || null;
   const bestVariantEntry = strategyStack.find((s) => s.layer === 'variant') || null;
@@ -779,6 +1038,9 @@ function buildStrategyLayerSnapshot(sessions = {}, options = {}) {
     },
     recommendation,
     strategyStack,
+    opportunityScoring,
+    opportunityScoreSummaryLine: opportunityScoring?.summaryLine || null,
+    heuristicVsOpportunityComparison: opportunityScoring?.heuristicVsOpportunityComparison || null,
     researchInsights,
   };
 }
@@ -1643,6 +1905,18 @@ function buildCommandCenterPanels(input = {}) {
   const recommendation = strategyLayers.recommendation || null;
   const recommendationBasis = strategyLayers.recommendationBasis || {};
   const stack = Array.isArray(strategyLayers.strategyStack) ? strategyLayers.strategyStack : [];
+  const opportunityScoring = strategyLayers?.opportunityScoring && typeof strategyLayers.opportunityScoring === 'object'
+    ? strategyLayers.opportunityScoring
+    : null;
+  const opportunityScoreSummaryLine = String(
+    strategyLayers?.opportunityScoreSummaryLine
+    || opportunityScoring?.summaryLine
+    || ''
+  ).trim() || null;
+  const heuristicVsOpportunityComparison = strategyLayers?.heuristicVsOpportunityComparison
+    && typeof strategyLayers.heuristicVsOpportunityComparison === 'object'
+    ? strategyLayers.heuristicVsOpportunityComparison
+    : (opportunityScoring?.heuristicVsOpportunityComparison || null);
   const originalPlan = strategyLayers.originalPlan || stack.find((s) => s.layer === 'original') || null;
   const bestVariant = strategyLayers.bestVariant || stack.find((s) => s.layer === 'variant') || null;
   const bestAlternative = strategyLayers.bestAlternative || stack.find((s) => s.layer === 'discovery') || null;
@@ -1955,6 +2229,11 @@ function buildCommandCenterPanels(input = {}) {
   todayRecommendation.executionStanceReason = executionStanceCard.reason;
   todayRecommendation.executionAdjustment = executionStanceCard.executionAdjustment;
   todayRecommendation.executionStanceLine = executionStanceCard.summaryLine;
+  todayRecommendation.opportunityScoring = opportunityScoring ? cloneData(opportunityScoring, opportunityScoring) : null;
+  todayRecommendation.opportunityScoreSummaryLine = opportunityScoreSummaryLine;
+  todayRecommendation.heuristicVsOpportunityComparison = heuristicVsOpportunityComparison
+    ? cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison)
+    : null;
   const decisionBoard = buildDecisionBoard({
     originalPlan,
     bestAlternative,
@@ -1980,6 +2259,11 @@ function buildCommandCenterPanels(input = {}) {
   decisionBoard.executionStanceReason = executionStanceCard.reason;
   decisionBoard.executionAdjustment = executionStanceCard.executionAdjustment;
   decisionBoard.executionStanceLine = executionStanceCard.summaryLine;
+  decisionBoard.opportunityScoring = opportunityScoring ? cloneData(opportunityScoring, opportunityScoring) : null;
+  decisionBoard.opportunityScoreSummaryLine = opportunityScoreSummaryLine;
+  decisionBoard.heuristicVsOpportunityComparison = heuristicVsOpportunityComparison
+    ? cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison)
+    : null;
 
   return {
     layout: {
@@ -2012,6 +2296,11 @@ function buildCommandCenterPanels(input = {}) {
     executionStanceReason: executionStanceCard.reason,
     executionAdjustment: executionStanceCard.executionAdjustment,
     executionStanceLine: executionStanceCard.summaryLine,
+    opportunityScoring: opportunityScoring ? cloneData(opportunityScoring, opportunityScoring) : null,
+    opportunityScoreSummaryLine,
+    heuristicVsOpportunityComparison: heuristicVsOpportunityComparison
+      ? cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison)
+      : null,
     assistantDecisionBrief,
     assistantDecisionBriefText: assistantDecisionBrief.assistantText,
     recentAggressiveMissSentinel,
