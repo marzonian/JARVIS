@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+/* eslint-disable no-console */
+const {
+  assert,
+  startAuditServer,
+} = require('./jarvis-audit-common');
+
+const TIMEOUT_MS = 180000;
+
+async function getJson(baseUrl, endpoint, timeoutMs = TIMEOUT_MS) {
+  const resp = await fetch(`${baseUrl}${endpoint}`, {
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(`${endpoint} http_${resp.status}: ${JSON.stringify(json)}`);
+  }
+  return json;
+}
+
+async function getRaw(baseUrl, endpoint, timeoutMs = TIMEOUT_MS) {
+  const resp = await fetch(`${baseUrl}${endpoint}`, {
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const text = await resp.text();
+  let json = {};
+  try {
+    json = JSON.parse(text || '{}');
+  } catch {
+    json = { raw: text };
+  }
+  return {
+    status: resp.status,
+    ok: resp.ok,
+    json,
+  };
+}
+
+function assertStrategySnapshotShape(label, snapshot) {
+  assert(snapshot && typeof snapshot === 'object', `${label} strategyLayerSnapshot missing`, { snapshot });
+  assert(snapshot.originalPlan && typeof snapshot.originalPlan === 'object', `${label} originalPlan missing`, { snapshot });
+  assert(snapshot.bestVariant && typeof snapshot.bestVariant === 'object', `${label} bestVariant missing`, { snapshot });
+  assert(snapshot.bestAlternative && typeof snapshot.bestAlternative === 'object', `${label} bestAlternative missing`, { snapshot });
+  assert(snapshot.recommendationBasis && typeof snapshot.recommendationBasis === 'object', `${label} recommendationBasis missing`, { snapshot });
+  assert(snapshot.assistantDecisionBrief && typeof snapshot.assistantDecisionBrief === 'object', `${label} assistantDecisionBrief missing`, { snapshot });
+  assert(typeof snapshot.executionStance === 'string' && snapshot.executionStance.length > 0, `${label} executionStance missing`, { snapshot });
+  assert(Array.isArray(snapshot.strategyStack), `${label} strategyStack missing`, { snapshot });
+  assert(snapshot.strategyStack.length >= 1, `${label} strategyStack empty`, { snapshot });
+  assert(snapshot.todayRecommendationMirror && typeof snapshot.todayRecommendationMirror === 'object', `${label} todayRecommendationMirror missing`, { snapshot });
+  assert(snapshot.decisionBoardMirror && typeof snapshot.decisionBoardMirror === 'object', `${label} decisionBoardMirror missing`, { snapshot });
+
+  for (const row of snapshot.strategyStack) {
+    assert(typeof row.available === 'boolean', `${label} strategy stack row missing available flag`, { row });
+    assert(row.pineAccess && typeof row.pineAccess === 'object', `${label} strategy stack row pineAccess missing`, { row });
+    assert(typeof row.pineAccess.endpoint === 'string' && row.pineAccess.endpoint.startsWith('/api/jarvis/strategy/pine?'), `${label} pineAccess endpoint missing`, { row });
+    assert(String(row.pineAccess.format || '').toLowerCase() === 'pine_v6', `${label} pineAccess format must be pine_v6`, { row });
+  }
+}
+
+(async () => {
+  let failures = 0;
+  const fail = (name, err) => {
+    failures += 1;
+    console.error(`❌ ${name}\n   ${err.message}`);
+  };
+  const pass = (name) => {
+    console.log(`✅ ${name}`);
+  };
+
+  const useExisting = !!process.env.BASE_URL;
+  const server = await startAuditServer({
+    useExisting,
+    baseUrl: process.env.BASE_URL,
+    port: process.env.JARVIS_AUDIT_PORT || 3186,
+    env: {
+      DATABENTO_API_ENABLED: 'false',
+      DATABENTO_API_KEY: '',
+      TOPSTEP_API_ENABLED: 'false',
+      TOPSTEP_API_KEY: '',
+      NEWS_ENABLED: 'false',
+      DISCORD_BOT_TOKEN: '',
+    },
+  });
+
+  try {
+    const center = await getJson(server.baseUrl, '/api/jarvis/command-center?force=1&discovery=1');
+    assert(center?.status === 'ok', 'command-center status should be ok', { center });
+    assertStrategySnapshotShape('command-center root', center.strategyLayerSnapshot);
+    assert(center.originalPlan && typeof center.originalPlan === 'object', 'command-center originalPlan root field missing', { center });
+    assert(center.bestVariant && typeof center.bestVariant === 'object', 'command-center bestVariant root field missing', { center });
+    assert(center.bestAlternative && typeof center.bestAlternative === 'object', 'command-center bestAlternative root field missing', { center });
+    assert(center.recommendationBasis && typeof center.recommendationBasis === 'object', 'command-center recommendationBasis root field missing', { center });
+    assert(center.assistantDecisionBrief && typeof center.assistantDecisionBrief === 'object', 'command-center assistantDecisionBrief root field missing', { center });
+    assert(typeof center.executionStance === 'string' && center.executionStance.length > 0, 'command-center executionStance root field missing', { center });
+    assert(Array.isArray(center.strategyStack), 'command-center strategyStack root field missing', { center });
+    assert(center.todayRecommendation && typeof center.todayRecommendation === 'object', 'command-center todayRecommendation root mirror missing', { center });
+    assert(center.decisionBoard && typeof center.decisionBoard === 'object', 'command-center decisionBoard root mirror missing', { center });
+
+    assert(center.commandCenter && typeof center.commandCenter === 'object', 'commandCenter payload missing', { center });
+    assert(center.commandCenter.strategyLayerSnapshot && typeof center.commandCenter.strategyLayerSnapshot === 'object', 'commandCenter.strategyLayerSnapshot missing', { center });
+    assert(center.commandCenter.todayRecommendation && typeof center.commandCenter.todayRecommendation === 'object', 'commandCenter.todayRecommendation missing', { center });
+    assert(center.commandCenter.decisionBoard && typeof center.commandCenter.decisionBoard === 'object', 'commandCenter.decisionBoard missing', { center });
+    assert(center.commandCenter.todayRecommendation.originalPlan && typeof center.commandCenter.todayRecommendation.originalPlan === 'object', 'todayRecommendation originalPlan mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.bestVariant && typeof center.commandCenter.todayRecommendation.bestVariant === 'object', 'todayRecommendation bestVariant mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.bestAlternative && typeof center.commandCenter.todayRecommendation.bestAlternative === 'object', 'todayRecommendation bestAlternative mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.originalPlan && typeof center.commandCenter.decisionBoard.originalPlan === 'object', 'decisionBoard originalPlan mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.bestVariant && typeof center.commandCenter.decisionBoard.bestVariant === 'object', 'decisionBoard bestVariant mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.bestAlternative && typeof center.commandCenter.decisionBoard.bestAlternative === 'object', 'decisionBoard bestAlternative mirror missing', { center });
+    pass('command-center strategy-layer snapshot and mirrors');
+
+    const perf = await getJson(server.baseUrl, '/api/jarvis/recommendation/performance?force=1');
+    assert(perf?.status === 'ok', 'recommendation/performance status should be ok', { perf });
+    assertStrategySnapshotShape('recommendation/performance root', perf.strategyLayerSnapshot);
+    assert(perf.recommendationPerformance && typeof perf.recommendationPerformance === 'object', 'recommendationPerformance object missing', { perf });
+    assert(perf.recommendationPerformance.strategyLayerSnapshot && typeof perf.recommendationPerformance.strategyLayerSnapshot === 'object', 'recommendationPerformance.strategyLayerSnapshot missing', { perf });
+    assert(perf.recommendationPerformance.originalPlan && typeof perf.recommendationPerformance.originalPlan === 'object', 'recommendationPerformance.originalPlan missing', { perf });
+    assert(perf.recommendationPerformance.bestVariant && typeof perf.recommendationPerformance.bestVariant === 'object', 'recommendationPerformance.bestVariant missing', { perf });
+    assert(perf.recommendationPerformance.bestAlternative && typeof perf.recommendationPerformance.bestAlternative === 'object', 'recommendationPerformance.bestAlternative missing', { perf });
+    assert(perf.recommendationPerformance.recommendationBasis && typeof perf.recommendationPerformance.recommendationBasis === 'object', 'recommendationPerformance.recommendationBasis missing', { perf });
+    assert(perf.recommendationPerformance.assistantDecisionBrief && typeof perf.recommendationPerformance.assistantDecisionBrief === 'object', 'recommendationPerformance.assistantDecisionBrief missing', { perf });
+    assert(typeof perf.recommendationPerformance.executionStance === 'string' && perf.recommendationPerformance.executionStance.length > 0, 'recommendationPerformance.executionStance missing', { perf });
+    assert(Array.isArray(perf.recommendationPerformance.strategyStack), 'recommendationPerformance.strategyStack missing', { perf });
+    pass('recommendation/performance strategy-layer snapshot contract');
+
+    const stackRows = Array.isArray(center.strategyLayerSnapshot?.strategyStack)
+      ? center.strategyLayerSnapshot.strategyStack.filter((row) => row?.pineAccess?.available === true && row?.key)
+      : [];
+    assert(stackRows.length >= 1, 'expected at least one pine-exportable strategy row', { center });
+
+    for (const row of stackRows.slice(0, 3)) {
+      const pine = await getJson(server.baseUrl, row.pineAccess.endpoint);
+      assert(pine?.status === 'ok', 'pine endpoint should return ok', { row, pine });
+      assert(String(pine?.strategy?.key || '') === String(row.key), 'pine endpoint returned wrong strategy key', { row, pine });
+      assert(String(pine?.strategy?.layer || '').toLowerCase() === String(row.layer || '').toLowerCase(), 'pine endpoint returned wrong layer', { row, pine });
+      assert(String(pine?.format || '').toLowerCase() === 'pine_v6', 'pine endpoint format should be pine_v6', { row, pine });
+      assert(pine?.copyReady === true, 'pine endpoint should mark copyReady', { row, pine });
+      assert(typeof pine?.pineScript === 'string' && pine.pineScript.includes('//@version=6'), 'pine endpoint should return pine v6 text', { row, pine });
+    }
+
+    const invalid = await getRaw(server.baseUrl, '/api/jarvis/strategy/pine?key=missing_strategy_key_for_test');
+    assert(invalid.status === 404, 'pine endpoint should 404 unknown strategy key', { invalid });
+    pass('strategy/pine endpoint behavior and contract compliance');
+  } catch (err) {
+    fail('strategy layer surfacing integration', err);
+  } finally {
+    await server.stop();
+  }
+
+  if (failures > 0) {
+    console.error(`\nJarvis strategy-layer surfacing test failed with ${failures} failure(s).`);
+    process.exit(1);
+  }
+
+  console.log('\nJarvis strategy-layer surfacing test passed.');
+})();

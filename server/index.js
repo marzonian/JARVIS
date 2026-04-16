@@ -34507,6 +34507,344 @@ app.get('/api/jarvis/strategy/learning/regime', async (req, res) => {
   }
 });
 
+function asText(value) {
+  return String(value == null ? '' : value).trim();
+}
+
+function asNullableText(value) {
+  const txt = asText(value);
+  return txt || null;
+}
+
+function asLowerText(value) {
+  return asText(value).toLowerCase();
+}
+
+function asFiniteOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function cloneData(value, fallback) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return fallback;
+  }
+}
+
+function buildStrategyPineAccessContract(input = {}) {
+  const key = asText(input?.key);
+  const layer = asLowerText(input?.layer);
+  const pineScript = asText(input?.pineScript);
+  return {
+    available: pineScript.length > 0,
+    endpoint: `/api/jarvis/strategy/pine?key=${encodeURIComponent(key)}&layer=${encodeURIComponent(layer)}`,
+    copyReady: pineScript.length > 0,
+    format: 'pine_v6',
+  };
+}
+
+function normalizeStrategyLayerEntry(entry = null, defaults = {}) {
+  const source = entry && typeof entry === 'object' ? entry : {};
+  const layer = asLowerText(source.layer || defaults.layer || '');
+  const key = asNullableText(source.key || defaults.key || '');
+  const name = asNullableText(source.name || defaults.name || '');
+  const pineScript = asText(source.pineScript);
+  const score = asFiniteOrNull(source.score);
+  const suitability = asFiniteOrNull(
+    source.currentSuitability != null ? source.currentSuitability : source.suitability
+  );
+  const recommendationStatus = asNullableText(source.recommendationStatus || defaults.recommendationStatus || '');
+  const tier = asNullableText(source.tier || defaults.tier || '');
+  const available = Boolean(key || name);
+  const winRate = asFiniteOrNull(
+    source?.metrics?.winRate != null ? source.metrics.winRate : source.winRate
+  );
+  const profitFactor = asFiniteOrNull(
+    source?.metrics?.profitFactor != null ? source.metrics.profitFactor : source.profitFactor
+  );
+  const maxDrawdownDollars = asFiniteOrNull(
+    source?.drawdown?.maxDrawdownDollars != null
+      ? source.drawdown.maxDrawdownDollars
+      : source.maxDrawdownDollars
+  );
+  const totalTrades = asFiniteOrNull(
+    source?.metrics?.totalTrades != null
+      ? source.metrics.totalTrades
+      : source.totalTrades
+  );
+  const pineAccess = (
+    source?.pineAccess && typeof source.pineAccess === 'object'
+      ? {
+        available: source.pineAccess.available === true || pineScript.length > 0,
+        endpoint: asText(source.pineAccess.endpoint)
+          || `/api/jarvis/strategy/pine?key=${encodeURIComponent(key || '')}&layer=${encodeURIComponent(layer || '')}`,
+        copyReady: source.pineAccess.copyReady === true || pineScript.length > 0,
+        format: asText(source.pineAccess.format) || 'pine_v6',
+      }
+      : buildStrategyPineAccessContract({ key, layer, pineScript })
+  );
+  return {
+    key,
+    layer: layer || null,
+    tier,
+    name: name || null,
+    available,
+    score: Number.isFinite(score) ? round2(score) : null,
+    suitability: Number.isFinite(suitability) ? round2(suitability) : null,
+    metrics: {
+      winRate: Number.isFinite(winRate) ? round2(winRate) : null,
+      profitFactor: Number.isFinite(profitFactor) ? round2(profitFactor) : null,
+      totalTrades: Number.isFinite(totalTrades) ? Math.round(totalTrades) : null,
+    },
+    drawdown: {
+      maxDrawdownDollars: Number.isFinite(maxDrawdownDollars) ? round2(maxDrawdownDollars) : null,
+    },
+    recommendationStatus,
+    pineAccess,
+    pineScript: pineScript || null,
+    advisoryOnly: true,
+  };
+}
+
+function buildStrategyLayerSnapshotContract(payload = {}) {
+  const strategyLayers = payload?.strategyLayers && typeof payload.strategyLayers === 'object'
+    ? payload.strategyLayers
+    : {};
+  const commandCenter = payload?.commandCenter && typeof payload.commandCenter === 'object'
+    ? payload.commandCenter
+    : {};
+  const todayRecommendation = commandCenter?.todayRecommendation && typeof commandCenter.todayRecommendation === 'object'
+    ? commandCenter.todayRecommendation
+    : {};
+  const decisionBoard = commandCenter?.decisionBoard && typeof commandCenter.decisionBoard === 'object'
+    ? commandCenter.decisionBoard
+    : {};
+
+  const stackSource = Array.isArray(commandCenter?.strategyStack)
+    ? commandCenter.strategyStack
+    : (Array.isArray(strategyLayers?.strategyStack) ? strategyLayers.strategyStack : []);
+  const normalizedStack = stackSource.map((row) => normalizeStrategyLayerEntry(row)).filter((row) => row.available);
+  const originalFromStack = normalizedStack.find((row) => row.layer === 'original' || row.tier === 'original_plan') || null;
+  const variantFromStack = normalizedStack.find((row) => row.layer === 'variant' || row.tier === 'best_variant') || null;
+  const alternativeFromStack = normalizedStack.find((row) => row.layer === 'discovery' || row.tier === 'best_alternative') || null;
+
+  const originalPlan = originalFromStack || normalizeStrategyLayerEntry(strategyLayers?.originalPlan, {
+    layer: 'original',
+    tier: 'original_plan',
+    key: 'original_plan_orb_3130',
+    name: 'Original Trading Plan',
+    recommendationStatus: 'baseline_reference',
+  });
+  const bestVariant = variantFromStack || normalizeStrategyLayerEntry(strategyLayers?.bestVariant, {
+    layer: 'variant',
+    tier: 'best_variant',
+    name: 'Best Variant',
+    recommendationStatus: 'overlay_candidate',
+  });
+  const bestAlternative = alternativeFromStack || normalizeStrategyLayerEntry(strategyLayers?.bestAlternative, {
+    layer: 'discovery',
+    tier: 'best_alternative',
+    name: 'Best Alternative',
+    recommendationStatus: 'alternative_candidate',
+  });
+  const primaryStack = [originalPlan, bestVariant, bestAlternative];
+  const seenStrategyRows = new Set();
+  const strategyStack = [];
+  for (const row of [...primaryStack, ...normalizedStack]) {
+    const key = `${String(row?.layer || '').toLowerCase()}::${String(row?.key || '')}`;
+    if (seenStrategyRows.has(key)) continue;
+    seenStrategyRows.add(key);
+    strategyStack.push(row);
+  }
+
+  const basisSource = (
+    commandCenter?.recommendationBasis && typeof commandCenter.recommendationBasis === 'object'
+      ? commandCenter.recommendationBasis
+      : (strategyLayers?.recommendationBasis && typeof strategyLayers.recommendationBasis === 'object'
+        ? strategyLayers.recommendationBasis
+        : {})
+  );
+  const basisType = asLowerText(basisSource.basisType || basisSource.recommendationBasis || '')
+    || 'baseline';
+  const recommendationBasis = {
+    basisType,
+    basisLabel: asNullableText(
+      basisSource.basisLabel
+      || (basisType === 'overlay'
+        ? 'Best Variant Overlay'
+        : basisType === 'alternative'
+          ? 'Best Alternative Strategy'
+          : 'Original Trading Plan')
+    ),
+    recommendedStrategyKey: asNullableText(
+      basisSource.recommendedStrategyKey
+      || strategyLayers?.recommendation?.strategyKey
+      || originalPlan.key
+    ),
+    recommendedStrategyName: asNullableText(
+      basisSource.recommendedStrategyName
+      || strategyLayers?.recommendation?.name
+      || originalPlan.name
+      || 'Original Trading Plan'
+    ),
+    recommendationScore: Number.isFinite(asFiniteOrNull(basisSource.recommendationScore))
+      ? round2(asFiniteOrNull(basisSource.recommendationScore))
+      : null,
+    recommendationAdjustedForNews: basisSource.recommendationAdjustedForNews === true,
+    advisoryOnly: true,
+  };
+
+  const briefSource = (
+    commandCenter?.assistantDecisionBrief && typeof commandCenter.assistantDecisionBrief === 'object'
+      ? commandCenter.assistantDecisionBrief
+      : (todayRecommendation?.assistantDecisionBrief && typeof todayRecommendation.assistantDecisionBrief === 'object'
+        ? todayRecommendation.assistantDecisionBrief
+        : {})
+  );
+  const assistantDecisionBrief = {
+    actionNow: asNullableText(briefSource.actionNow || commandCenter.topAction || todayRecommendation.topAction || ''),
+    why: asNullableText(briefSource.why || todayRecommendation.postureReason || decisionBoard.confidenceReason || ''),
+    assistantText: asNullableText(
+      briefSource.assistantText
+      || commandCenter.assistantDecisionBriefText
+      || todayRecommendation.assistantDecisionBriefText
+      || commandCenter.summaryLine
+      || ''
+    ),
+    assistantLines: Array.isArray(briefSource.assistantLines)
+      ? briefSource.assistantLines.map((line) => asText(line)).filter(Boolean)
+      : [],
+    advisoryOnly: true,
+  };
+
+  const stanceCardSource = (
+    commandCenter?.executionStanceCard && typeof commandCenter.executionStanceCard === 'object'
+      ? commandCenter.executionStanceCard
+      : (todayRecommendation?.executionStanceCard && typeof todayRecommendation.executionStanceCard === 'object'
+        ? todayRecommendation.executionStanceCard
+        : (decisionBoard?.executionStanceCard && typeof decisionBoard.executionStanceCard === 'object'
+          ? decisionBoard.executionStanceCard
+          : {}))
+  );
+  const stanceLabel = asText(
+    stanceCardSource.stance
+    || commandCenter.executionStance
+    || todayRecommendation.executionStance
+    || decisionBoard.executionStance
+    || 'Skip'
+  ) || 'Skip';
+  const executionStance = {
+    stance: stanceLabel,
+    reason: asNullableText(
+      stanceCardSource.reason
+      || commandCenter.executionStanceReason
+      || todayRecommendation.executionStanceReason
+      || decisionBoard.executionStanceReason
+      || ''
+    ),
+    strengthFactors: Array.isArray(stanceCardSource.strengthFactors)
+      ? stanceCardSource.strengthFactors.map((line) => asText(line)).filter(Boolean)
+      : [],
+    weaknessFactors: Array.isArray(stanceCardSource.weaknessFactors)
+      ? stanceCardSource.weaknessFactors.map((line) => asText(line)).filter(Boolean)
+      : [],
+    executionAdjustment: asNullableText(
+      stanceCardSource.executionAdjustment
+      || commandCenter.executionAdjustment
+      || todayRecommendation.executionAdjustment
+      || decisionBoard.executionAdjustment
+      || ''
+    ),
+    confidenceMaturityNote: asNullableText(stanceCardSource.confidenceMaturityNote || ''),
+    validButConfidenceImmature: stanceCardSource.validButConfidenceImmature === true,
+    setupValid: stanceCardSource.setupValid === true,
+    summaryLine: asNullableText(
+      stanceCardSource.summaryLine
+      || commandCenter.executionStanceLine
+      || todayRecommendation.executionStanceLine
+      || decisionBoard.executionStanceLine
+      || ''
+    ),
+    advisoryOnly: true,
+  };
+
+  const recommendationBasisCopy = cloneData(recommendationBasis, recommendationBasis);
+  const assistantDecisionBriefCopy = cloneData(assistantDecisionBrief, assistantDecisionBrief);
+  const executionStanceCopy = cloneData(executionStance, executionStance);
+  const stackCopy = cloneData(strategyStack, strategyStack);
+  const originalPlanCopy = cloneData(originalPlan, originalPlan);
+  const bestVariantCopy = cloneData(bestVariant, bestVariant);
+  const bestAlternativeCopy = cloneData(bestAlternative, bestAlternative);
+
+  return {
+    snapshotVersion: 'v1',
+    generatedAt: asNullableText(payload?.generatedAt) || new Date().toISOString(),
+    originalPlan: originalPlanCopy,
+    bestVariant: bestVariantCopy,
+    bestAlternative: bestAlternativeCopy,
+    recommendationBasis: recommendationBasisCopy,
+    assistantDecisionBrief: assistantDecisionBriefCopy,
+    assistantDecisionBriefText: assistantDecisionBriefCopy.assistantText || null,
+    executionStance: executionStanceCopy.stance,
+    executionStanceCard: executionStanceCopy,
+    strategyStack: stackCopy,
+    todayRecommendationMirror: {
+      originalPlan: cloneData(originalPlanCopy, originalPlanCopy),
+      bestVariant: cloneData(bestVariantCopy, bestVariantCopy),
+      bestAlternative: cloneData(bestAlternativeCopy, bestAlternativeCopy),
+      recommendationBasis: cloneData(recommendationBasisCopy, recommendationBasisCopy),
+      assistantDecisionBrief: cloneData(assistantDecisionBriefCopy, assistantDecisionBriefCopy),
+      assistantDecisionBriefText: assistantDecisionBriefCopy.assistantText || null,
+      executionStance: executionStanceCopy.stance,
+      executionStanceCard: cloneData(executionStanceCopy, executionStanceCopy),
+      strategyStack: cloneData(stackCopy, stackCopy),
+      advisoryOnly: true,
+    },
+    decisionBoardMirror: {
+      originalPlan: cloneData(originalPlanCopy, originalPlanCopy),
+      bestVariant: cloneData(bestVariantCopy, bestVariantCopy),
+      bestAlternative: cloneData(bestAlternativeCopy, bestAlternativeCopy),
+      recommendationBasis: cloneData(recommendationBasisCopy, recommendationBasisCopy),
+      assistantDecisionBrief: cloneData(assistantDecisionBriefCopy, assistantDecisionBriefCopy),
+      assistantDecisionBriefText: assistantDecisionBriefCopy.assistantText || null,
+      executionStance: executionStanceCopy.stance,
+      executionStanceCard: cloneData(executionStanceCopy, executionStanceCopy),
+      strategyStack: cloneData(stackCopy, stackCopy),
+      advisoryOnly: true,
+    },
+    summaryLine: `Strategy snapshot: ${recommendationBasis.recommendedStrategyName || 'Original Trading Plan'} (${recommendationBasis.basisLabel || basisType}) | stance ${executionStanceCopy.stance}.`,
+    advisoryOnly: true,
+  };
+}
+
+function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnapshot = null) {
+  if (!commandCenter || typeof commandCenter !== 'object' || !strategyLayerSnapshot || typeof strategyLayerSnapshot !== 'object') {
+    return commandCenter;
+  }
+  commandCenter.strategyLayerSnapshot = cloneData(strategyLayerSnapshot, strategyLayerSnapshot);
+  commandCenter.originalPlan = cloneData(strategyLayerSnapshot.originalPlan, strategyLayerSnapshot.originalPlan);
+  commandCenter.bestVariant = cloneData(strategyLayerSnapshot.bestVariant, strategyLayerSnapshot.bestVariant);
+  commandCenter.bestAlternative = cloneData(strategyLayerSnapshot.bestAlternative, strategyLayerSnapshot.bestAlternative);
+  commandCenter.recommendationBasis = cloneData(strategyLayerSnapshot.recommendationBasis, strategyLayerSnapshot.recommendationBasis);
+  commandCenter.assistantDecisionBrief = cloneData(strategyLayerSnapshot.assistantDecisionBrief, strategyLayerSnapshot.assistantDecisionBrief);
+  commandCenter.assistantDecisionBriefText = strategyLayerSnapshot.assistantDecisionBriefText || commandCenter.assistantDecisionBriefText || null;
+  commandCenter.executionStance = strategyLayerSnapshot.executionStance || commandCenter.executionStance || null;
+  commandCenter.executionStanceCard = cloneData(strategyLayerSnapshot.executionStanceCard, strategyLayerSnapshot.executionStanceCard);
+  commandCenter.strategyStack = cloneData(strategyLayerSnapshot.strategyStack, strategyLayerSnapshot.strategyStack);
+
+  if (commandCenter.todayRecommendation && typeof commandCenter.todayRecommendation === 'object') {
+    Object.assign(commandCenter.todayRecommendation, cloneData(strategyLayerSnapshot.todayRecommendationMirror, strategyLayerSnapshot.todayRecommendationMirror));
+    commandCenter.todayRecommendation.strategyLayerSnapshot = cloneData(strategyLayerSnapshot, strategyLayerSnapshot);
+  }
+  if (commandCenter.decisionBoard && typeof commandCenter.decisionBoard === 'object') {
+    Object.assign(commandCenter.decisionBoard, cloneData(strategyLayerSnapshot.decisionBoardMirror, strategyLayerSnapshot.decisionBoardMirror));
+    commandCenter.decisionBoard.strategyLayerSnapshot = cloneData(strategyLayerSnapshot, strategyLayerSnapshot);
+  }
+  return commandCenter;
+}
+
 app.get('/api/jarvis/recommendation/performance', async (req, res) => {
   try {
     const forceFresh = req.query.force === '1' || req.query.force === 'true';
@@ -34530,16 +34868,18 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       ? { ...performance.summary }
       : summarizeRecommendationPerformance({ scorecards: [] });
     let liveDecisionCard = null;
+    let strategyLayerSnapshot = null;
     try {
       const liveSnapshot = await buildStrategyLayerSnapshotCached({
         forceFresh,
-        includeDiscovery: false,
+        includeDiscovery: true,
         includePerDate: false,
         nowEtOverride: `${nowEt.date} ${nowEt.time}`,
         performanceWindow: windowSessions,
         performanceSource: sourceFilter,
         performancePhase: reconstructionPhase || undefined,
       });
+      strategyLayerSnapshot = buildStrategyLayerSnapshotContract(liveSnapshot);
       if (liveSnapshot?.commandCenter?.executionStanceCard
         && typeof liveSnapshot.commandCenter.executionStanceCard === 'object') {
         liveDecisionCard = { ...liveSnapshot.commandCenter.executionStanceCard };
@@ -34555,11 +34895,44 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       recommendationPerformance.liveDecisionStance = liveDecisionCard.stance || null;
       recommendationPerformance.liveDecisionAdjustment = liveDecisionCard.executionAdjustment || null;
     }
+    if (strategyLayerSnapshot && typeof strategyLayerSnapshot === 'object') {
+      recommendationPerformance.strategyLayerSnapshot = cloneData(strategyLayerSnapshot, strategyLayerSnapshot);
+      recommendationPerformance.originalPlan = cloneData(strategyLayerSnapshot.originalPlan, strategyLayerSnapshot.originalPlan);
+      recommendationPerformance.bestVariant = cloneData(strategyLayerSnapshot.bestVariant, strategyLayerSnapshot.bestVariant);
+      recommendationPerformance.bestAlternative = cloneData(strategyLayerSnapshot.bestAlternative, strategyLayerSnapshot.bestAlternative);
+      recommendationPerformance.recommendationBasis = cloneData(strategyLayerSnapshot.recommendationBasis, strategyLayerSnapshot.recommendationBasis);
+      recommendationPerformance.assistantDecisionBrief = cloneData(strategyLayerSnapshot.assistantDecisionBrief, strategyLayerSnapshot.assistantDecisionBrief);
+      recommendationPerformance.assistantDecisionBriefText = strategyLayerSnapshot.assistantDecisionBriefText || null;
+      recommendationPerformance.executionStance = strategyLayerSnapshot.executionStance || null;
+      recommendationPerformance.executionStanceCard = cloneData(strategyLayerSnapshot.executionStanceCard, strategyLayerSnapshot.executionStanceCard);
+      recommendationPerformance.strategyStack = cloneData(strategyLayerSnapshot.strategyStack, strategyLayerSnapshot.strategyStack);
+      recommendationPerformance.todayRecommendation = cloneData(
+        strategyLayerSnapshot.todayRecommendationMirror,
+        strategyLayerSnapshot.todayRecommendationMirror
+      );
+      recommendationPerformance.decisionBoard = cloneData(
+        strategyLayerSnapshot.decisionBoardMirror,
+        strategyLayerSnapshot.decisionBoardMirror
+      );
+      recommendationPerformance.strategyLayerSnapshotLine = strategyLayerSnapshot.summaryLine || null;
+    }
     res.json({
       status: 'ok',
       recommendationPerformance,
       liveDecisionCard,
       liveDecisionCardLine,
+      strategyLayerSnapshot,
+      originalPlan: strategyLayerSnapshot?.originalPlan || null,
+      bestVariant: strategyLayerSnapshot?.bestVariant || null,
+      bestAlternative: strategyLayerSnapshot?.bestAlternative || null,
+      recommendationBasis: strategyLayerSnapshot?.recommendationBasis || null,
+      assistantDecisionBrief: strategyLayerSnapshot?.assistantDecisionBrief || null,
+      assistantDecisionBriefText: strategyLayerSnapshot?.assistantDecisionBriefText || null,
+      executionStance: strategyLayerSnapshot?.executionStance || null,
+      executionStanceCard: strategyLayerSnapshot?.executionStanceCard || null,
+      strategyStack: Array.isArray(strategyLayerSnapshot?.strategyStack) ? strategyLayerSnapshot.strategyStack : [],
+      todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
+      decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       generatedAt: performance?.generatedAt || new Date().toISOString(),
       rowCountUsed: Number(recommendationPerformance?.rowCountUsed || performance?.rowCountUsed || 0),
       provenanceSummary: recommendationPerformance?.provenanceSummary || performance?.provenanceSummary || null,
@@ -35093,10 +35466,26 @@ app.get('/api/jarvis/command-center', async (req, res) => {
         message: 'Import strategy data first.',
       });
     }
+    const strategyLayerSnapshot = buildStrategyLayerSnapshotContract(payload);
+    if (payload.commandCenter && typeof payload.commandCenter === 'object') {
+      applyStrategyLayerSnapshotMirrors(payload.commandCenter, strategyLayerSnapshot);
+    }
     res.json({
       status: 'ok',
       commandCenter: payload.commandCenter,
       strategyLayers: payload.strategyLayers,
+      strategyLayerSnapshot,
+      originalPlan: strategyLayerSnapshot?.originalPlan || null,
+      bestVariant: strategyLayerSnapshot?.bestVariant || null,
+      bestAlternative: strategyLayerSnapshot?.bestAlternative || null,
+      recommendationBasis: strategyLayerSnapshot?.recommendationBasis || null,
+      assistantDecisionBrief: strategyLayerSnapshot?.assistantDecisionBrief || null,
+      assistantDecisionBriefText: strategyLayerSnapshot?.assistantDecisionBriefText || null,
+      executionStance: strategyLayerSnapshot?.executionStance || null,
+      executionStanceCard: strategyLayerSnapshot?.executionStanceCard || null,
+      strategyStack: Array.isArray(strategyLayerSnapshot?.strategyStack) ? strategyLayerSnapshot.strategyStack : [],
+      todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
+      decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       strategyTracking: payload.strategyTracking || null,
       strategyPortfolio: payload.strategyPortfolio || null,
       strategyExperiments: payload.strategyExperiments || null,
@@ -35145,22 +35534,45 @@ app.get('/api/jarvis/strategy/pine', async (req, res) => {
   try {
     const strategyKey = String(req.query.key || '').trim();
     const layer = String(req.query.layer || '').trim().toLowerCase();
-    const includeDiscovery = layer === 'discovery' || req.query.discovery === '1' || req.query.discovery === 'true';
+    const forceFresh = req.query.force === '1' || req.query.force === 'true';
     const payload = await buildStrategyLayerSnapshotCached({
-      forceFresh: false,
-      includeDiscovery,
+      forceFresh,
+      includeDiscovery: true,
       includePerDate: false,
     });
     if (!payload) {
       return res.status(404).json({ status: 'no_data', error: 'strategy_data_unavailable' });
     }
-    const stack = Array.isArray(payload?.strategyLayers?.strategyStack)
-      ? payload.strategyLayers.strategyStack
+    const strategyLayerSnapshot = buildStrategyLayerSnapshotContract(payload);
+    const stack = Array.isArray(strategyLayerSnapshot?.strategyStack)
+      ? strategyLayerSnapshot.strategyStack
       : [];
-    const selected = stack.find((s) =>
-      (strategyKey && String(s.key || '').trim() === strategyKey)
-      || (layer && String(s.layer || '').trim().toLowerCase() === layer)
-    ) || stack[0];
+    const selectedByKey = strategyKey
+      ? stack.find((s) => String(s?.key || '').trim() === strategyKey)
+      : null;
+    const selectedByLayer = !selectedByKey && layer
+      ? stack.find((s) => String(s?.layer || '').trim().toLowerCase() === layer)
+      : null;
+    const selectedByRecommendation = !selectedByKey && !selectedByLayer
+      ? stack.find((s) => String(s?.key || '').trim() === String(strategyLayerSnapshot?.recommendationBasis?.recommendedStrategyKey || '').trim())
+      : null;
+    const selected = selectedByKey || selectedByLayer || selectedByRecommendation || stack[0] || null;
+    if (strategyKey && !selectedByKey) {
+      return res.status(404).json({
+        status: 'not_found',
+        error: 'strategy_not_found',
+        requestedKey: strategyKey,
+        availableKeys: stack.map((row) => String(row?.key || '').trim()).filter(Boolean),
+      });
+    }
+    if (layer && !selectedByLayer && !selectedByKey) {
+      return res.status(404).json({
+        status: 'not_found',
+        error: 'strategy_layer_not_found',
+        requestedLayer: layer,
+        availableLayers: stack.map((row) => String(row?.layer || '').trim().toLowerCase()).filter(Boolean),
+      });
+    }
     if (!selected) {
       return res.status(404).json({ status: 'not_found', error: 'strategy_not_found' });
     }
@@ -35175,7 +35587,19 @@ app.get('/api/jarvis/strategy/pine', async (req, res) => {
         name: selected.name,
         layer: selected.layer,
       },
+      pineAccess: buildStrategyPineAccessContract({
+        key: selected?.key,
+        layer: selected?.layer,
+        pineScript,
+      }),
+      format: 'pine_v6',
+      copyReady: true,
       pineScript,
+      strategyLayerSnapshot: {
+        recommendationBasis: strategyLayerSnapshot?.recommendationBasis || null,
+        strategyStack: stack,
+      },
+      advisoryOnly: true,
     });
   } catch (err) {
     res.status(500).json({
