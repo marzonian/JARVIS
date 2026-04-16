@@ -10777,6 +10777,10 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
       && typeof recommendationPerformanceSummary.lateEntryPolicyTruthBlockerDiagnostics === 'object'
       ? { ...recommendationPerformanceSummary.lateEntryPolicyTruthBlockerDiagnostics }
       : null;
+    commandCenter.lateEntryPolicyTruthBlockerAudit = recommendationPerformanceSummary?.lateEntryPolicyTruthBlockerAudit
+      && typeof recommendationPerformanceSummary.lateEntryPolicyTruthBlockerAudit === 'object'
+      ? { ...recommendationPerformanceSummary.lateEntryPolicyTruthBlockerAudit }
+      : null;
     commandCenter.lateEntryPolicyContextGapAudit = recommendationPerformanceSummary?.lateEntryPolicyContextGapAudit
       && typeof recommendationPerformanceSummary.lateEntryPolicyContextGapAudit === 'object'
       ? { ...recommendationPerformanceSummary.lateEntryPolicyContextGapAudit }
@@ -10784,6 +10788,10 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
     commandCenter.lateEntryPolicyContextBackfillRun = recommendationPerformanceSummary?.lateEntryPolicyContextBackfillRun
       && typeof recommendationPerformanceSummary.lateEntryPolicyContextBackfillRun === 'object'
       ? { ...recommendationPerformanceSummary.lateEntryPolicyContextBackfillRun }
+      : null;
+    commandCenter.lateEntryPolicyTruthRepairPlanner = recommendationPerformanceSummary?.lateEntryPolicyTruthRepairPlanner
+      && typeof recommendationPerformanceSummary.lateEntryPolicyTruthRepairPlanner === 'object'
+      ? { ...recommendationPerformanceSummary.lateEntryPolicyTruthRepairPlanner }
       : null;
     commandCenter.lateEntryPolicyTruthDependencySplit = recommendationPerformanceSummary?.lateEntryPolicyTruthDependencySplit
       && typeof recommendationPerformanceSummary.lateEntryPolicyTruthDependencySplit === 'object'
@@ -10900,6 +10908,11 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
       || commandCenter?.lateEntryPolicyTruthBlockerDiagnostics?.summaryLine
       || 'Late-entry truth blocker diagnostics: unavailable.'
     ).trim() || 'Late-entry truth blocker diagnostics: unavailable.';
+    commandCenter.lateEntryPolicyTruthBlockerAuditLine = String(
+      recommendationPerformanceSummary?.lateEntryPolicyTruthBlockerAuditLine
+      || commandCenter?.lateEntryPolicyTruthBlockerAudit?.summaryLine
+      || 'Late-entry truth blocker audit: unavailable.'
+    ).trim() || 'Late-entry truth blocker audit: unavailable.';
     commandCenter.lateEntryPolicyContextGapAuditLine = String(
       recommendationPerformanceSummary?.lateEntryPolicyContextGapAuditLine
       || commandCenter?.lateEntryPolicyContextGapAudit?.summaryLine
@@ -10910,6 +10923,11 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
       || commandCenter?.lateEntryPolicyContextBackfillRun?.summaryLine
       || 'Late-entry context backfill run: unavailable.'
     ).trim() || 'Late-entry context backfill run: unavailable.';
+    commandCenter.lateEntryPolicyTruthRepairPlannerLine = String(
+      recommendationPerformanceSummary?.lateEntryPolicyTruthRepairPlannerLine
+      || commandCenter?.lateEntryPolicyTruthRepairPlanner?.summaryLine
+      || 'Late-entry truth repair planner: unavailable.'
+    ).trim() || 'Late-entry truth repair planner: unavailable.';
     commandCenter.lateEntryPolicyTruthDependencySplitLine = String(
       recommendationPerformanceSummary?.lateEntryPolicyTruthDependencySplitLine
       || commandCenter?.lateEntryPolicyTruthDependencySplit?.summaryLine
@@ -11074,11 +11092,17 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
       commandCenter.todayRecommendation.lateEntryPolicyTruthBlockerDiagnostics = commandCenter.lateEntryPolicyTruthBlockerDiagnostics
         ? { ...commandCenter.lateEntryPolicyTruthBlockerDiagnostics }
         : null;
+      commandCenter.todayRecommendation.lateEntryPolicyTruthBlockerAudit = commandCenter.lateEntryPolicyTruthBlockerAudit
+        ? { ...commandCenter.lateEntryPolicyTruthBlockerAudit }
+        : null;
       commandCenter.todayRecommendation.lateEntryPolicyContextGapAudit = commandCenter.lateEntryPolicyContextGapAudit
         ? { ...commandCenter.lateEntryPolicyContextGapAudit }
         : null;
       commandCenter.todayRecommendation.lateEntryPolicyContextBackfillRun = commandCenter.lateEntryPolicyContextBackfillRun
         ? { ...commandCenter.lateEntryPolicyContextBackfillRun }
+        : null;
+      commandCenter.todayRecommendation.lateEntryPolicyTruthRepairPlanner = commandCenter.lateEntryPolicyTruthRepairPlanner
+        ? { ...commandCenter.lateEntryPolicyTruthRepairPlanner }
         : null;
       commandCenter.todayRecommendation.lateEntryPolicyTruthDependencySplit = commandCenter.lateEntryPolicyTruthDependencySplit
         ? { ...commandCenter.lateEntryPolicyTruthDependencySplit }
@@ -11116,8 +11140,10 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
       commandCenter.todayRecommendation.lateEntryPolicyTruthCoverageLedgerLine = commandCenter.lateEntryPolicyTruthCoverageLedgerLine;
       commandCenter.todayRecommendation.lateEntryPolicyTruthFinalizationQueueLine = commandCenter.lateEntryPolicyTruthFinalizationQueueLine;
       commandCenter.todayRecommendation.lateEntryPolicyTruthBlockerDiagnosticsLine = commandCenter.lateEntryPolicyTruthBlockerDiagnosticsLine;
+      commandCenter.todayRecommendation.lateEntryPolicyTruthBlockerAuditLine = commandCenter.lateEntryPolicyTruthBlockerAuditLine;
       commandCenter.todayRecommendation.lateEntryPolicyContextGapAuditLine = commandCenter.lateEntryPolicyContextGapAuditLine;
       commandCenter.todayRecommendation.lateEntryPolicyContextBackfillRunLine = commandCenter.lateEntryPolicyContextBackfillRunLine;
+      commandCenter.todayRecommendation.lateEntryPolicyTruthRepairPlannerLine = commandCenter.lateEntryPolicyTruthRepairPlannerLine;
       commandCenter.todayRecommendation.lateEntryPolicyTruthDependencySplitLine = commandCenter.lateEntryPolicyTruthDependencySplitLine;
       commandCenter.todayRecommendation.lateEntryPolicyTruthBackfillRunLine = commandCenter.lateEntryPolicyTruthBackfillRunLine;
       commandCenter.todayRecommendation.lateEntryPolicyCoverageAccelerationSummaryLine = commandCenter.lateEntryPolicyCoverageAccelerationSummaryLine;
@@ -11222,11 +11248,17 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
       commandCenter.decisionBoard.lateEntryPolicyTruthBlockerDiagnostics = commandCenter.lateEntryPolicyTruthBlockerDiagnostics
         ? { ...commandCenter.lateEntryPolicyTruthBlockerDiagnostics }
         : null;
+      commandCenter.decisionBoard.lateEntryPolicyTruthBlockerAudit = commandCenter.lateEntryPolicyTruthBlockerAudit
+        ? { ...commandCenter.lateEntryPolicyTruthBlockerAudit }
+        : null;
       commandCenter.decisionBoard.lateEntryPolicyContextGapAudit = commandCenter.lateEntryPolicyContextGapAudit
         ? { ...commandCenter.lateEntryPolicyContextGapAudit }
         : null;
       commandCenter.decisionBoard.lateEntryPolicyContextBackfillRun = commandCenter.lateEntryPolicyContextBackfillRun
         ? { ...commandCenter.lateEntryPolicyContextBackfillRun }
+        : null;
+      commandCenter.decisionBoard.lateEntryPolicyTruthRepairPlanner = commandCenter.lateEntryPolicyTruthRepairPlanner
+        ? { ...commandCenter.lateEntryPolicyTruthRepairPlanner }
         : null;
       commandCenter.decisionBoard.lateEntryPolicyTruthDependencySplit = commandCenter.lateEntryPolicyTruthDependencySplit
         ? { ...commandCenter.lateEntryPolicyTruthDependencySplit }
@@ -11264,8 +11296,10 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
       commandCenter.decisionBoard.lateEntryPolicyTruthCoverageLedgerLine = commandCenter.lateEntryPolicyTruthCoverageLedgerLine;
       commandCenter.decisionBoard.lateEntryPolicyTruthFinalizationQueueLine = commandCenter.lateEntryPolicyTruthFinalizationQueueLine;
       commandCenter.decisionBoard.lateEntryPolicyTruthBlockerDiagnosticsLine = commandCenter.lateEntryPolicyTruthBlockerDiagnosticsLine;
+      commandCenter.decisionBoard.lateEntryPolicyTruthBlockerAuditLine = commandCenter.lateEntryPolicyTruthBlockerAuditLine;
       commandCenter.decisionBoard.lateEntryPolicyContextGapAuditLine = commandCenter.lateEntryPolicyContextGapAuditLine;
       commandCenter.decisionBoard.lateEntryPolicyContextBackfillRunLine = commandCenter.lateEntryPolicyContextBackfillRunLine;
+      commandCenter.decisionBoard.lateEntryPolicyTruthRepairPlannerLine = commandCenter.lateEntryPolicyTruthRepairPlannerLine;
       commandCenter.decisionBoard.lateEntryPolicyTruthDependencySplitLine = commandCenter.lateEntryPolicyTruthDependencySplitLine;
       commandCenter.decisionBoard.lateEntryPolicyTruthBackfillRunLine = commandCenter.lateEntryPolicyTruthBackfillRunLine;
       commandCenter.decisionBoard.lateEntryPolicyCoverageAccelerationSummaryLine = commandCenter.lateEntryPolicyCoverageAccelerationSummaryLine;

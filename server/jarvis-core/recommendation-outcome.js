@@ -9058,6 +9058,203 @@ function buildLateEntryPolicyTruthBlockerDiagnostics(input = {}) {
   };
 }
 
+function mapLateEntryTruthBlockerSuggestedAction(blockerType = '') {
+  const normalized = toText(blockerType || '').toLowerCase();
+  if (normalized === LATE_ENTRY_TRUTH_BLOCKER_NEEDS_EXTERNAL) {
+    return 'wait_for_external_truth_then_run_truth_backfill';
+  }
+  if (normalized === LATE_ENTRY_TRUTH_BLOCKER_MISSING_CONTEXT) {
+    return 'run_context_backfill_from_persisted_recommendation_rows';
+  }
+  if (normalized === LATE_ENTRY_TRUTH_BLOCKER_MISSING_REPLAY) {
+    return 'rebuild_or_repair_late_entry_replay_rows';
+  }
+  if (normalized === LATE_ENTRY_TRUTH_BLOCKER_INCOMPLETE_POLICY) {
+    return 'repair_late_entry_policy_row_completeness';
+  }
+  if (normalized === LATE_ENTRY_TRUTH_BLOCKER_MISSING_CANDLES) {
+    return 'restore_session_candles_then_rebuild_checkpoint';
+  }
+  if (normalized === LATE_ENTRY_TRUTH_BLOCKER_INSUFFICIENT_LOCAL) {
+    return 'collect_additional_local_evidence_then_retry';
+  }
+  if (normalized === LATE_ENTRY_TRUTH_BLOCKER_ALREADY_FINALIZED) {
+    return 'no_action_already_finalized';
+  }
+  return 'investigate_unknown_blocker';
+}
+
+function buildLateEntryPolicyTruthBlockerAudit(input = {}) {
+  const candidateRows = Array.isArray(input?.candidateRows) ? input.candidateRows : [];
+  const maxGroups = Math.max(1, Math.min(50, Number(input?.maxGroups || 25)));
+  const readyNowDates = [];
+  const blockedDates = [];
+  const blockersByType = new Map();
+
+  for (const row of candidateRows) {
+    const tradeDate = normalizeDate(row?.tradeDate || '');
+    if (!tradeDate) continue;
+    if (row?.isReadyNow === true) {
+      readyNowDates.push(tradeDate);
+      continue;
+    }
+    blockedDates.push(tradeDate);
+    const reasons = Array.isArray(row?.blockReasons) && row.blockReasons.length > 0
+      ? row.blockReasons
+      : [LATE_ENTRY_TRUTH_BLOCKER_UNKNOWN];
+    for (const reasonRaw of reasons) {
+      const reason = toText(reasonRaw || '').toLowerCase() || LATE_ENTRY_TRUTH_BLOCKER_UNKNOWN;
+      if (!blockersByType.has(reason)) blockersByType.set(reason, new Set());
+      blockersByType.get(reason).add(tradeDate);
+    }
+  }
+
+  readyNowDates.sort((a, b) => String(b).localeCompare(String(a)));
+  blockedDates.sort((a, b) => String(b).localeCompare(String(a)));
+
+  const blockerGroups = Array.from(blockersByType.entries())
+    .map(([blockerType, dateSet]) => {
+      const tradeDates = Array.from(dateSet)
+        .map((date) => normalizeDate(date))
+        .filter(Boolean)
+        .sort((a, b) => String(b).localeCompare(String(a)));
+      const requiresExternalTruth = LATE_ENTRY_TRUTH_EXTERNAL_BLOCKER_SET.has(blockerType);
+      const locallyRepairable = LATE_ENTRY_TRUTH_LOCAL_BLOCKER_SET.has(blockerType);
+      const dependencyType = requiresExternalTruth
+        ? 'external_dependency'
+        : (
+          locallyRepairable
+            ? 'local_repairable'
+            : 'mixed_or_unknown'
+        );
+      return {
+        blockerType,
+        blockedCount: tradeDates.length,
+        tradeDates,
+        newestTradeDate: tradeDates[0] || null,
+        oldestTradeDate: tradeDates[tradeDates.length - 1] || null,
+        requiresExternalTruth,
+        locallyRepairable,
+        dependencyType,
+        suggestedAction: mapLateEntryTruthBlockerSuggestedAction(blockerType),
+      };
+    })
+    .sort((a, b) => {
+      const countDiff = Number(b?.blockedCount || 0) - Number(a?.blockedCount || 0);
+      if (countDiff !== 0) return countDiff;
+      return String(a?.blockerType || '').localeCompare(String(b?.blockerType || ''));
+    })
+    .slice(0, maxGroups);
+
+  const dominantBlocker = blockerGroups[0]?.blockerType || null;
+  const readyNowCount = readyNowDates.length;
+  const blockedCount = blockedDates.length;
+  const topBlockers = blockerGroups
+    .slice(0, 3)
+    .map((group) => `${group.blockerType}:${group.blockedCount}`);
+  const summaryLine = readyNowCount > 0
+    ? `Truth blocker audit: ${readyNowCount} ready-now dates; blocked dates are led by ${topBlockers.join(', ') || 'none'}.`
+    : `Truth blocker audit: ready-now is 0; blockers ${topBlockers.join(', ') || 'none'} explain all blocked eligible dates.`;
+
+  return {
+    candidateLane: 'v5',
+    policyKey: LATE_ENTRY_POLICY_EXPERIMENT_V5_KEY,
+    policyVersion: LATE_ENTRY_POLICY_EXPERIMENT_V5_VERSION,
+    totalEligibleDays: candidateRows.length,
+    readyNowCount,
+    blockedCount,
+    readyNowIsZero: readyNowCount === 0,
+    dominantBlocker,
+    blockerGroups,
+    readyNowDates,
+    blockedTradeDates: blockedDates,
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
+function buildLateEntryPolicyTruthRepairPlanner(input = {}) {
+  const candidateRows = Array.isArray(input?.candidateRows) ? input.candidateRows : [];
+  const blockerAudit = input?.blockerAudit && typeof input.blockerAudit === 'object'
+    ? input.blockerAudit
+    : buildLateEntryPolicyTruthBlockerAudit({ candidateRows });
+
+  const localOnly = new Set();
+  const externalOnly = new Set();
+  const mixed = new Set();
+  const unknown = new Set();
+  const blockedRows = candidateRows.filter((row) => row?.isReadyNow !== true);
+
+  for (const row of blockedRows) {
+    const tradeDate = normalizeDate(row?.tradeDate || '');
+    if (!tradeDate) continue;
+    const reasons = Array.isArray(row?.blockReasons)
+      ? row.blockReasons.map((reason) => toText(reason || '').toLowerCase()).filter(Boolean)
+      : [];
+    const hasExternal = reasons.some((reason) => LATE_ENTRY_TRUTH_EXTERNAL_BLOCKER_SET.has(reason));
+    const hasLocal = reasons.some((reason) => LATE_ENTRY_TRUTH_LOCAL_BLOCKER_SET.has(reason));
+    if (hasExternal && hasLocal) mixed.add(tradeDate);
+    else if (hasExternal) externalOnly.add(tradeDate);
+    else if (hasLocal) localOnly.add(tradeDate);
+    else unknown.add(tradeDate);
+  }
+
+  const toSortedDates = (set) => Array.from(set)
+    .map((date) => normalizeDate(date))
+    .filter(Boolean)
+    .sort((a, b) => String(b).localeCompare(String(a)));
+  const localDates = toSortedDates(localOnly);
+  const externalDates = toSortedDates(externalOnly);
+  const mixedDates = toSortedDates(mixed);
+  const unknownDates = toSortedDates(unknown);
+
+  const blockerActionPlan = Array.isArray(blockerAudit?.blockerGroups)
+    ? blockerAudit.blockerGroups.map((group, idx) => ({
+      priority: idx + 1,
+      blockerType: group.blockerType,
+      blockedCount: Number(group.blockedCount || 0),
+      dependencyType: group.dependencyType || 'mixed_or_unknown',
+      suggestedAction: group.suggestedAction || mapLateEntryTruthBlockerSuggestedAction(group.blockerType),
+      executableLocallyNow: group.requiresExternalTruth !== true,
+      tradeDates: Array.isArray(group.tradeDates) ? group.tradeDates : [],
+    }))
+    : [];
+
+  const readyNowCount = Number(blockerAudit?.readyNowCount || 0);
+  const blockedCount = Number(blockerAudit?.blockedCount || blockedRows.length);
+  const plannerStatus = readyNowCount > 0
+    ? 'partial_ready_now'
+    : (
+      externalDates.length > 0
+        ? 'blocked_by_external_truth'
+        : (
+          localDates.length > 0 || mixedDates.length > 0
+            ? 'blocked_by_local_repair'
+            : 'blocked_unknown'
+        )
+    );
+
+  const summaryLine = readyNowCount > 0
+    ? `Truth repair planner: ${readyNowCount} ready-now dates, ${blockedCount} still blocked.`
+    : `Truth repair planner: ready-now is 0; blocked dates split local ${localDates.length}, external ${externalDates.length}, mixed ${mixedDates.length}.`;
+
+  return {
+    candidateLane: 'v5',
+    policyKey: LATE_ENTRY_POLICY_EXPERIMENT_V5_KEY,
+    policyVersion: LATE_ENTRY_POLICY_EXPERIMENT_V5_VERSION,
+    plannerStatus,
+    readyNowCount,
+    blockedCount,
+    localOnlyBlockedDates: localDates,
+    externalOnlyBlockedDates: externalDates,
+    mixedBlockedDates: mixedDates,
+    unknownBlockedDates: unknownDates,
+    blockerActionPlan,
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
 function buildLateEntryPolicyTruthDependencySplit(input = {}) {
   const candidateRows = Array.isArray(input?.candidateRows) ? input.candidateRows : [];
   const maxSample = Math.max(1, Math.min(20, Number(input?.maxSample || 10)));
@@ -12590,8 +12787,10 @@ function summarizeRecommendationPerformance(perf = {}) {
     lateEntryPolicyTruthCoverageLedger: null,
     lateEntryPolicyTruthFinalizationQueue: null,
     lateEntryPolicyTruthBlockerDiagnostics: null,
+    lateEntryPolicyTruthBlockerAudit: null,
     lateEntryPolicyContextGapAudit: null,
     lateEntryPolicyContextBackfillRun: null,
+    lateEntryPolicyTruthRepairPlanner: null,
     lateEntryPolicyTruthDependencySplit: null,
     lateEntryPolicyTruthBackfillRun: null,
     lateEntryPolicyCoverageAccelerationSummary: null,
@@ -12616,8 +12815,10 @@ function summarizeRecommendationPerformance(perf = {}) {
     lateEntryPolicyTruthCoverageLedgerLine: 'Late-entry truth coverage ledger: unavailable.',
     lateEntryPolicyTruthFinalizationQueueLine: 'Late-entry truth finalization queue: unavailable.',
     lateEntryPolicyTruthBlockerDiagnosticsLine: 'Late-entry truth blocker diagnostics: unavailable.',
+    lateEntryPolicyTruthBlockerAuditLine: 'Late-entry truth blocker audit: unavailable.',
     lateEntryPolicyContextGapAuditLine: 'Late-entry context gap audit: unavailable.',
     lateEntryPolicyContextBackfillRunLine: 'Late-entry context backfill run: unavailable.',
+    lateEntryPolicyTruthRepairPlannerLine: 'Late-entry truth repair planner: unavailable.',
     lateEntryPolicyTruthDependencySplitLine: 'Late-entry truth dependency split: unavailable.',
     lateEntryPolicyTruthBackfillRunLine: 'Late-entry truth backfill run: unavailable.',
     lateEntryPolicyCoverageAccelerationSummaryLine: 'Late-entry coverage acceleration: unavailable.',
@@ -13212,23 +13413,26 @@ function buildRecommendationPerformance(input = {}) {
     || lateEntryTruthQueueAfterContextResult?.queue
     || lateEntryPolicyTruthQueueBeforeContext
     || null;
+  const lateEntryTruthCandidateRows = Array.isArray(lateEntryTruthQueueFinalResult?.candidateRows)
+    ? lateEntryTruthQueueFinalResult.candidateRows
+    : (
+      Array.isArray(lateEntryTruthQueueAfterContextResult?.candidateRows)
+        ? lateEntryTruthQueueAfterContextResult.candidateRows
+        : []
+    );
   const lateEntryPolicyTruthBlockerDiagnostics = buildLateEntryPolicyTruthBlockerDiagnostics({
-    candidateRows: Array.isArray(lateEntryTruthQueueFinalResult?.candidateRows)
-      ? lateEntryTruthQueueFinalResult.candidateRows
-      : (
-        Array.isArray(lateEntryTruthQueueAfterContextResult?.candidateRows)
-          ? lateEntryTruthQueueAfterContextResult.candidateRows
-          : []
-      ),
+    candidateRows: lateEntryTruthCandidateRows,
+  });
+  const lateEntryPolicyTruthBlockerAudit = buildLateEntryPolicyTruthBlockerAudit({
+    candidateRows: lateEntryTruthCandidateRows,
+    maxGroups: 25,
+  });
+  const lateEntryPolicyTruthRepairPlanner = buildLateEntryPolicyTruthRepairPlanner({
+    candidateRows: lateEntryTruthCandidateRows,
+    blockerAudit: lateEntryPolicyTruthBlockerAudit,
   });
   const lateEntryPolicyTruthDependencySplit = buildLateEntryPolicyTruthDependencySplit({
-    candidateRows: Array.isArray(lateEntryTruthQueueFinalResult?.candidateRows)
-      ? lateEntryTruthQueueFinalResult.candidateRows
-      : (
-        Array.isArray(lateEntryTruthQueueAfterContextResult?.candidateRows)
-          ? lateEntryTruthQueueAfterContextResult.candidateRows
-          : []
-      ),
+    candidateRows: lateEntryTruthCandidateRows,
     maxSample: 12,
   });
   const lateEntryPolicyExperimentV5AfterRepair = summarizeLateEntryPolicyExperiment(scorecards, {
@@ -13348,8 +13552,10 @@ function buildRecommendationPerformance(input = {}) {
   summary.lateEntryPolicyTruthFinalizationQueue = lateEntryPolicyTruthFinalizationQueue;
   summary.lateEntryPolicyTruthBlockerDiagnostics = lateEntryPolicyTruthBlockerDiagnostics
     || lateEntryPolicyTruthBlockerDiagnosticsBeforeBackfill;
+  summary.lateEntryPolicyTruthBlockerAudit = lateEntryPolicyTruthBlockerAudit;
   summary.lateEntryPolicyContextGapAudit = lateEntryPolicyContextGapAudit;
   summary.lateEntryPolicyContextBackfillRun = lateEntryPolicyContextBackfillRun;
+  summary.lateEntryPolicyTruthRepairPlanner = lateEntryPolicyTruthRepairPlanner;
   summary.lateEntryPolicyTruthDependencySplit = lateEntryPolicyTruthDependencySplit
     || lateEntryPolicyTruthDependencySplitBeforeBackfill;
   summary.lateEntryPolicyTruthBackfillRun = lateEntryPolicyTruthBackfillRun;
@@ -13364,10 +13570,16 @@ function buildRecommendationPerformance(input = {}) {
   summary.lateEntryPolicyTruthBlockerDiagnosticsLine = toText(
     summary?.lateEntryPolicyTruthBlockerDiagnostics?.summaryLine || ''
   ) || 'Late-entry truth blocker diagnostics: unavailable.';
+  summary.lateEntryPolicyTruthBlockerAuditLine = toText(
+    lateEntryPolicyTruthBlockerAudit?.summaryLine || ''
+  ) || 'Late-entry truth blocker audit: unavailable.';
   summary.lateEntryPolicyContextGapAuditLine = toText(lateEntryPolicyContextGapAudit?.summaryLine || '')
     || 'Late-entry context gap audit: unavailable.';
   summary.lateEntryPolicyContextBackfillRunLine = toText(lateEntryPolicyContextBackfillRun?.summaryLine || '')
     || 'Late-entry context backfill run: unavailable.';
+  summary.lateEntryPolicyTruthRepairPlannerLine = toText(
+    lateEntryPolicyTruthRepairPlanner?.summaryLine || ''
+  ) || 'Late-entry truth repair planner: unavailable.';
   summary.lateEntryPolicyTruthDependencySplitLine = toText(
     summary?.lateEntryPolicyTruthDependencySplit?.summaryLine || ''
   ) || 'Late-entry truth dependency split: unavailable.';
@@ -13502,9 +13714,11 @@ module.exports = {
   classifyLateEntryPolicyTruthFinalizationBlocker,
   buildLateEntryPolicyTruthFinalizationQueue,
   buildLateEntryPolicyTruthBlockerDiagnostics,
+  buildLateEntryPolicyTruthBlockerAudit,
   classifyLateEntryPolicyContextGap,
   buildLateEntryPolicyContextGapAudit,
   runLateEntryPolicyContextBackfillRun,
+  buildLateEntryPolicyTruthRepairPlanner,
   buildLateEntryPolicyTruthDependencySplit,
   runLateEntryPolicyTruthBackfillRun,
   buildLateEntryPolicyCoverageAccelerationSummary,

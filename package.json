@@ -98,6 +98,7 @@
     "test:jarvis:preferred-owner-next-natural-day-watchdog": "node tests/test-jarvis-preferred-owner-next-natural-day-readiness-watchdog.js",
     "test:jarvis:live-evidence-accumulation": "node tests/test-jarvis-live-evidence-accumulation.js",
     "test:jarvis:live-evidence-growth-planner": "node tests/test-jarvis-live-evidence-growth-planner.js",
+    "audit:late-entry:truth-blockers": "node scripts/late-entry-truth-blocker-audit.js",
     "jarvis:preferred-owner:drill": "node scripts/run-preferred-owner-natural-drill.js",
     "jarvis:preferred-owner:monitor": "node scripts/run-preferred-owner-monitor.js",
     "jarvis:preferred-owner:historical-audit": "node scripts/run-preferred-owner-historical-audit.js",

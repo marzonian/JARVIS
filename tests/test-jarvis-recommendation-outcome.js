@@ -37,9 +37,11 @@ const {
   classifyLateEntryPolicyTruthFinalizationBlocker,
   buildLateEntryPolicyTruthFinalizationQueue,
   buildLateEntryPolicyTruthBlockerDiagnostics,
+  buildLateEntryPolicyTruthBlockerAudit,
   classifyLateEntryPolicyContextGap,
   buildLateEntryPolicyContextGapAudit,
   runLateEntryPolicyContextBackfillRun,
+  buildLateEntryPolicyTruthRepairPlanner,
   buildLateEntryPolicyTruthDependencySplit,
   runLateEntryPolicyTruthBackfillRun,
   buildLateEntryPolicyCoverageAccelerationSummary,
@@ -2008,6 +2010,39 @@ function runUnitChecks() {
     && Number(blockerDiagnosticsBefore?.blockerCounts?.missing_context_row || 0) >= 1,
     'truth blocker diagnostics should include deterministic missing_context_row counts'
   );
+  const blockerAuditBefore = buildLateEntryPolicyTruthBlockerAudit({
+    candidateRows: queueResult?.candidateRows || [],
+  });
+  assert(
+    blockerAuditBefore
+    && Number(blockerAuditBefore?.blockedCount || 0) >= 1
+    && Array.isArray(blockerAuditBefore?.blockerGroups),
+    'truth blocker audit should group blocked dates by blocker type deterministically'
+  );
+  const externalGroup = Array.isArray(blockerAuditBefore?.blockerGroups)
+    ? blockerAuditBefore.blockerGroups.find((group) => String(group?.blockerType || '') === 'needs_external_close_truth')
+    : null;
+  assert(
+    externalGroup
+    && Array.isArray(externalGroup.tradeDates)
+    && externalGroup.tradeDates.includes(truthBlockedDate),
+    'truth blocker audit should include exact blocked trade dates for needs_external_close_truth'
+  );
+  const repairPlannerBefore = buildLateEntryPolicyTruthRepairPlanner({
+    candidateRows: queueResult?.candidateRows || [],
+    blockerAudit: blockerAuditBefore,
+  });
+  assert(
+    repairPlannerBefore
+    && Array.isArray(repairPlannerBefore?.blockerActionPlan)
+    && repairPlannerBefore.blockerActionPlan.length >= 1,
+    'truth repair planner should expose deterministic blocker action plan'
+  );
+  assert(
+    Array.isArray(repairPlannerBefore?.externalOnlyBlockedDates)
+    && repairPlannerBefore.externalOnlyBlockedDates.includes(truthBlockedDate),
+    'truth repair planner should classify external-only blocked trade dates deterministically'
+  );
   const contextGapAudit = buildLateEntryPolicyContextGapAudit({
     db,
     sourceType: 'live',
@@ -3974,12 +4009,20 @@ async function runIntegrationChecks() {
       'command-center lateEntryPolicyTruthBlockerDiagnosticsLine missing'
     );
     assert(
+      typeof center?.commandCenter?.lateEntryPolicyTruthBlockerAuditLine === 'string',
+      'command-center lateEntryPolicyTruthBlockerAuditLine missing'
+    );
+    assert(
       typeof center?.commandCenter?.lateEntryPolicyContextGapAuditLine === 'string',
       'command-center lateEntryPolicyContextGapAuditLine missing'
     );
     assert(
       typeof center?.commandCenter?.lateEntryPolicyContextBackfillRunLine === 'string',
       'command-center lateEntryPolicyContextBackfillRunLine missing'
+    );
+    assert(
+      typeof center?.commandCenter?.lateEntryPolicyTruthRepairPlannerLine === 'string',
+      'command-center lateEntryPolicyTruthRepairPlannerLine missing'
     );
     assert(
       typeof center?.commandCenter?.lateEntryPolicyTruthDependencySplitLine === 'string',
@@ -4091,6 +4134,11 @@ async function runIntegrationChecks() {
       'command-center lateEntryPolicyTruthBlockerDiagnostics should be object or null'
     );
     assert(
+      center?.commandCenter?.lateEntryPolicyTruthBlockerAudit === null
+      || typeof center.commandCenter.lateEntryPolicyTruthBlockerAudit === 'object',
+      'command-center lateEntryPolicyTruthBlockerAudit should be object or null'
+    );
+    assert(
       center?.commandCenter?.lateEntryPolicyContextGapAudit === null
       || typeof center.commandCenter.lateEntryPolicyContextGapAudit === 'object',
       'command-center lateEntryPolicyContextGapAudit should be object or null'
@@ -4099,6 +4147,11 @@ async function runIntegrationChecks() {
       center?.commandCenter?.lateEntryPolicyContextBackfillRun === null
       || typeof center.commandCenter.lateEntryPolicyContextBackfillRun === 'object',
       'command-center lateEntryPolicyContextBackfillRun should be object or null'
+    );
+    assert(
+      center?.commandCenter?.lateEntryPolicyTruthRepairPlanner === null
+      || typeof center.commandCenter.lateEntryPolicyTruthRepairPlanner === 'object',
+      'command-center lateEntryPolicyTruthRepairPlanner should be object or null'
     );
     assert(
       center?.commandCenter?.lateEntryPolicyTruthDependencySplit === null
@@ -4244,6 +4297,12 @@ async function runIntegrationChecks() {
     );
     assert(
       center?.commandCenter?.todayRecommendation == null
+      || center.commandCenter.todayRecommendation?.lateEntryPolicyTruthBlockerAudit === null
+      || typeof center.commandCenter.todayRecommendation?.lateEntryPolicyTruthBlockerAudit === 'object',
+      'todayRecommendation should surface lateEntryPolicyTruthBlockerAudit object'
+    );
+    assert(
+      center?.commandCenter?.todayRecommendation == null
       || center.commandCenter.todayRecommendation?.lateEntryPolicyContextGapAudit === null
       || typeof center.commandCenter.todayRecommendation?.lateEntryPolicyContextGapAudit === 'object',
       'todayRecommendation should surface lateEntryPolicyContextGapAudit object'
@@ -4253,6 +4312,12 @@ async function runIntegrationChecks() {
       || center.commandCenter.decisionBoard?.lateEntryPolicyContextBackfillRun === null
       || typeof center.commandCenter.decisionBoard?.lateEntryPolicyContextBackfillRun === 'object',
       'decisionBoard should surface lateEntryPolicyContextBackfillRun object'
+    );
+    assert(
+      center?.commandCenter?.decisionBoard == null
+      || center.commandCenter.decisionBoard?.lateEntryPolicyTruthRepairPlanner === null
+      || typeof center.commandCenter.decisionBoard?.lateEntryPolicyTruthRepairPlanner === 'object',
+      'decisionBoard should surface lateEntryPolicyTruthRepairPlanner object'
     );
     assert(
       center?.commandCenter?.decisionBoard == null
@@ -4320,8 +4385,10 @@ async function runIntegrationChecks() {
       'lateEntryPolicyTruthCoverageLedger',
       'lateEntryPolicyTruthFinalizationQueue',
       'lateEntryPolicyTruthBlockerDiagnostics',
+      'lateEntryPolicyTruthBlockerAudit',
       'lateEntryPolicyContextGapAudit',
       'lateEntryPolicyContextBackfillRun',
+      'lateEntryPolicyTruthRepairPlanner',
       'lateEntryPolicyTruthDependencySplit',
       'lateEntryPolicyTruthBackfillRun',
       'lateEntryPolicyCoverageAccelerationSummary',
@@ -4336,8 +4403,10 @@ async function runIntegrationChecks() {
       'lateEntryPolicyTruthCoverageLedgerLine',
       'lateEntryPolicyTruthFinalizationQueueLine',
       'lateEntryPolicyTruthBlockerDiagnosticsLine',
+      'lateEntryPolicyTruthBlockerAuditLine',
       'lateEntryPolicyContextGapAuditLine',
       'lateEntryPolicyContextBackfillRunLine',
+      'lateEntryPolicyTruthRepairPlannerLine',
       'lateEntryPolicyTruthDependencySplitLine',
       'lateEntryPolicyTruthBackfillRunLine',
       'lateEntryPolicyCoverageAccelerationSummaryLine',
@@ -4532,6 +4601,11 @@ async function runIntegrationChecks() {
       'recommendation-performance payload should include lateEntryPolicyTruthBlockerDiagnostics'
     );
     assert(
+      summary?.lateEntryPolicyTruthBlockerAudit
+      && typeof summary.lateEntryPolicyTruthBlockerAudit === 'object',
+      'recommendation-performance payload should include lateEntryPolicyTruthBlockerAudit'
+    );
+    assert(
       summary?.lateEntryPolicyContextGapAudit
       && typeof summary.lateEntryPolicyContextGapAudit === 'object',
       'recommendation-performance payload should include lateEntryPolicyContextGapAudit'
@@ -4540,6 +4614,11 @@ async function runIntegrationChecks() {
       summary?.lateEntryPolicyContextBackfillRun
       && typeof summary.lateEntryPolicyContextBackfillRun === 'object',
       'recommendation-performance payload should include lateEntryPolicyContextBackfillRun'
+    );
+    assert(
+      summary?.lateEntryPolicyTruthRepairPlanner
+      && typeof summary.lateEntryPolicyTruthRepairPlanner === 'object',
+      'recommendation-performance payload should include lateEntryPolicyTruthRepairPlanner'
     );
     assert(
       summary?.lateEntryPolicyTruthDependencySplit
@@ -4596,12 +4675,20 @@ async function runIntegrationChecks() {
       'truth blocker diagnostics should expose deterministic blockedCount'
     );
     assert(
+      Number.isFinite(Number(summary?.lateEntryPolicyTruthBlockerAudit?.blockedCount || 0)),
+      'truth blocker audit should expose deterministic blockedCount'
+    );
+    assert(
       Number.isFinite(Number(summary?.lateEntryPolicyContextGapAudit?.missingContextCount || 0)),
       'context gap audit should expose deterministic missingContextCount'
     );
     assert(
       Number.isFinite(Number(summary?.lateEntryPolicyContextBackfillRun?.scannedDates || 0)),
       'context backfill run should expose deterministic scannedDates'
+    );
+    assert(
+      Number.isFinite(Number(summary?.lateEntryPolicyTruthRepairPlanner?.blockedCount || 0)),
+      'truth repair planner should expose deterministic blockedCount'
     );
     assert(
       Number.isFinite(Number(summary?.lateEntryPolicyTruthDependencySplit?.externalTruthRequiredDays || 0)),
@@ -4738,12 +4825,20 @@ async function runIntegrationChecks() {
       'recommendation-performance payload should include lateEntryPolicyTruthBlockerDiagnosticsLine'
     );
     assert(
+      typeof summary?.lateEntryPolicyTruthBlockerAuditLine === 'string',
+      'recommendation-performance payload should include lateEntryPolicyTruthBlockerAuditLine'
+    );
+    assert(
       typeof summary?.lateEntryPolicyContextGapAuditLine === 'string',
       'recommendation-performance payload should include lateEntryPolicyContextGapAuditLine'
     );
     assert(
       typeof summary?.lateEntryPolicyContextBackfillRunLine === 'string',
       'recommendation-performance payload should include lateEntryPolicyContextBackfillRunLine'
+    );
+    assert(
+      typeof summary?.lateEntryPolicyTruthRepairPlannerLine === 'string',
+      'recommendation-performance payload should include lateEntryPolicyTruthRepairPlannerLine'
     );
     assert(
       typeof summary?.lateEntryPolicyTruthDependencySplitLine === 'string',
