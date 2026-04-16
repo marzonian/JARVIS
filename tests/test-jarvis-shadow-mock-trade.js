@@ -144,6 +144,18 @@ function run() {
   assert(Array.isArray(queuedCenter.shadowMockTradeLedger.pending) && queuedCenter.shadowMockTradeLedger.pending.length === 1, 'expected one pending queued trade');
   assert(String(queuedCenter.shadowMockTradeLedger.pending[0].exitReason || '') === 'queued_next_session', 'queued trade should state queued_next_session');
 
+  const preOpenCenter = buildCommandCenterPanels(buildInput({
+    signal: 'WAIT',
+    blockers: [],
+    sessionPhase: 'pre_open',
+    latestSession: {
+      orb: { high: 22135, low: 22095, range_ticks: 160 },
+      no_trade_reason: null,
+    },
+  }));
+  assert(preOpenCenter.shadowMockTradeDecision.eligible === false, 'pre-open should be ineligible for mock execution');
+  assert(preOpenCenter.shadowMockTradeDecision.reason === 'outside_shadow_action_window', 'pre-open should map to outside_shadow_action_window');
+
   assert(eligibleCenter.todayRecommendation.shadowMockTradeDecision && typeof eligibleCenter.todayRecommendation.shadowMockTradeDecision === 'object', 'todayRecommendation mirror missing shadowMockTradeDecision');
   assert(eligibleCenter.decisionBoard.shadowMockTradeLedger && typeof eligibleCenter.decisionBoard.shadowMockTradeLedger === 'object', 'decisionBoard mirror missing shadowMockTradeLedger');
 

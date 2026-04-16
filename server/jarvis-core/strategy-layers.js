@@ -1107,8 +1107,10 @@ function buildShadowMockTradeDecision(input = {}) {
   const candidateExpectedValue = Number(topCandidate?.candidateExpectedValue);
   const negativeEvTolerance = -15;
   const actionableStatuses = new Set(['ready_now', 'secondary_watch', 'watch_trigger', 'await_next_session']);
+  const approvedActionWindows = new Set(['orb_window', 'opening_window', 'entry_window', 'post_orb', 'momentum_window']);
   const nextSessionQueued = candidateStatus === 'await_next_session';
   const blocked = candidateStatus === 'blocked';
+  const insideApprovedActionWindow = approvedActionWindows.has(sessionPhase);
 
   if (blocked) {
     return {
@@ -1120,16 +1122,6 @@ function buildShadowMockTradeDecision(input = {}) {
       tradePlanSummaryLine: 'Shadow mock-trade: blocked candidate, no paper trade queued.',
     };
   }
-  if (!actionableStatuses.has(candidateStatus)) {
-    return {
-      ...fallbackDecision,
-      reason: 'candidate_not_actionable',
-      candidateKey: topCandidate?.candidateKey || null,
-      strategyKey: topCandidate?.strategyKey || null,
-      direction: topCandidate?.direction || null,
-      tradePlanSummaryLine: `Shadow mock-trade: candidate status ${candidateStatus || 'unknown'} is not actionable.`,
-    };
-  }
   if ((sessionPhase === 'outside_window' || sessionPhase === 'late_window') && !nextSessionQueued) {
     return {
       ...fallbackDecision,
@@ -1138,6 +1130,26 @@ function buildShadowMockTradeDecision(input = {}) {
       strategyKey: topCandidate?.strategyKey || null,
       direction: topCandidate?.direction || null,
       tradePlanSummaryLine: 'Shadow mock-trade: outside actionable window and not queued for next session.',
+    };
+  }
+  if (!insideApprovedActionWindow && !nextSessionQueued) {
+    return {
+      ...fallbackDecision,
+      reason: 'outside_shadow_action_window',
+      candidateKey: topCandidate?.candidateKey || null,
+      strategyKey: topCandidate?.strategyKey || null,
+      direction: topCandidate?.direction || null,
+      tradePlanSummaryLine: `Shadow mock-trade: phase ${sessionPhase || 'unknown'} is outside approved action windows.`,
+    };
+  }
+  if (!actionableStatuses.has(candidateStatus)) {
+    return {
+      ...fallbackDecision,
+      reason: 'candidate_not_actionable',
+      candidateKey: topCandidate?.candidateKey || null,
+      strategyKey: topCandidate?.strategyKey || null,
+      direction: topCandidate?.direction || null,
+      tradePlanSummaryLine: `Shadow mock-trade: candidate status ${candidateStatus || 'unknown'} is not actionable.`,
     };
   }
   if (Number.isFinite(candidateExpectedValue) && candidateExpectedValue < negativeEvTolerance) {
