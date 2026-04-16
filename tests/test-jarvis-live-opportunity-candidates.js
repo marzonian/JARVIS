@@ -102,6 +102,10 @@ function run() {
   assert(typeof topCandidate.candidateSource === 'string' && topCandidate.candidateSource.length > 0, 'candidateSource missing on top candidate');
   assert(topCandidate.timeBucket === 'next_session_setup', 'outside_window should map to next_session_setup instead of stale late_window');
   assert(typeof topCandidate.candidateSummaryLine === 'string' && topCandidate.candidateSummaryLine.length > 0, 'candidateSummaryLine missing');
+  assert(Object.prototype.hasOwnProperty.call(topCandidate, 'structureQualityScore'), 'structureQualityScore missing');
+  assert(typeof topCandidate.structureQualityLabel === 'string' && topCandidate.structureQualityLabel.length > 0, 'structureQualityLabel missing');
+  assert(Array.isArray(topCandidate.structureQualityReasonCodes), 'structureQualityReasonCodes missing');
+  assert(typeof topCandidate.structureQualitySummaryLine === 'string' && topCandidate.structureQualitySummaryLine.length > 0, 'structureQualitySummaryLine missing');
   assert(Object.prototype.hasOwnProperty.call(topCandidate, 'candidateWinProb'), 'candidateWinProb missing');
   assert(Object.prototype.hasOwnProperty.call(topCandidate, 'candidateExpectedValue'), 'candidateExpectedValue missing');
   assert(typeof topCandidate.candidateCalibrationBand === 'string' && topCandidate.candidateCalibrationBand.length > 0, 'candidateCalibrationBand missing');
@@ -112,7 +116,7 @@ function run() {
   assert(commandCenter.liveOpportunityCandidates.topCandidateActionableNow === null, 'outside_window should not expose actionable now candidate');
   assert(commandCenter.liveOpportunityCandidates.hasActionableCandidateNow === false, 'outside_window should report hasActionableCandidateNow=false');
   assert(
-    ['outside_actionable_window', 'blocked_context', 'weak_expected_value', 'no_clean_trigger', 'bad_market_structure', 'no_strong_live_candidate'].includes(String(commandCenter.liveOpportunityCandidates.noActionableReasonCode || '')),
+    ['outside_actionable_window', 'blocked_context', 'weak_expected_value', 'no_clean_trigger', 'bad_market_structure', 'no_strong_live_candidate', 'poor_structure', 'overextended_move', 'no_clean_retest', 'weak_follow_through'].includes(String(commandCenter.liveOpportunityCandidates.noActionableReasonCode || '')),
     'outside_window should provide an honest no-actionable reason code'
   );
 
@@ -120,6 +124,13 @@ function run() {
   assert(sourceSet.has('strategy_stack'), 'candidate list should include strategy_stack source');
   assert(sourceSet.has('decision_top_setup'), 'candidate list should include decision_top_setup source');
   assert(sourceSet.has('live_structure'), 'candidate list should include live_structure source');
+  const hasStructureFieldsOnAll = commandCenter.liveOpportunityCandidates.candidates.every((row) => (
+    Object.prototype.hasOwnProperty.call(row, 'structureQualityScore')
+    && typeof row.structureQualityLabel === 'string'
+    && Array.isArray(row.structureQualityReasonCodes)
+    && typeof row.structureQualitySummaryLine === 'string'
+  ));
+  assert(hasStructureFieldsOnAll, 'all candidates should expose structure quality fields');
 
   assert(commandCenter.strategyCandidateOpportunityBridge && typeof commandCenter.strategyCandidateOpportunityBridge === 'object', 'strategyCandidateOpportunityBridge missing');
   assert(['agree', 'disagree'].includes(String(commandCenter.strategyCandidateOpportunityBridge.status || '')), 'strategyCandidateOpportunityBridge status invalid');

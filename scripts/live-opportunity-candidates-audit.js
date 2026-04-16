@@ -52,6 +52,10 @@ function summarizeCandidates(snapshot = {}) {
       timeBucket: topRow.timeBucket || null,
       regime: topRow.regime || null,
       candidateStatus: topRow.candidateStatus || null,
+      structureQualityScore: topRow.structureQualityScore ?? null,
+      structureQualityLabel: topRow.structureQualityLabel || null,
+      structureQualityReasonCodes: Array.isArray(topRow.structureQualityReasonCodes) ? topRow.structureQualityReasonCodes : [],
+      structureQualitySummaryLine: topRow.structureQualitySummaryLine || null,
       candidateWinProb: topRow.candidateWinProb ?? null,
       candidateExpectedValue: topRow.candidateExpectedValue ?? null,
       candidateCalibrationBand: topRow.candidateCalibrationBand || null,
@@ -66,6 +70,10 @@ function summarizeCandidates(snapshot = {}) {
       candidateSource: row?.candidateSource || null,
       candidateType: row?.candidateType || null,
       candidateStatus: row?.candidateStatus || null,
+      structureQualityScore: row?.structureQualityScore ?? null,
+      structureQualityLabel: row?.structureQualityLabel || null,
+      structureQualityReasonCodes: Array.isArray(row?.structureQualityReasonCodes) ? row.structureQualityReasonCodes : [],
+      structureQualitySummaryLine: row?.structureQualitySummaryLine || null,
     })),
   };
 }

@@ -169,15 +169,64 @@ function run() {
   const topActionableNow = liveCandidates.topCandidateActionableNow;
   assert(typeof topOverall.candidateSource === 'string' && topOverall.candidateSource.length > 0, 'topCandidateOverall candidateSource missing');
   assert(typeof topActionableNow.candidateSource === 'string' && topActionableNow.candidateSource.length > 0, 'topCandidateActionableNow candidateSource missing');
+  assert(Object.prototype.hasOwnProperty.call(topOverall, 'structureQualityScore'), 'topCandidateOverall structureQualityScore missing');
+  assert(typeof topOverall.structureQualityLabel === 'string' && topOverall.structureQualityLabel.length > 0, 'topCandidateOverall structureQualityLabel missing');
+  assert(Array.isArray(topOverall.structureQualityReasonCodes), 'topCandidateOverall structureQualityReasonCodes missing');
+  assert(typeof topOverall.structureQualitySummaryLine === 'string' && topOverall.structureQualitySummaryLine.length > 0, 'topCandidateOverall structureQualitySummaryLine missing');
+  assert(Object.prototype.hasOwnProperty.call(topActionableNow, 'structureQualityScore'), 'topCandidateActionableNow structureQualityScore missing');
   assert(topActionableNow.strategyKey !== bad.key, 'negative-EV candidate should not dominate actionable-now ranking');
   assert(topOverall.strategyKey !== bad.key, 'quality penalty should demote deep negative-EV candidate from overall top slot');
   assert(topOverall.candidateExpectedValue > -50, 'overall top should avoid deep negative EV where better options exist');
+  assert(Number(topActionableNow.structureQualityScore) >= 58, 'actionable-now candidate should satisfy minimum structure quality threshold');
   assert(typeof liveCandidates.actionableNowSummaryLine === 'string' && liveCandidates.actionableNowSummaryLine.length > 0, 'actionableNowSummaryLine missing');
   assert(typeof liveCandidates.summaryLine === 'string' && liveCandidates.summaryLine.length > 0, 'summaryLine missing');
   const sourceSet = new Set((Array.isArray(liveCandidates.candidates) ? liveCandidates.candidates : []).map((row) => String(row?.candidateSource || '').trim()));
   assert(sourceSet.has('strategy_stack'), 'expected strategy_stack candidate source');
   assert(sourceSet.has('decision_top_setup'), 'expected decision_top_setup candidate source');
   assert(sourceSet.has('live_structure'), 'expected live_structure candidate source');
+  const goodRow = (Array.isArray(liveCandidates.candidates) ? liveCandidates.candidates : []).find((row) => String(row?.strategyKey || '') === good.key);
+  const badRow = (Array.isArray(liveCandidates.candidates) ? liveCandidates.candidates : []).find((row) => String(row?.strategyKey || '') === bad.key);
+  assert(goodRow && badRow, 'expected both good and bad strategy rows in candidate list');
+  assert(typeof goodRow.structureQualitySummaryLine === 'string' && goodRow.structureQualitySummaryLine.length > 0, 'good row should expose structure quality summary');
+  assert(typeof badRow.structureQualitySummaryLine === 'string' && badRow.structureQualitySummaryLine.length > 0, 'bad row should expose structure quality summary');
+
+  const poorStructureCenter = buildCommandCenterPanels({
+    strategyLayers,
+    decision: {
+      signal: 'WAIT',
+      signalLabel: 'WAIT',
+      blockers: [],
+      topSetups: [{
+        setupId: 'orb_retest_long',
+        name: 'ORB Retest Long',
+        probability: 0.39,
+        expectedValueDollars: -35,
+        annualizedTrades: 120,
+      }],
+    },
+    latestSession: {
+      no_trade_reason: 'no_confirmation',
+    },
+    todayContext: {
+      nowEt: '2026-04-16 10:25',
+      sessionPhase: 'entry_window',
+      timeBucket: 'entry_window',
+      regime: 'ranging|extreme|wide',
+      trend: 'uptrend',
+      volatility: 'high',
+      orbRangeTicks: 160,
+    },
+    commandSnapshot: {
+      elite: {
+        winModel: { point: 56.1, confidencePct: 66 },
+      },
+    },
+  });
+  assert(poorStructureCenter.liveOpportunityCandidates && typeof poorStructureCenter.liveOpportunityCandidates === 'object', 'poor structure case candidates missing');
+  assert(poorStructureCenter.liveOpportunityCandidates.hasActionableCandidateNow === false, 'poor structure case should block actionable-now candidate');
+  assert(poorStructureCenter.liveOpportunityCandidates.topCandidateActionableNow === null, 'poor structure case should not expose actionable-now row');
+  assert(['poor_structure', 'no_clean_retest', 'weak_follow_through', 'blocked_context'].includes(String(poorStructureCenter.liveOpportunityCandidates.noActionableReasonCode || '')), 'poor structure case should expose sharp structure-based no-actionable reason');
+  assert(poorStructureCenter.shadowMockTradeDecision && poorStructureCenter.shadowMockTradeDecision.eligible === false, 'poor structure case should keep mock-trade ineligible');
 
   console.log('Jarvis live opportunity actionability ranking test passed.');
 }

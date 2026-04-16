@@ -872,13 +872,20 @@ function isCandidateActionableNow(candidate = {}, options = {}) {
   const phase = String(candidate?.sessionPhase || options?.sessionPhase || '').trim().toLowerCase();
   const status = String(candidate?.candidateStatus || '').trim().toLowerCase();
   const expectedValue = Number(candidate?.candidateExpectedValue);
+  const structureQualityScore = Number(candidate?.structureQualityScore);
+  const structureQualityLabel = String(candidate?.structureQualityLabel || '').trim().toLowerCase();
   const negativeEvTolerance = Number.isFinite(Number(options?.negativeEvTolerance))
     ? Number(options.negativeEvTolerance)
     : -15;
+  const minStructureQualityScore = Number.isFinite(Number(options?.minStructureQualityScore))
+    ? Number(options.minStructureQualityScore)
+    : 58;
   if (status === 'blocked') return false;
   if (status === 'await_next_session') return false;
   if (!isApprovedShadowActionWindow(phase)) return false;
   if (Number.isFinite(expectedValue) && expectedValue < negativeEvTolerance) return false;
+  if (structureQualityLabel === 'poor') return false;
+  if (Number.isFinite(structureQualityScore) && structureQualityScore < minStructureQualityScore) return false;
   return status === 'ready_now' || status === 'secondary_watch' || status === 'watch_trigger';
 }
 
@@ -952,6 +959,123 @@ function buildCandidateSummaryLine(row = {}, blockers = []) {
   return `${name}: blocked by ${blockerText}; avoid entry for now.`;
 }
 
+function evaluateStructureQuality({
+  candidateStatus = '',
+  candidateType = '',
+  candidateSource = '',
+  sessionPhase = '',
+  normalizedSignal = '',
+  blockers = [],
+  topSetupProbability = null,
+  candidateExpectedValue = null,
+  noTradeReason = '',
+  priceLocationVsOrb = 'unknown',
+} = {}) {
+  let score = 50;
+  const reasonCodes = [];
+  const pushReason = (code, delta = 0) => {
+    if (!code) return;
+    reasonCodes.push(String(code).trim().toLowerCase());
+    score += Number(delta || 0);
+  };
+
+  const status = String(candidateStatus || '').trim().toLowerCase();
+  const type = String(candidateType || '').trim().toLowerCase();
+  const source = String(candidateSource || '').trim().toLowerCase();
+  const phase = String(sessionPhase || '').trim().toLowerCase();
+  const signal = String(normalizedSignal || '').trim().toUpperCase();
+  const setupProb = Number(topSetupProbability);
+  const expectedValue = Number(candidateExpectedValue);
+  const blockerList = Array.isArray(blockers) ? blockers : [];
+  const noTrade = String(noTradeReason || '').trim().toLowerCase();
+  const location = String(priceLocationVsOrb || '').trim().toLowerCase();
+
+  if (status === 'ready_now') pushReason('ready_context', 12);
+  else if (status === 'secondary_watch') pushReason('secondary_watch_context', 5);
+  else if (status === 'watch_trigger') pushReason('watch_trigger_context', -5);
+  else if (status === 'await_next_session') pushReason('outside_action_window', -10);
+  else if (status === 'blocked') pushReason('blocked_context', -28);
+
+  if (signal === 'TRADE') pushReason('trade_signal_active', 7);
+  else if (signal === 'WAIT') pushReason('wait_signal', -5);
+  else if (signal === 'NO_TRADE') pushReason('no_trade_signal', -10);
+
+  if (blockerList.length > 0) {
+    const blockerPenalty = Math.min(24, blockerList.length * 8);
+    pushReason('blocked_context', -blockerPenalty);
+  }
+
+  if (Number.isFinite(setupProb)) {
+    if (setupProb >= 65) pushReason('strong_breakout_setup', 9);
+    else if (setupProb >= 55) pushReason('moderate_breakout_setup', 4);
+    else if (setupProb < 45) pushReason('weak_breakout_setup', -8);
+  }
+
+  if (Number.isFinite(expectedValue)) {
+    if (expectedValue >= 25) pushReason('strong_follow_through', 8);
+    else if (expectedValue >= 5) pushReason('moderate_follow_through', 4);
+    else if (expectedValue < -25) pushReason('weak_follow_through', -12);
+    else if (expectedValue < 0) pushReason('weak_follow_through', -7);
+  }
+
+  if (phase === 'entry_window' || phase === 'post_orb' || phase === 'orb_window' || phase === 'momentum_window') {
+    pushReason('in_action_window', 6);
+  } else if (phase === 'outside_window' || phase === 'late_window') {
+    pushReason('outside_action_window', -10);
+  } else if (phase === 'pre_open') {
+    pushReason('pre_open_uncertain', -6);
+  }
+
+  if (type.includes('blocked_context_watch')) pushReason('unclear_structure', -12);
+  if (type.includes('retest_continuation_watch')) pushReason('no_clean_retest', -8);
+  if (type.includes('failed_extension_reversal')) pushReason('reversal_structure_present', 4);
+
+  if (noTrade.includes('entry_after_max_hour')) pushReason('overextended_move', -9);
+  if (noTrade.includes('no_confirmation')) pushReason('no_clean_retest', -10);
+  if (noTrade.includes('no_follow_through')) pushReason('weak_follow_through', -10);
+  if (noTrade.includes('range_overextended')) pushReason('overextended_move', -12);
+
+  if (location === 'above_orb_high_extended' || location === 'below_orb_low_extended') {
+    if (type.includes('failed_extension_reversal')) pushReason('reversal_extension_setup', 5);
+    else pushReason('overextended_move', -8);
+  } else if (location === 'inside_orb_upper' || location === 'inside_orb_lower') {
+    pushReason('inside_orb_balance', 2);
+  }
+
+  if (source === 'live_structure') pushReason('live_structure_context', 3);
+  if (source === 'decision_top_setup') pushReason('decision_setup_context', 2);
+
+  const uniqueReasonCodes = [...new Set(reasonCodes)];
+  const structureQualityScore = round2(clampNumber(score, 1, 99));
+  const structureQualityLabel = structureQualityScore >= 72
+    ? 'clean'
+    : structureQualityScore >= 55
+      ? 'mixed'
+      : 'poor';
+
+  let structureQualitySummaryLine = 'Mixed structure: monitor trigger quality.';
+  if (structureQualityLabel === 'clean') {
+    structureQualitySummaryLine = 'Clean structure: breakout/retest context is aligned.';
+  } else if (structureQualityLabel === 'poor') {
+    if (uniqueReasonCodes.includes('blocked_context')) structureQualitySummaryLine = 'Poor structure: blocked context.';
+    else if (uniqueReasonCodes.includes('overextended_move')) structureQualitySummaryLine = 'Poor structure: overextended move.';
+    else if (uniqueReasonCodes.includes('no_clean_retest')) structureQualitySummaryLine = 'Poor structure: no clean retest.';
+    else if (uniqueReasonCodes.includes('weak_follow_through')) structureQualitySummaryLine = 'Poor structure: weak follow-through.';
+    else if (uniqueReasonCodes.includes('unclear_structure')) structureQualitySummaryLine = 'Poor structure: unclear setup.';
+    else structureQualitySummaryLine = 'Poor structure: avoid entry.';
+  } else {
+    if (uniqueReasonCodes.includes('no_clean_retest')) structureQualitySummaryLine = 'Mixed structure: retest is not clean yet.';
+    else if (uniqueReasonCodes.includes('weak_follow_through')) structureQualitySummaryLine = 'Mixed structure: follow-through is weak.';
+  }
+
+  return {
+    structureQualityScore,
+    structureQualityLabel,
+    structureQualityReasonCodes: uniqueReasonCodes,
+    structureQualitySummaryLine,
+  };
+}
+
 function buildLiveOpportunityCandidates(input = {}) {
   const strategyStack = Array.isArray(input?.strategyStack) ? input.strategyStack : [];
   const opportunityScoring = input?.opportunityScoring && typeof input.opportunityScoring === 'object'
@@ -982,6 +1106,7 @@ function buildLiveOpportunityCandidates(input = {}) {
     ? Number(topSetup.annualizedTrades)
     : null;
   const topSetupCandidateType = deriveTopSetupCandidateType(topSetup);
+  const normalizedSignal = normalizeDecisionSignal(signal);
 
   const opportunityByStrategyKey = new Map(
     (Array.isArray(opportunityScoring?.comparisonRows) ? opportunityScoring.comparisonRows : [])
@@ -1001,6 +1126,7 @@ function buildLiveOpportunityCandidates(input = {}) {
     orbHigh: Number.isFinite(orbHigh) ? orbHigh : null,
     orbLow: Number.isFinite(orbLow) ? orbLow : null,
   });
+  const latestNoTradeReason = String(latestSession?.no_trade_reason || '').trim().toLowerCase() || null;
 
   const buildCandidateRow = ({
     strategyKey = '',
@@ -1018,6 +1144,8 @@ function buildLiveOpportunityCandidates(input = {}) {
     scoreBias = 0,
     triggerStructureExtras = {},
     featureVectorExtras = {},
+    noTradeReasonOverride = latestNoTradeReason,
+    priceLocationOverride = priceLocationVsOrb,
   } = {}) => {
     const candidateStatus = classifyCandidateStatus({
       signal,
@@ -1085,7 +1213,7 @@ function buildLiveOpportunityCandidates(input = {}) {
     ));
 
     const triggerStructure = {
-      signal: normalizeDecisionSignal(signal),
+      signal: normalizedSignal,
       topSetupId: String(topSetup?.setupId || '').trim() || null,
       topSetupName: String(topSetup?.name || '').trim() || null,
       topSetupProbability: Number.isFinite(topSetupProbability) ? round2(topSetupProbability) : null,
@@ -1094,6 +1222,18 @@ function buildLiveOpportunityCandidates(input = {}) {
       blockers: blockers.slice(0, 3),
       ...triggerStructureExtras,
     };
+    const structureQuality = evaluateStructureQuality({
+      candidateStatus,
+      candidateType,
+      candidateSource,
+      sessionPhase: todayContext?.sessionPhase || '',
+      normalizedSignal,
+      blockers,
+      topSetupProbability,
+      candidateExpectedValue,
+      noTradeReason: noTradeReasonOverride,
+      priceLocationVsOrb: priceLocationOverride,
+    });
     const candidateKey = `${candidateSource}:${strategyKey || 'strategy'}:${candidateType}:${direction}:${timeBucket.id}`;
     const entryWindow = timeBucket.id === 'next_session_setup'
       ? 'Next session 09:30-11:00 ET'
@@ -1123,9 +1263,12 @@ function buildLiveOpportunityCandidates(input = {}) {
         ? round2(Number(opportunityRow.opportunityExpectedValue))
         : null,
       strategyTotalTrades: Number.isFinite(strategyTrades) ? Math.round(strategyTrades) : null,
+      structureQualityScore: structureQuality.structureQualityScore,
+      structureQualityLabel: structureQuality.structureQualityLabel,
+      structureQualityReasonCodes: structureQuality.structureQualityReasonCodes,
       ...featureVectorExtras,
     };
-    const candidateScoreSummaryLine = `Win ${candidateWinProb}% | EV $${candidateExpectedValue} | ${candidateCalibrationBand} calibration`;
+    const candidateScoreSummaryLine = `Win ${candidateWinProb}% | EV $${candidateExpectedValue} | ${candidateCalibrationBand} calibration | ${structureQuality.structureQualityLabel} structure`;
     const candidateRow = {
       candidateKey,
       strategyKey: strategyKey || null,
@@ -1144,6 +1287,10 @@ function buildLiveOpportunityCandidates(input = {}) {
       candidateWinProb,
       candidateExpectedValue,
       candidateCalibrationBand,
+      structureQualityScore: structureQuality.structureQualityScore,
+      structureQualityLabel: structureQuality.structureQualityLabel,
+      structureQualityReasonCodes: structureQuality.structureQualityReasonCodes,
+      structureQualitySummaryLine: structureQuality.structureQualitySummaryLine,
       candidateFeatureVector,
       candidateQualityPenalty: candidateQualityPenalty.penalty,
       candidateQualityReasonCodes: candidateQualityPenalty.reasonCodes,
@@ -1266,7 +1413,10 @@ function buildLiveOpportunityCandidates(input = {}) {
     .sort((a, b) => Number(b.candidateCompositeScore || 0) - Number(a.candidateCompositeScore || 0));
 
   const topCandidateOverall = candidates[0] || null;
-  const actionableCandidates = candidates.filter((candidate) => isCandidateActionableNow(candidate, { negativeEvTolerance: -15 }));
+  const actionableCandidates = candidates.filter((candidate) => isCandidateActionableNow(candidate, {
+    negativeEvTolerance: -15,
+    minStructureQualityScore: 58,
+  }));
   const topCandidateActionableNow = actionableCandidates[0] || null;
   const topCandidateKey = topCandidateOverall?.candidateKey || null;
   const topCandidateSummaryLine = topCandidateOverall?.candidateSummaryLine || null;
@@ -1294,11 +1444,39 @@ function buildLiveOpportunityCandidates(input = {}) {
     const qualityReasons = Array.isArray(topCandidateOverall?.candidateQualityReasonCodes)
       ? topCandidateOverall.candidateQualityReasonCodes.map((item) => String(item || '').trim().toLowerCase())
       : [];
+    const structureReasons = Array.isArray(topCandidateOverall?.structureQualityReasonCodes)
+      ? topCandidateOverall.structureQualityReasonCodes.map((item) => String(item || '').trim().toLowerCase())
+      : [];
+    const structureLabel = String(topCandidateOverall?.structureQualityLabel || '').trim().toLowerCase();
     const expectedValue = Number(topCandidateOverall?.candidateExpectedValue);
     if (status === 'blocked' || qualityReasons.includes('blocked_candidate')) {
       return {
         code: 'blocked_context',
         line: 'blocked context',
+      };
+    }
+    if (structureReasons.includes('overextended_move')) {
+      return {
+        code: 'overextended_move',
+        line: 'overextended move',
+      };
+    }
+    if (structureReasons.includes('no_clean_retest')) {
+      return {
+        code: 'no_clean_retest',
+        line: 'no clean retest',
+      };
+    }
+    if (structureReasons.includes('weak_follow_through')) {
+      return {
+        code: 'weak_follow_through',
+        line: 'weak follow-through',
+      };
+    }
+    if (structureLabel === 'poor' || structureReasons.includes('unclear_structure')) {
+      return {
+        code: 'poor_structure',
+        line: 'poor structure',
       };
     }
     if ((phase === 'outside_window' || phase === 'late_window' || status === 'await_next_session')
@@ -1488,6 +1666,10 @@ function buildShadowMockTradeDecision(input = {}) {
     if (topCandidateOverall && typeof topCandidateOverall === 'object') {
       const overallStatus = String(topCandidateOverall?.candidateStatus || '').trim().toLowerCase();
       const overallExpectedValue = Number(topCandidateOverall?.candidateExpectedValue);
+      const overallStructureLabel = String(topCandidateOverall?.structureQualityLabel || '').trim().toLowerCase();
+      const overallStructureReasons = Array.isArray(topCandidateOverall?.structureQualityReasonCodes)
+        ? topCandidateOverall.structureQualityReasonCodes.map((item) => String(item || '').trim().toLowerCase())
+        : [];
       if (overallStatus === 'blocked') {
         return {
           ...fallbackDecision,
@@ -1516,6 +1698,23 @@ function buildShadowMockTradeDecision(input = {}) {
           strategyKey: topCandidateOverall?.strategyKey || null,
           direction: topCandidateOverall?.direction || null,
           tradePlanSummaryLine: `Shadow mock-trade: EV $${round2(overallExpectedValue)} is below tolerance.`,
+        };
+      }
+      if (overallStructureLabel === 'poor' || overallStructureReasons.includes('no_clean_retest') || overallStructureReasons.includes('weak_follow_through') || overallStructureReasons.includes('overextended_move')) {
+        const reason = overallStructureReasons.includes('overextended_move')
+          ? 'overextended_move'
+          : overallStructureReasons.includes('no_clean_retest')
+            ? 'no_clean_retest'
+            : overallStructureReasons.includes('weak_follow_through')
+              ? 'weak_follow_through'
+              : 'poor_structure';
+        return {
+          ...fallbackDecision,
+          reason,
+          candidateKey: topCandidateOverall?.candidateKey || null,
+          strategyKey: topCandidateOverall?.strategyKey || null,
+          direction: topCandidateOverall?.direction || null,
+          tradePlanSummaryLine: `Shadow mock-trade: ${String(topCandidateOverall?.structureQualitySummaryLine || 'poor structure').trim().toLowerCase()}.`,
         };
       }
       return {

@@ -163,6 +163,10 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(Object.prototype.hasOwnProperty.call(row, 'candidateWinProb'), `${label} candidate row candidateWinProb missing`, { row });
     assert(Object.prototype.hasOwnProperty.call(row, 'candidateExpectedValue'), `${label} candidate row candidateExpectedValue missing`, { row });
     assert(typeof row.candidateCalibrationBand === 'string' && row.candidateCalibrationBand.length > 0, `${label} candidate row calibration missing`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'structureQualityScore'), `${label} candidate row structureQualityScore missing`, { row });
+    assert(typeof row.structureQualityLabel === 'string' && row.structureQualityLabel.length > 0, `${label} candidate row structureQualityLabel missing`, { row });
+    assert(Array.isArray(row.structureQualityReasonCodes), `${label} candidate row structureQualityReasonCodes missing`, { row });
+    assert(typeof row.structureQualitySummaryLine === 'string' && row.structureQualitySummaryLine.length > 0, `${label} candidate row structureQualitySummaryLine missing`, { row });
     assert(row.candidateFeatureVector && typeof row.candidateFeatureVector === 'object', `${label} candidate row feature vector missing`, { row });
     assert(typeof row.candidateScoreSummaryLine === 'string' && row.candidateScoreSummaryLine.length > 0, `${label} candidate row score summary missing`, { row });
     assert(typeof row.candidateSummaryLine === 'string' && row.candidateSummaryLine.length > 0, `${label} candidate row summary line missing`, { row });
