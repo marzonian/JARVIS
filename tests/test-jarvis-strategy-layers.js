@@ -192,8 +192,17 @@ function run() {
   assert(commandCenter.opportunityScoring && typeof commandCenter.opportunityScoring === 'object', 'commandCenter.opportunityScoring missing');
   assert(typeof commandCenter.opportunityScoreSummaryLine === 'string' && commandCenter.opportunityScoreSummaryLine.length > 0, 'commandCenter.opportunityScoreSummaryLine missing');
   assert(commandCenter.heuristicVsOpportunityComparison && typeof commandCenter.heuristicVsOpportunityComparison === 'object', 'commandCenter.heuristicVsOpportunityComparison missing');
+  assert(commandCenter.liveOpportunityCandidates && typeof commandCenter.liveOpportunityCandidates === 'object', 'commandCenter.liveOpportunityCandidates missing');
+  assert(Array.isArray(commandCenter.liveOpportunityCandidates.candidates) && commandCenter.liveOpportunityCandidates.candidates.length >= 2, 'live opportunity candidates missing rows');
+  assert(typeof commandCenter.liveOpportunityCandidates.topCandidateKey === 'string' && commandCenter.liveOpportunityCandidates.topCandidateKey.length > 0, 'live opportunity top candidate key missing');
+  assert(commandCenter.strategyCandidateOpportunityBridge && typeof commandCenter.strategyCandidateOpportunityBridge === 'object', 'strategyCandidateOpportunityBridge missing');
+  assert(['agree', 'disagree'].includes(String(commandCenter.strategyCandidateOpportunityBridge.status || '')), 'strategyCandidateOpportunityBridge status invalid');
   assert(commandCenter.todayRecommendation.opportunityScoring && typeof commandCenter.todayRecommendation.opportunityScoring === 'object', 'todayRecommendation.opportunityScoring mirror missing');
   assert(commandCenter.decisionBoard.opportunityScoring && typeof commandCenter.decisionBoard.opportunityScoring === 'object', 'decisionBoard.opportunityScoring mirror missing');
+  assert(commandCenter.todayRecommendation.liveOpportunityCandidates && typeof commandCenter.todayRecommendation.liveOpportunityCandidates === 'object', 'todayRecommendation liveOpportunityCandidates mirror missing');
+  assert(commandCenter.decisionBoard.liveOpportunityCandidates && typeof commandCenter.decisionBoard.liveOpportunityCandidates === 'object', 'decisionBoard liveOpportunityCandidates mirror missing');
+  assert(commandCenter.todayRecommendation.strategyCandidateOpportunityBridge && typeof commandCenter.todayRecommendation.strategyCandidateOpportunityBridge === 'object', 'todayRecommendation strategyCandidateOpportunityBridge mirror missing');
+  assert(commandCenter.decisionBoard.strategyCandidateOpportunityBridge && typeof commandCenter.decisionBoard.strategyCandidateOpportunityBridge === 'object', 'decisionBoard strategyCandidateOpportunityBridge mirror missing');
   assert(commandCenter.decisionBoard.topAction === commandCenter.topAction, 'decisionBoard.topAction should mirror root topAction');
   assert(typeof commandCenter.decisionBoard.topActionSummaryLine === 'string' && commandCenter.decisionBoard.topActionSummaryLine.includes('Action now:'), 'decisionBoard.topActionSummaryLine missing');
   assert(Array.isArray(commandCenter.decisionBoard.blockers), 'decisionBoard.blockers missing');

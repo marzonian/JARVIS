@@ -740,6 +740,273 @@ function buildOpportunityScoringLayer({ strategyStack = [], context = {}, recomm
   };
 }
 
+function deriveCandidateTimeBucket(sessionPhase = '', fallbackBucket = '') {
+  const phase = String(sessionPhase || '').trim().toLowerCase();
+  const fallback = String(fallbackBucket || '').trim().toLowerCase();
+  if (phase === 'pre_open') return { id: 'pre_open_watch', label: 'Pre-open watch' };
+  if (phase === 'orb_window' || phase === 'opening_window') return { id: 'orb_window', label: 'ORB confirmation window' };
+  if (phase === 'entry_window' || phase === 'post_orb' || phase === 'momentum_window') return { id: 'entry_window', label: 'Primary entry window' };
+  if (phase === 'outside_window' || phase === 'late_window') return { id: 'next_session_setup', label: 'Next-session setup window' };
+  if (fallback) return { id: fallback, label: humanizeUnderscoreText(fallback) };
+  return { id: 'context_pending', label: 'Context pending' };
+}
+
+function inferCandidateDirection(decision = {}, todayContext = {}, topSetup = null) {
+  const setupId = String(topSetup?.setupId || '').trim().toLowerCase();
+  const setupName = String(topSetup?.name || '').trim().toLowerCase();
+  const setupText = `${setupId} ${setupName}`;
+  if (setupText.includes('short') || setupText.includes('fade_down')) return 'short';
+  if (setupText.includes('long') || setupText.includes('fade_up')) return 'long';
+  const signalLine = String(decision?.signalLine || '').trim().toLowerCase();
+  if (signalLine.includes('short')) return 'short';
+  if (signalLine.includes('long')) return 'long';
+  const trend = String(todayContext?.trend || todayContext?.marketTrend || '').trim().toLowerCase();
+  if (trend.includes('down')) return 'short';
+  return 'long';
+}
+
+function deriveCandidateType(strategyLayer = '', strategyKey = '') {
+  const layer = String(strategyLayer || '').trim().toLowerCase();
+  const key = String(strategyKey || '').trim().toLowerCase();
+  if (layer === 'discovery') return 'alternative_discovery_setup';
+  if (layer === 'variant') {
+    if (key.includes('skip_monday') && key.includes('orb')) return 'orb_overlay_filter';
+    if (key.includes('nearest')) return 'orb_nearest_tp_overlay';
+    return 'orb_variant_overlay';
+  }
+  return 'orb_continuation_retest';
+}
+
+function classifyCandidateStatus({ signal = '', blockerCount = 0, sessionPhase = '', isRecommendedStrategy = false }) {
+  const normalizedSignal = normalizeDecisionSignal(signal);
+  const phase = String(sessionPhase || '').trim().toLowerCase();
+  if (normalizedSignal === 'NO_TRADE') return 'blocked';
+  if (phase === 'outside_window' || phase === 'late_window') return blockerCount > 0 ? 'blocked' : 'await_next_session';
+  if (phase === 'pre_open') return 'pre_open_watch';
+  if (normalizedSignal === 'WAIT') return blockerCount > 0 ? 'blocked' : 'watch_trigger';
+  if (normalizedSignal === 'TRADE' && blockerCount <= 0) return isRecommendedStrategy ? 'ready_now' : 'secondary_watch';
+  if (blockerCount > 0) return 'blocked';
+  return isRecommendedStrategy ? 'watch_trigger' : 'secondary_watch';
+}
+
+function statusToCandidateAdjustment(status = '') {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'ready_now') return { winProb: 1.8, ev: 7, score: 2.5 };
+  if (normalized === 'secondary_watch') return { winProb: 0.8, ev: 2, score: 1.2 };
+  if (normalized === 'watch_trigger') return { winProb: -0.8, ev: -4, score: -1.5 };
+  if (normalized === 'pre_open_watch') return { winProb: -1.2, ev: -6, score: -2.2 };
+  if (normalized === 'await_next_session') return { winProb: -1.5, ev: -8, score: -2.8 };
+  if (normalized === 'blocked') return { winProb: -4.5, ev: -28, score: -7 };
+  return { winProb: 0, ev: 0, score: 0 };
+}
+
+function buildCandidateSummaryLine(row = {}, blockers = []) {
+  const status = String(row?.candidateStatus || '').trim().toLowerCase();
+  const name = String(row?.strategyName || row?.strategyKey || 'Candidate').trim();
+  const direction = String(row?.direction || 'long').trim().toUpperCase();
+  const timeLabel = String(row?.timeBucketLabel || '').trim();
+  if (status === 'ready_now') return `${name}: ${direction} candidate is live in ${timeLabel}.`;
+  if (status === 'secondary_watch') return `${name}: ${direction} is secondary, monitor trigger quality in ${timeLabel}.`;
+  if (status === 'watch_trigger') return `${name}: ${direction} setup is watch-only until cleaner trigger prints.`;
+  if (status === 'pre_open_watch') return `${name}: pre-open watch; confirm ORB structure before entry.`;
+  if (status === 'await_next_session') return `${name}: queue ${direction} candidate for next session opening window.`;
+  const blockerText = blockers.length ? blockers.slice(0, 2).join(', ').toLowerCase() : 'active blockers';
+  return `${name}: blocked by ${blockerText}; avoid entry for now.`;
+}
+
+function buildLiveOpportunityCandidates(input = {}) {
+  const strategyStack = Array.isArray(input?.strategyStack) ? input.strategyStack : [];
+  const opportunityScoring = input?.opportunityScoring && typeof input.opportunityScoring === 'object'
+    ? input.opportunityScoring
+    : {};
+  const recommendationKey = String(input?.recommendationKey || '').trim();
+  const decision = input?.decision && typeof input.decision === 'object' ? input.decision : {};
+  const todayContext = input?.todayContext && typeof input.todayContext === 'object' ? input.todayContext : {};
+  const regimeLabel = String(input?.regimeLabel || todayContext?.regime || todayContext?.marketRegime || 'unknown').trim();
+  const projectedWinChance = Number(input?.projectedWinChance);
+  const blockers = Array.isArray(decision?.blockers)
+    ? decision.blockers.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const topSetup = Array.isArray(decision?.topSetups) && decision.topSetups.length
+    ? decision.topSetups[0]
+    : null;
+  const signal = decision?.signalLabel || decision?.signal || decision?.verdict || '';
+  const timeBucket = deriveCandidateTimeBucket(todayContext?.sessionPhase || '', todayContext?.timeBucket || '');
+  const topSetupProbabilityRaw = Number(topSetup?.probability);
+  const topSetupProbability = Number.isFinite(topSetupProbabilityRaw)
+    ? (topSetupProbabilityRaw <= 1 ? (topSetupProbabilityRaw * 100) : topSetupProbabilityRaw)
+    : null;
+  const topSetupExpectedValue = Number.isFinite(Number(topSetup?.expectedValueDollars))
+    ? Number(topSetup.expectedValueDollars)
+    : null;
+  const topSetupAnnualizedTrades = Number.isFinite(Number(topSetup?.annualizedTrades))
+    ? Number(topSetup.annualizedTrades)
+    : null;
+
+  const opportunityByStrategyKey = new Map(
+    (Array.isArray(opportunityScoring?.comparisonRows) ? opportunityScoring.comparisonRows : [])
+      .map((row) => [String(row?.key || '').trim(), row])
+  );
+  const candidates = strategyStack.map((entry) => {
+    const strategyKey = String(entry?.key || '').trim();
+    const strategyLayer = String(entry?.layer || '').trim().toLowerCase();
+    const strategyName = String(entry?.name || strategyKey || 'Strategy').trim();
+    const candidateType = deriveCandidateType(strategyLayer, strategyKey);
+    const direction = inferCandidateDirection(decision, todayContext, topSetup);
+    const isRecommendedStrategy = recommendationKey && strategyKey === recommendationKey;
+    const candidateStatus = classifyCandidateStatus({
+      signal,
+      blockerCount: blockers.length,
+      sessionPhase: todayContext?.sessionPhase || '',
+      isRecommendedStrategy,
+    });
+    const statusAdjustment = statusToCandidateAdjustment(candidateStatus);
+    const opportunityRow = opportunityByStrategyKey.get(strategyKey) || {};
+
+    const strategyWinProb = Number.isFinite(Number(opportunityRow?.opportunityWinProb))
+      ? Number(opportunityRow.opportunityWinProb)
+      : 50;
+    const strategyExpectedValue = Number.isFinite(Number(opportunityRow?.opportunityExpectedValue))
+      ? Number(opportunityRow.opportunityExpectedValue)
+      : 0;
+    const blendedSetupProb = Number.isFinite(topSetupProbability)
+      ? ((strategyWinProb * 0.72) + (topSetupProbability * 0.28))
+      : strategyWinProb;
+    let candidateWinProb = blendedSetupProb;
+    if (Number.isFinite(projectedWinChance)) {
+      candidateWinProb = (candidateWinProb * 0.84) + (projectedWinChance * 0.16);
+    }
+    candidateWinProb = round2(clampNumber(candidateWinProb + statusAdjustment.winProb, 1, 99));
+    const candidateExpectedValue = round2(
+      (strategyExpectedValue * 0.7)
+      + ((Number.isFinite(topSetupExpectedValue) ? topSetupExpectedValue : strategyExpectedValue) * 0.3)
+      + statusAdjustment.ev
+    );
+    const strategyTrades = Number(entry?.metrics?.totalTrades || 0);
+    const temporalSamples = Number(opportunityRow?.opportunityFeatureVector?.temporalContextSamples || 0);
+    const annualizedSample = Number.isFinite(topSetupAnnualizedTrades)
+      ? Math.max(0, Math.min(120, Math.round(topSetupAnnualizedTrades / 12)))
+      : 0;
+    const candidateCalibrationBand = classifyOpportunityCalibrationBand(strategyTrades + annualizedSample, temporalSamples);
+    const evNormalized = clampNumber(((candidateExpectedValue + 80) / 200) * 100, 0, 100);
+    const strategyScore = Number.isFinite(Number(opportunityRow?.opportunityCompositeScore))
+      ? Number(opportunityRow.opportunityCompositeScore)
+      : Number(opportunityRow?.heuristicCompositeScore || 0);
+    const candidateCompositeScore = round2(clampNumber(
+      (candidateWinProb * 0.6)
+      + (evNormalized * 0.3)
+      + (strategyScore * 0.1)
+      + statusAdjustment.score,
+      0,
+      100
+    ));
+    const triggerStructure = {
+      signal: normalizeDecisionSignal(signal),
+      topSetupId: String(topSetup?.setupId || '').trim() || null,
+      topSetupName: String(topSetup?.name || '').trim() || null,
+      topSetupProbability: Number.isFinite(topSetupProbability) ? round2(topSetupProbability) : null,
+      topSetupExpectedValue: Number.isFinite(topSetupExpectedValue) ? round2(topSetupExpectedValue) : null,
+      entryConditions: Array.isArray(decision?.entryConditions) ? decision.entryConditions.slice(0, 3) : [],
+      blockers: blockers.slice(0, 3),
+    };
+    const candidateKey = `${strategyKey || 'strategy'}:${candidateType}:${direction}:${timeBucket.id}`;
+    const entryWindow = timeBucket.id === 'next_session_setup'
+      ? 'Next session 09:30-11:00 ET'
+      : timeBucket.id === 'pre_open_watch'
+        ? 'Pre-open to ORB confirmation'
+        : '09:30-11:00 ET';
+    const candidateFeatureVector = {
+      strategyKey: strategyKey || null,
+      strategyLayer: strategyLayer || null,
+      candidateType,
+      direction,
+      sessionPhase: String(todayContext?.sessionPhase || '').trim().toLowerCase() || null,
+      timeBucket: timeBucket.id,
+      regime: regimeLabel || null,
+      trend: String(todayContext?.trend || todayContext?.marketTrend || '').trim() || null,
+      volatility: String(todayContext?.volatility || '').trim() || null,
+      orbRangeTicks: Number.isFinite(Number(todayContext?.orbRangeTicks)) ? Number(todayContext.orbRangeTicks) : null,
+      topSetupId: triggerStructure.topSetupId,
+      topSetupProbability: triggerStructure.topSetupProbability,
+      topSetupExpectedValue: triggerStructure.topSetupExpectedValue,
+      projectedWinChance: Number.isFinite(projectedWinChance) ? round2(projectedWinChance) : null,
+      strategyOpportunityWinProb: Number.isFinite(Number(opportunityRow?.opportunityWinProb))
+        ? round2(Number(opportunityRow.opportunityWinProb))
+        : null,
+      strategyOpportunityExpectedValue: Number.isFinite(Number(opportunityRow?.opportunityExpectedValue))
+        ? round2(Number(opportunityRow.opportunityExpectedValue))
+        : null,
+      strategyTotalTrades: Number.isFinite(strategyTrades) ? Math.round(strategyTrades) : null,
+    };
+    const candidateScoreSummaryLine = `Win ${candidateWinProb}% | EV $${candidateExpectedValue} | ${candidateCalibrationBand} calibration`;
+    const candidateRow = {
+      candidateKey,
+      strategyKey: strategyKey || null,
+      strategyName,
+      strategyLayer: strategyLayer || null,
+      candidateType,
+      direction,
+      entryWindow,
+      sessionPhase: String(todayContext?.sessionPhase || '').trim().toLowerCase() || null,
+      timeBucket: timeBucket.id,
+      timeBucketLabel: timeBucket.label,
+      regime: regimeLabel || null,
+      triggerStructure,
+      candidateStatus,
+      candidateWinProb,
+      candidateExpectedValue,
+      candidateCalibrationBand,
+      candidateFeatureVector,
+      candidateCompositeScore,
+      candidateScoreSummaryLine,
+      advisoryOnly: true,
+    };
+    candidateRow.candidateSummaryLine = buildCandidateSummaryLine(candidateRow, blockers);
+    return candidateRow;
+  }).sort((a, b) => Number(b.candidateCompositeScore || 0) - Number(a.candidateCompositeScore || 0));
+
+  const topCandidate = candidates[0] || null;
+  const topCandidateKey = topCandidate?.candidateKey || null;
+  const topCandidateSummaryLine = topCandidate?.candidateSummaryLine || null;
+  const summaryLine = topCandidate
+    ? `Top live candidate: ${topCandidate.strategyName} (${topCandidate.direction?.toUpperCase() || 'LONG'}) | ${topCandidate.candidateScoreSummaryLine}.`
+    : 'No live candidate opportunities available.';
+  return {
+    candidates,
+    topCandidateKey,
+    topCandidateSummaryLine,
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
+function buildStrategyCandidateBridge({ opportunityScoring = null, liveOpportunityCandidates = null } = {}) {
+  const strategyTopKey = String(opportunityScoring?.recommendedByOpportunityKey || '').trim() || null;
+  const strategyTopName = String(opportunityScoring?.recommendedByOpportunityName || '').trim() || null;
+  const topCandidate = Array.isArray(liveOpportunityCandidates?.candidates)
+    ? liveOpportunityCandidates.candidates[0]
+    : null;
+  const candidateTopKey = String(topCandidate?.candidateKey || '').trim() || null;
+  const candidateTopStrategyKey = String(topCandidate?.strategyKey || '').trim() || null;
+  const agreement = Boolean(strategyTopKey && candidateTopStrategyKey && strategyTopKey === candidateTopStrategyKey);
+  const status = agreement ? 'agree' : 'disagree';
+  const summaryLine = strategyTopKey && candidateTopStrategyKey
+    ? (agreement
+      ? `Strategy and candidate scorers align on ${strategyTopName || strategyTopKey}.`
+      : `Strategy scorer favors ${strategyTopName || strategyTopKey}; live candidate scorer favors ${topCandidate?.strategyName || candidateTopStrategyKey}.`)
+    : 'Strategy-vs-candidate comparison unavailable.';
+  return {
+    strategyTopKey,
+    strategyTopName: strategyTopName || null,
+    candidateTopKey,
+    candidateTopStrategyKey: candidateTopStrategyKey || null,
+    agreement,
+    status,
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
 function chooseRecommendedStrategy({ original, bestVariant, bestDiscovery, context = {} }) {
   const candidates = [original, bestVariant, bestDiscovery].filter(Boolean).map((entry) => ({
     ...entry,
@@ -2046,6 +2313,19 @@ function buildCommandCenterPanels(input = {}) {
       historicalContext: buildHistoricalResemblance(bestAlternative.temporalContext || null),
     } : null,
   ].filter(Boolean);
+  const liveOpportunityCandidates = buildLiveOpportunityCandidates({
+    strategyStack: stack,
+    opportunityScoring,
+    recommendationKey,
+    decision,
+    todayContext,
+    regimeLabel,
+    projectedWinChance,
+  });
+  const strategyCandidateOpportunityBridge = buildStrategyCandidateBridge({
+    opportunityScoring,
+    liveOpportunityCandidates,
+  });
 
   const mechanicsInsight = (() => {
     if (!mechanicsResearchSummary || !Array.isArray(mechanicsResearchSummary.mechanicsVariantTable)
@@ -2234,6 +2514,11 @@ function buildCommandCenterPanels(input = {}) {
   todayRecommendation.heuristicVsOpportunityComparison = heuristicVsOpportunityComparison
     ? cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison)
     : null;
+  todayRecommendation.liveOpportunityCandidates = cloneData(liveOpportunityCandidates, liveOpportunityCandidates);
+  todayRecommendation.strategyCandidateOpportunityBridge = cloneData(
+    strategyCandidateOpportunityBridge,
+    strategyCandidateOpportunityBridge
+  );
   const decisionBoard = buildDecisionBoard({
     originalPlan,
     bestAlternative,
@@ -2264,6 +2549,11 @@ function buildCommandCenterPanels(input = {}) {
   decisionBoard.heuristicVsOpportunityComparison = heuristicVsOpportunityComparison
     ? cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison)
     : null;
+  decisionBoard.liveOpportunityCandidates = cloneData(liveOpportunityCandidates, liveOpportunityCandidates);
+  decisionBoard.strategyCandidateOpportunityBridge = cloneData(
+    strategyCandidateOpportunityBridge,
+    strategyCandidateOpportunityBridge
+  );
 
   return {
     layout: {
@@ -2301,6 +2591,11 @@ function buildCommandCenterPanels(input = {}) {
     heuristicVsOpportunityComparison: heuristicVsOpportunityComparison
       ? cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison)
       : null,
+    liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
+    strategyCandidateOpportunityBridge: cloneData(
+      strategyCandidateOpportunityBridge,
+      strategyCandidateOpportunityBridge
+    ),
     assistantDecisionBrief,
     assistantDecisionBriefText: assistantDecisionBrief.assistantText,
     recentAggressiveMissSentinel,

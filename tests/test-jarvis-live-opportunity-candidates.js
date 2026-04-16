@@ -1,0 +1,110 @@
+#!/usr/bin/env node
+/* eslint-disable no-console */
+const assert = require('assert');
+const {
+  buildStrategyLayerSnapshot,
+  buildCommandCenterPanels,
+} = require('../server/jarvis-core/strategy-layers');
+
+function candle(date, time, open, high, low, close, volume = 1000) {
+  return { timestamp: `${date} ${time}`, time, open, high, low, close, volume };
+}
+
+function buildSession(date) {
+  return [
+    candle(date, '09:30', 22100, 22122, 22096, 22114),
+    candle(date, '09:35', 22114, 22128, 22108, 22124),
+    candle(date, '09:40', 22124, 22135, 22110, 22118),
+    candle(date, '09:45', 22118, 22133, 22114, 22130),
+    candle(date, '09:50', 22130, 22142, 22120, 22136),
+    candle(date, '09:55', 22136, 22149, 22129, 22144),
+    candle(date, '10:00', 22144, 22154, 22135, 22140),
+    candle(date, '10:05', 22140, 22155, 22133, 22150),
+    candle(date, '10:10', 22150, 22166, 22145, 22158),
+    candle(date, '10:15', 22158, 22174, 22152, 22166),
+    candle(date, '10:20', 22166, 22182, 22160, 22174),
+    candle(date, '10:25', 22174, 22190, 22169, 22183),
+    candle(date, '10:30', 22183, 22200, 22177, 22194),
+    candle(date, '10:35', 22194, 22212, 22188, 22205),
+  ];
+}
+
+function run() {
+  const sessions = {
+    '2026-04-10': buildSession('2026-04-10'),
+    '2026-04-13': buildSession('2026-04-13'),
+    '2026-04-14': buildSession('2026-04-14'),
+    '2026-04-15': buildSession('2026-04-15'),
+    '2026-04-16': buildSession('2026-04-16'),
+  };
+  const strategyLayers = buildStrategyLayerSnapshot(sessions, {
+    includeDiscovery: false,
+    context: {
+      nowEt: '2026-04-16 14:35',
+      sessionPhase: 'outside_window',
+      regime: 'ranging|extreme|wide',
+      trend: 'uptrend',
+      volatility: 'high',
+      orbRangeTicks: 182,
+    },
+  });
+  const commandCenter = buildCommandCenterPanels({
+    strategyLayers,
+    decision: {
+      signal: 'WAIT',
+      signalLabel: 'WAIT',
+      blockers: [],
+      entryConditions: ['Need clean retest and re-break confirmation.'],
+      topSetups: [
+        {
+          setupId: 'orb_retest_long',
+          name: 'ORB Retest Long',
+          probability: 0.61,
+          expectedValueDollars: 52.5,
+          annualizedTrades: 188,
+        },
+      ],
+    },
+    latestSession: { orb: { high: 22135, low: 22095, range_ticks: 160 } },
+    commandSnapshot: {
+      elite: {
+        winModel: { point: 57.2, confidencePct: 68 },
+      },
+    },
+    todayContext: {
+      nowEt: '2026-04-16 14:35',
+      sessionPhase: 'outside_window',
+      regime: 'ranging|extreme|wide',
+      trend: 'uptrend',
+      volatility: 'high',
+      orbRangeTicks: 182,
+      dayName: 'Thursday',
+      timeBucket: 'late_window',
+    },
+  });
+
+  assert(commandCenter.liveOpportunityCandidates && typeof commandCenter.liveOpportunityCandidates === 'object', 'liveOpportunityCandidates missing');
+  assert(Array.isArray(commandCenter.liveOpportunityCandidates.candidates), 'liveOpportunityCandidates.candidates missing');
+  assert(commandCenter.liveOpportunityCandidates.candidates.length >= 2, 'liveOpportunityCandidates should include rows for visible strategies');
+  assert(typeof commandCenter.liveOpportunityCandidates.topCandidateKey === 'string' && commandCenter.liveOpportunityCandidates.topCandidateKey.length > 0, 'topCandidateKey missing');
+  assert(typeof commandCenter.liveOpportunityCandidates.summaryLine === 'string' && commandCenter.liveOpportunityCandidates.summaryLine.length > 0, 'liveOpportunityCandidates summaryLine missing');
+
+  const topCandidate = commandCenter.liveOpportunityCandidates.candidates[0];
+  assert(topCandidate && typeof topCandidate === 'object', 'top candidate missing');
+  assert(topCandidate.timeBucket === 'next_session_setup', 'outside_window should map to next_session_setup instead of stale late_window');
+  assert(typeof topCandidate.candidateSummaryLine === 'string' && topCandidate.candidateSummaryLine.length > 0, 'candidateSummaryLine missing');
+  assert(Object.prototype.hasOwnProperty.call(topCandidate, 'candidateWinProb'), 'candidateWinProb missing');
+  assert(Object.prototype.hasOwnProperty.call(topCandidate, 'candidateExpectedValue'), 'candidateExpectedValue missing');
+  assert(typeof topCandidate.candidateCalibrationBand === 'string' && topCandidate.candidateCalibrationBand.length > 0, 'candidateCalibrationBand missing');
+  assert(topCandidate.candidateFeatureVector && typeof topCandidate.candidateFeatureVector === 'object', 'candidateFeatureVector missing');
+  assert(typeof topCandidate.candidateScoreSummaryLine === 'string' && topCandidate.candidateScoreSummaryLine.length > 0, 'candidateScoreSummaryLine missing');
+
+  assert(commandCenter.strategyCandidateOpportunityBridge && typeof commandCenter.strategyCandidateOpportunityBridge === 'object', 'strategyCandidateOpportunityBridge missing');
+  assert(['agree', 'disagree'].includes(String(commandCenter.strategyCandidateOpportunityBridge.status || '')), 'strategyCandidateOpportunityBridge status invalid');
+  assert(commandCenter.todayRecommendation.liveOpportunityCandidates && typeof commandCenter.todayRecommendation.liveOpportunityCandidates === 'object', 'todayRecommendation mirror missing liveOpportunityCandidates');
+  assert(commandCenter.decisionBoard.liveOpportunityCandidates && typeof commandCenter.decisionBoard.liveOpportunityCandidates === 'object', 'decisionBoard mirror missing liveOpportunityCandidates');
+
+  console.log('Jarvis live opportunity candidates test passed.');
+}
+
+run();

@@ -57,6 +57,11 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(snapshot.opportunityScoring && typeof snapshot.opportunityScoring === 'object', `${label} opportunityScoring missing`, { snapshot });
   assert(typeof snapshot.opportunityScoreSummaryLine === 'string' && snapshot.opportunityScoreSummaryLine.length > 0, `${label} opportunityScoreSummaryLine missing`, { snapshot });
   assert(snapshot.heuristicVsOpportunityComparison && typeof snapshot.heuristicVsOpportunityComparison === 'object', `${label} heuristicVsOpportunityComparison missing`, { snapshot });
+  assert(snapshot.liveOpportunityCandidates && typeof snapshot.liveOpportunityCandidates === 'object', `${label} liveOpportunityCandidates missing`, { snapshot });
+  assert(Array.isArray(snapshot.liveOpportunityCandidates.candidates), `${label} liveOpportunityCandidates.candidates missing`, { snapshot });
+  assert(typeof snapshot.liveOpportunityCandidates.summaryLine === 'string' && snapshot.liveOpportunityCandidates.summaryLine.length > 0, `${label} liveOpportunityCandidates.summaryLine missing`, { snapshot });
+  assert(snapshot.strategyCandidateOpportunityBridge && typeof snapshot.strategyCandidateOpportunityBridge === 'object', `${label} strategyCandidateOpportunityBridge missing`, { snapshot });
+  assert(['agree', 'disagree'].includes(String(snapshot.strategyCandidateOpportunityBridge.status || '')), `${label} strategyCandidateOpportunityBridge status missing`, { snapshot });
   assert(snapshot.todayRecommendationMirror && typeof snapshot.todayRecommendationMirror === 'object', `${label} todayRecommendationMirror missing`, { snapshot });
   assert(snapshot.decisionBoardMirror && typeof snapshot.decisionBoardMirror === 'object', `${label} decisionBoardMirror missing`, { snapshot });
 
@@ -119,6 +124,30 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(Object.prototype.hasOwnProperty.call(row, 'opportunityCompositeScore'), `${label} opportunity row missing opportunity score`, { row });
     assert(row.heuristicVsOpportunityComparison && typeof row.heuristicVsOpportunityComparison === 'object', `${label} opportunity row missing comparison object`, { row });
   }
+
+  const candidateRows = Array.isArray(snapshot?.liveOpportunityCandidates?.candidates)
+    ? snapshot.liveOpportunityCandidates.candidates
+    : [];
+  assert(candidateRows.length >= 1, `${label} liveOpportunityCandidates rows missing`, { candidateRows });
+  for (const row of candidateRows) {
+    assert(typeof row.candidateKey === 'string' && row.candidateKey.length > 0, `${label} candidate row candidateKey missing`, { row });
+    assert(typeof row.strategyKey === 'string' && row.strategyKey.length > 0, `${label} candidate row strategyKey missing`, { row });
+    assert(typeof row.strategyLayer === 'string' && row.strategyLayer.length > 0, `${label} candidate row strategyLayer missing`, { row });
+    assert(typeof row.candidateType === 'string' && row.candidateType.length > 0, `${label} candidate row candidateType missing`, { row });
+    assert(typeof row.direction === 'string' && row.direction.length > 0, `${label} candidate row direction missing`, { row });
+    assert(typeof row.entryWindow === 'string' && row.entryWindow.length > 0, `${label} candidate row entryWindow missing`, { row });
+    assert(typeof row.sessionPhase === 'string' || row.sessionPhase === null, `${label} candidate row sessionPhase missing`, { row });
+    assert(typeof row.timeBucket === 'string' && row.timeBucket.length > 0, `${label} candidate row timeBucket missing`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'regime'), `${label} candidate row regime missing`, { row });
+    assert(row.triggerStructure && typeof row.triggerStructure === 'object', `${label} candidate row triggerStructure missing`, { row });
+    assert(typeof row.candidateStatus === 'string' && row.candidateStatus.length > 0, `${label} candidate row candidateStatus missing`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'candidateWinProb'), `${label} candidate row candidateWinProb missing`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'candidateExpectedValue'), `${label} candidate row candidateExpectedValue missing`, { row });
+    assert(typeof row.candidateCalibrationBand === 'string' && row.candidateCalibrationBand.length > 0, `${label} candidate row calibration missing`, { row });
+    assert(row.candidateFeatureVector && typeof row.candidateFeatureVector === 'object', `${label} candidate row feature vector missing`, { row });
+    assert(typeof row.candidateScoreSummaryLine === 'string' && row.candidateScoreSummaryLine.length > 0, `${label} candidate row score summary missing`, { row });
+    assert(typeof row.candidateSummaryLine === 'string' && row.candidateSummaryLine.length > 0, `${label} candidate row summary line missing`, { row });
+  }
 }
 
 (async () => {
@@ -168,6 +197,8 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.opportunityScoring && typeof center.opportunityScoring === 'object', 'command-center opportunityScoring root field missing', { center });
     assert(typeof center.opportunityScoreSummaryLine === 'string' && center.opportunityScoreSummaryLine.length > 0, 'command-center opportunityScoreSummaryLine root field missing', { center });
     assert(center.heuristicVsOpportunityComparison && typeof center.heuristicVsOpportunityComparison === 'object', 'command-center heuristicVsOpportunityComparison root field missing', { center });
+    assert(center.liveOpportunityCandidates && typeof center.liveOpportunityCandidates === 'object', 'command-center liveOpportunityCandidates root field missing', { center });
+    assert(center.strategyCandidateOpportunityBridge && typeof center.strategyCandidateOpportunityBridge === 'object', 'command-center strategyCandidateOpportunityBridge root field missing', { center });
     assert(center.todayRecommendation && typeof center.todayRecommendation === 'object', 'command-center todayRecommendation root mirror missing', { center });
     assert(center.decisionBoard && typeof center.decisionBoard === 'object', 'command-center decisionBoard root mirror missing', { center });
 
@@ -191,6 +222,10 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.commandCenter.decisionBoard.bestAlternative && typeof center.commandCenter.decisionBoard.bestAlternative === 'object', 'decisionBoard bestAlternative mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.opportunityScoring && typeof center.commandCenter.todayRecommendation.opportunityScoring === 'object', 'todayRecommendation opportunityScoring mirror missing', { center });
     assert(center.commandCenter.decisionBoard.opportunityScoring && typeof center.commandCenter.decisionBoard.opportunityScoring === 'object', 'decisionBoard opportunityScoring mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.liveOpportunityCandidates && typeof center.commandCenter.todayRecommendation.liveOpportunityCandidates === 'object', 'todayRecommendation liveOpportunityCandidates mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.liveOpportunityCandidates && typeof center.commandCenter.decisionBoard.liveOpportunityCandidates === 'object', 'decisionBoard liveOpportunityCandidates mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.strategyCandidateOpportunityBridge && typeof center.commandCenter.todayRecommendation.strategyCandidateOpportunityBridge === 'object', 'todayRecommendation strategyCandidateOpportunityBridge mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.strategyCandidateOpportunityBridge && typeof center.commandCenter.decisionBoard.strategyCandidateOpportunityBridge === 'object', 'decisionBoard strategyCandidateOpportunityBridge mirror missing', { center });
     pass('command-center strategy-layer snapshot and mirrors');
 
     const perf = await getJson(server.baseUrl, '/api/jarvis/recommendation/performance?force=1');
@@ -216,6 +251,8 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(perf.recommendationPerformance.opportunityScoring && typeof perf.recommendationPerformance.opportunityScoring === 'object', 'recommendationPerformance.opportunityScoring missing', { perf });
     assert(typeof perf.recommendationPerformance.opportunityScoreSummaryLine === 'string' && perf.recommendationPerformance.opportunityScoreSummaryLine.length > 0, 'recommendationPerformance.opportunityScoreSummaryLine missing', { perf });
     assert(perf.recommendationPerformance.heuristicVsOpportunityComparison && typeof perf.recommendationPerformance.heuristicVsOpportunityComparison === 'object', 'recommendationPerformance.heuristicVsOpportunityComparison missing', { perf });
+    assert(perf.recommendationPerformance.liveOpportunityCandidates && typeof perf.recommendationPerformance.liveOpportunityCandidates === 'object', 'recommendationPerformance.liveOpportunityCandidates missing', { perf });
+    assert(perf.recommendationPerformance.strategyCandidateOpportunityBridge && typeof perf.recommendationPerformance.strategyCandidateOpportunityBridge === 'object', 'recommendationPerformance.strategyCandidateOpportunityBridge missing', { perf });
     pass('recommendation/performance strategy-layer snapshot contract');
 
     const stackRows = Array.isArray(center.strategyLayerSnapshot?.strategyStack)

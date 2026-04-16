@@ -34831,6 +34831,26 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
   const heuristicVsOpportunityComparison = heuristicVsOpportunityComparisonSource
     ? cloneData(heuristicVsOpportunityComparisonSource, heuristicVsOpportunityComparisonSource)
     : null;
+  const liveOpportunityCandidatesSource = (
+    commandCenter?.liveOpportunityCandidates && typeof commandCenter.liveOpportunityCandidates === 'object'
+      ? commandCenter.liveOpportunityCandidates
+      : (strategyLayers?.liveOpportunityCandidates && typeof strategyLayers.liveOpportunityCandidates === 'object'
+        ? strategyLayers.liveOpportunityCandidates
+        : null)
+  );
+  const liveOpportunityCandidates = liveOpportunityCandidatesSource
+    ? cloneData(liveOpportunityCandidatesSource, liveOpportunityCandidatesSource)
+    : null;
+  const strategyCandidateOpportunityBridgeSource = (
+    commandCenter?.strategyCandidateOpportunityBridge && typeof commandCenter.strategyCandidateOpportunityBridge === 'object'
+      ? commandCenter.strategyCandidateOpportunityBridge
+      : (strategyLayers?.strategyCandidateOpportunityBridge && typeof strategyLayers.strategyCandidateOpportunityBridge === 'object'
+        ? strategyLayers.strategyCandidateOpportunityBridge
+        : null)
+  );
+  const strategyCandidateOpportunityBridge = strategyCandidateOpportunityBridgeSource
+    ? cloneData(strategyCandidateOpportunityBridgeSource, strategyCandidateOpportunityBridgeSource)
+    : null;
 
   return {
     snapshotVersion: 'v1',
@@ -34855,6 +34875,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     opportunityScoring,
     opportunityScoreSummaryLine: opportunityScoreSummaryLine || null,
     heuristicVsOpportunityComparison,
+    liveOpportunityCandidates,
+    strategyCandidateOpportunityBridge,
     todayRecommendationMirror: {
       originalPlan: cloneData(originalPlanCopy, originalPlanCopy),
       bestVariant: cloneData(bestVariantCopy, bestVariantCopy),
@@ -34876,6 +34898,11 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       opportunityScoring: cloneData(opportunityScoring, opportunityScoring),
       opportunityScoreSummaryLine: opportunityScoreSummaryLine || null,
       heuristicVsOpportunityComparison: cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison),
+      liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
+      strategyCandidateOpportunityBridge: cloneData(
+        strategyCandidateOpportunityBridge,
+        strategyCandidateOpportunityBridge
+      ),
       advisoryOnly: true,
     },
     decisionBoardMirror: {
@@ -34899,6 +34926,11 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       opportunityScoring: cloneData(opportunityScoring, opportunityScoring),
       opportunityScoreSummaryLine: opportunityScoreSummaryLine || null,
       heuristicVsOpportunityComparison: cloneData(heuristicVsOpportunityComparison, heuristicVsOpportunityComparison),
+      liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
+      strategyCandidateOpportunityBridge: cloneData(
+        strategyCandidateOpportunityBridge,
+        strategyCandidateOpportunityBridge
+      ),
       advisoryOnly: true,
     },
     summaryLine: `Strategy snapshot: ${recommendationBasis.recommendedStrategyName || 'Original Trading Plan'} (${recommendationBasis.basisLabel || basisType}) | stance ${executionStanceCopy.stance}.`,
@@ -34933,6 +34965,14 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
   commandCenter.heuristicVsOpportunityComparison = cloneData(
     strategyLayerSnapshot.heuristicVsOpportunityComparison,
     strategyLayerSnapshot.heuristicVsOpportunityComparison
+  );
+  commandCenter.liveOpportunityCandidates = cloneData(
+    strategyLayerSnapshot.liveOpportunityCandidates,
+    strategyLayerSnapshot.liveOpportunityCandidates
+  );
+  commandCenter.strategyCandidateOpportunityBridge = cloneData(
+    strategyLayerSnapshot.strategyCandidateOpportunityBridge,
+    strategyLayerSnapshot.strategyCandidateOpportunityBridge
   );
 
   if (commandCenter.todayRecommendation && typeof commandCenter.todayRecommendation === 'object') {
@@ -35021,6 +35061,14 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
         strategyLayerSnapshot.heuristicVsOpportunityComparison,
         strategyLayerSnapshot.heuristicVsOpportunityComparison
       );
+      recommendationPerformance.liveOpportunityCandidates = cloneData(
+        strategyLayerSnapshot.liveOpportunityCandidates,
+        strategyLayerSnapshot.liveOpportunityCandidates
+      );
+      recommendationPerformance.strategyCandidateOpportunityBridge = cloneData(
+        strategyLayerSnapshot.strategyCandidateOpportunityBridge,
+        strategyLayerSnapshot.strategyCandidateOpportunityBridge
+      );
       recommendationPerformance.todayRecommendation = cloneData(
         strategyLayerSnapshot.todayRecommendationMirror,
         strategyLayerSnapshot.todayRecommendationMirror
@@ -35057,6 +35105,8 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       opportunityScoring: strategyLayerSnapshot?.opportunityScoring || null,
       opportunityScoreSummaryLine: strategyLayerSnapshot?.opportunityScoreSummaryLine || null,
       heuristicVsOpportunityComparison: strategyLayerSnapshot?.heuristicVsOpportunityComparison || null,
+      liveOpportunityCandidates: strategyLayerSnapshot?.liveOpportunityCandidates || null,
+      strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       generatedAt: performance?.generatedAt || new Date().toISOString(),
@@ -35621,6 +35671,8 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       opportunityScoring: strategyLayerSnapshot?.opportunityScoring || null,
       opportunityScoreSummaryLine: strategyLayerSnapshot?.opportunityScoreSummaryLine || null,
       heuristicVsOpportunityComparison: strategyLayerSnapshot?.heuristicVsOpportunityComparison || null,
+      liveOpportunityCandidates: strategyLayerSnapshot?.liveOpportunityCandidates || null,
+      strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       strategyTracking: payload.strategyTracking || null,
