@@ -72,6 +72,12 @@ const LIVE_CANDIDATE_STATE_MONITOR_STATE = {
 };
 const LIVE_CANDIDATE_STATE_HISTORY_LIMIT = 24;
 const LIVE_CANDIDATE_TRANSITION_HISTORY_LIMIT = 80;
+const LIVE_CANDIDATE_STATE_OBSERVATION_TABLE = 'jarvis_live_candidate_state_observations';
+const LIVE_CANDIDATE_STATE_TRANSITION_TABLE = 'jarvis_live_candidate_state_transitions';
+const LIVE_CANDIDATE_DURABLE_OBSERVATION_LIMIT_PER_CANDIDATE = 120;
+const LIVE_CANDIDATE_DURABLE_OBSERVATION_LIMIT_GLOBAL = 5000;
+const LIVE_CANDIDATE_DURABLE_TRANSITION_LIMIT_GLOBAL = 2000;
+const LIVE_CANDIDATE_DB_STATEMENT_CACHE = new WeakMap();
 
 function clampNumber(value, min, max) {
   const n = Number(value);
@@ -1543,6 +1549,293 @@ function buildLiveOpportunityCandidates(input = {}) {
   };
 }
 
+function toSessionDateFromNowEt(nowEt = '') {
+  const parsed = parseEtDateTime(nowEt);
+  if (parsed?.date) return parsed.date;
+  const fallback = toDateIso(nowEt);
+  return fallback || '';
+}
+
+function normalizeObservationValue(value = null) {
+  if (!Number.isFinite(Number(value))) return null;
+  return round2(Number(value));
+}
+
+function normalizeLiveCandidateObservation(candidate = {}, options = {}) {
+  const nowEt = String(options.nowEt || '').trim() || new Date().toISOString();
+  const insideApprovedActionWindow = options.insideApprovedActionWindow === true;
+  const sessionDate = String(options.sessionDate || toSessionDateFromNowEt(nowEt)).trim() || null;
+  const actionableNow = isCandidateActionableNow(candidate, {
+    negativeEvTolerance: -15,
+    minStructureQualityScore: 58,
+  });
+  return {
+    timestamp: nowEt,
+    sessionDate,
+    candidateKey: String(candidate?.candidateKey || '').trim() || null,
+    strategyKey: String(candidate?.strategyKey || '').trim() || null,
+    candidateSource: String(candidate?.candidateSource || '').trim().toLowerCase() || null,
+    candidateStatus: String(candidate?.candidateStatus || '').trim().toLowerCase() || null,
+    structureQualityScore: normalizeObservationValue(candidate?.structureQualityScore),
+    structureQualityLabel: String(candidate?.structureQualityLabel || '').trim().toLowerCase() || null,
+    candidateWinProb: normalizeObservationValue(candidate?.candidateWinProb),
+    candidateExpectedValue: normalizeObservationValue(candidate?.candidateExpectedValue),
+    insideApprovedActionWindow,
+    actionableNow,
+  };
+}
+
+function observationStateEquals(left = null, right = null) {
+  if (!left || !right) return false;
+  return String(left.candidateStatus || '') === String(right.candidateStatus || '')
+    && normalizeObservationValue(left.structureQualityScore) === normalizeObservationValue(right.structureQualityScore)
+    && String(left.structureQualityLabel || '') === String(right.structureQualityLabel || '')
+    && normalizeObservationValue(left.candidateWinProb) === normalizeObservationValue(right.candidateWinProb)
+    && normalizeObservationValue(left.candidateExpectedValue) === normalizeObservationValue(right.candidateExpectedValue)
+    && Boolean(left.insideApprovedActionWindow) === Boolean(right.insideApprovedActionWindow)
+    && Boolean(left.actionableNow) === Boolean(right.actionableNow);
+}
+
+function classifyCandidateTransitionType(options = {}) {
+  if (options.hasPreviousState !== true) return 'first_observation';
+  if (options.currentActionable === true && options.previousActionable === false) return 'crossed_into_actionable';
+  if (options.currentActionable === false && options.previousActionable === true) return 'dropped_out_of_actionable';
+  if (String(options.currentStatus || '') !== String(options.previousStatus || '')) return 'status_changed';
+  if (options.structureDirection === 'improved') return 'structure_improved';
+  if (options.structureDirection === 'worsened') return 'structure_worsened';
+  return 'unchanged';
+}
+
+function buildTransitionSummaryLine(transitionType, candidateLabel, previousStatus, currentStatus) {
+  const label = String(candidateLabel || 'Candidate').trim() || 'Candidate';
+  if (transitionType === 'crossed_into_actionable') return `${label} crossed into actionable structure.`;
+  if (transitionType === 'dropped_out_of_actionable') return `${label} dropped out of actionable structure.`;
+  if (transitionType === 'status_changed') {
+    return `${label} status changed from ${String(previousStatus || 'unknown').trim() || 'unknown'} to ${String(currentStatus || 'unknown').trim() || 'unknown'}.`;
+  }
+  if (transitionType === 'structure_improved') return `${label} structure improved.`;
+  if (transitionType === 'structure_worsened') return `${label} structure worsened.`;
+  if (transitionType === 'first_observation') return `${label} baseline state captured.`;
+  return `${label} structure unchanged.`;
+}
+
+function ensureLiveCandidateStateHistoryTables(db) {
+  if (!db || typeof db.exec !== 'function') return false;
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      observed_at TEXT NOT NULL,
+      session_date TEXT NOT NULL,
+      candidate_key TEXT NOT NULL,
+      strategy_key TEXT,
+      candidate_source TEXT,
+      candidate_status TEXT,
+      structure_quality_score REAL,
+      structure_quality_label TEXT,
+      candidate_win_prob REAL,
+      candidate_expected_value REAL,
+      inside_approved_action_window INTEGER NOT NULL DEFAULT 0,
+      actionable_now INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_live_candidate_obs_date_key ON ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}(session_date, candidate_key, observed_at DESC, id DESC);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_live_candidate_obs_observed_at ON ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}(observed_at DESC, id DESC);`);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transition_at TEXT NOT NULL,
+      session_date TEXT NOT NULL,
+      candidate_key TEXT NOT NULL,
+      previous_status TEXT,
+      current_status TEXT,
+      previous_structure_quality_score REAL,
+      current_structure_quality_score REAL,
+      previous_actionable INTEGER NOT NULL DEFAULT 0,
+      current_actionable INTEGER NOT NULL DEFAULT 0,
+      transition_type TEXT NOT NULL,
+      transition_summary_line TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_live_candidate_transition_date_key ON ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}(session_date, candidate_key, transition_at DESC, id DESC);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_live_candidate_transition_time ON ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}(transition_at DESC, id DESC);`);
+  return true;
+}
+
+function getLiveCandidateStateDbStatements(db = null) {
+  if (!db || typeof db.prepare !== 'function') return null;
+  if (LIVE_CANDIDATE_DB_STATEMENT_CACHE.has(db)) {
+    return LIVE_CANDIDATE_DB_STATEMENT_CACHE.get(db);
+  }
+  if (!ensureLiveCandidateStateHistoryTables(db)) return null;
+  const statements = {
+    readLatestObservationByCandidate: db.prepare(`
+      SELECT observed_at, session_date, candidate_key, strategy_key, candidate_source, candidate_status,
+             structure_quality_score, structure_quality_label, candidate_win_prob, candidate_expected_value,
+             inside_approved_action_window, actionable_now
+      FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+      WHERE session_date = ? AND candidate_key = ?
+      ORDER BY observed_at DESC, id DESC
+      LIMIT 1
+    `),
+    insertObservation: db.prepare(`
+      INSERT INTO ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE} (
+        observed_at, session_date, candidate_key, strategy_key, candidate_source, candidate_status,
+        structure_quality_score, structure_quality_label, candidate_win_prob, candidate_expected_value,
+        inside_approved_action_window, actionable_now
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `),
+    pruneObservationsByCandidate: db.prepare(`
+      DELETE FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+      WHERE session_date = ? AND candidate_key = ?
+        AND id NOT IN (
+          SELECT id FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+          WHERE session_date = ? AND candidate_key = ?
+          ORDER BY observed_at DESC, id DESC
+          LIMIT ?
+        )
+    `),
+    pruneObservationsGlobal: db.prepare(`
+      DELETE FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+      WHERE id NOT IN (
+        SELECT id FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+        ORDER BY observed_at DESC, id DESC
+        LIMIT ?
+      )
+    `),
+    readLatestTransitionByCandidate: db.prepare(`
+      SELECT transition_at, session_date, candidate_key, previous_status, current_status,
+             previous_structure_quality_score, current_structure_quality_score,
+             previous_actionable, current_actionable, transition_type, transition_summary_line
+      FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
+      WHERE session_date = ? AND candidate_key = ?
+      ORDER BY transition_at DESC, id DESC
+      LIMIT 1
+    `),
+    insertTransition: db.prepare(`
+      INSERT INTO ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE} (
+        transition_at, session_date, candidate_key, previous_status, current_status,
+        previous_structure_quality_score, current_structure_quality_score,
+        previous_actionable, current_actionable, transition_type, transition_summary_line
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `),
+    pruneTransitionsGlobal: db.prepare(`
+      DELETE FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
+      WHERE id NOT IN (
+        SELECT id FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
+        ORDER BY transition_at DESC, id DESC
+        LIMIT ?
+      )
+    `),
+    readRecentTransitionsByDate: db.prepare(`
+      SELECT transition_at, session_date, candidate_key, previous_status, current_status,
+             previous_structure_quality_score, current_structure_quality_score,
+             previous_actionable, current_actionable, transition_type, transition_summary_line
+      FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
+      WHERE session_date = ?
+      ORDER BY transition_at DESC, id DESC
+      LIMIT ?
+    `),
+    readRecentTransitionsGlobal: db.prepare(`
+      SELECT transition_at, session_date, candidate_key, previous_status, current_status,
+             previous_structure_quality_score, current_structure_quality_score,
+             previous_actionable, current_actionable, transition_type, transition_summary_line
+      FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
+      ORDER BY transition_at DESC, id DESC
+      LIMIT ?
+    `),
+    readRecentObservationsByDate: db.prepare(`
+      SELECT observed_at, session_date, candidate_key, strategy_key, candidate_source, candidate_status,
+             structure_quality_score, structure_quality_label, candidate_win_prob, candidate_expected_value,
+             inside_approved_action_window, actionable_now
+      FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+      WHERE session_date = ?
+      ORDER BY observed_at DESC, id DESC
+      LIMIT ?
+    `),
+    countObservationsByDate: db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+      WHERE session_date = ?
+    `),
+    countTransitionsByDate: db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
+      WHERE session_date = ?
+    `),
+  };
+  LIVE_CANDIDATE_DB_STATEMENT_CACHE.set(db, statements);
+  return statements;
+}
+
+function normalizeDurableObservationRow(row = null) {
+  if (!row || typeof row !== 'object') return null;
+  return {
+    timestamp: String(row.observed_at || '').trim() || null,
+    sessionDate: String(row.session_date || '').trim() || null,
+    candidateKey: String(row.candidate_key || '').trim() || null,
+    strategyKey: String(row.strategy_key || '').trim() || null,
+    candidateSource: String(row.candidate_source || '').trim().toLowerCase() || null,
+    candidateStatus: String(row.candidate_status || '').trim().toLowerCase() || null,
+    structureQualityScore: normalizeObservationValue(row.structure_quality_score),
+    structureQualityLabel: String(row.structure_quality_label || '').trim().toLowerCase() || null,
+    candidateWinProb: normalizeObservationValue(row.candidate_win_prob),
+    candidateExpectedValue: normalizeObservationValue(row.candidate_expected_value),
+    insideApprovedActionWindow: Number(row.inside_approved_action_window) === 1,
+    actionableNow: Number(row.actionable_now) === 1,
+  };
+}
+
+function normalizeDurableTransitionRow(row = null) {
+  if (!row || typeof row !== 'object') return null;
+  return {
+    timestamp: String(row.transition_at || '').trim() || null,
+    sessionDate: String(row.session_date || '').trim() || null,
+    candidateKey: String(row.candidate_key || '').trim() || null,
+    previousStatus: String(row.previous_status || '').trim().toLowerCase() || null,
+    currentStatus: String(row.current_status || '').trim().toLowerCase() || null,
+    previousStructureQualityScore: normalizeObservationValue(row.previous_structure_quality_score),
+    currentStructureQualityScore: normalizeObservationValue(row.current_structure_quality_score),
+    previousActionable: Number(row.previous_actionable) === 1,
+    currentActionable: Number(row.current_actionable) === 1,
+    transitionType: String(row.transition_type || '').trim().toLowerCase() || null,
+    transitionSummaryLine: String(row.transition_summary_line || '').trim() || null,
+  };
+}
+
+function isSameTransitionState(left = null, right = null) {
+  if (!left || !right) return false;
+  return String(left.candidateKey || '') === String(right.candidateKey || '')
+    && String(left.previousStatus || '') === String(right.previousStatus || '')
+    && String(left.currentStatus || '') === String(right.currentStatus || '')
+    && normalizeObservationValue(left.previousStructureQualityScore) === normalizeObservationValue(right.previousStructureQualityScore)
+    && normalizeObservationValue(left.currentStructureQualityScore) === normalizeObservationValue(right.currentStructureQualityScore)
+    && Boolean(left.previousActionable) === Boolean(right.previousActionable)
+    && Boolean(left.currentActionable) === Boolean(right.currentActionable)
+    && String(left.transitionType || '') === String(right.transitionType || '')
+    && String(left.timestamp || '') === String(right.timestamp || '');
+}
+
+function buildInMemoryObservationSample(monitorState = {}, limit = 10) {
+  const rows = [];
+  const history = monitorState?.observationHistoryByCandidate && typeof monitorState.observationHistoryByCandidate === 'object'
+    ? monitorState.observationHistoryByCandidate
+    : {};
+  Object.keys(history).forEach((candidateKey) => {
+    const bucket = Array.isArray(history[candidateKey]) ? history[candidateKey] : [];
+    if (!bucket.length) return;
+    rows.push(...bucket.map((item) => ({
+      ...item,
+      candidateKey,
+    })));
+  });
+  return rows
+    .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')))
+    .slice(0, Math.max(1, Math.min(50, Number(limit || 10))))
+    .map((item) => cloneData(item, item));
+}
+
 function buildLiveCandidateStateMonitor(input = {}) {
   const liveOpportunityCandidates = input?.liveOpportunityCandidates && typeof input.liveOpportunityCandidates === 'object'
     ? input.liveOpportunityCandidates
@@ -1562,88 +1855,82 @@ function buildLiveCandidateStateMonitor(input = {}) {
   if (!Array.isArray(monitorState.transitionRows)) {
     monitorState.transitionRows = [];
   }
+
   const allCandidates = Array.isArray(liveOpportunityCandidates?.candidates)
     ? liveOpportunityCandidates.candidates
     : [];
   const monitored = allCandidates.slice(0, 3);
+  const stateRows = allCandidates.slice(0, 12);
   const nowEt = String(todayContext?.nowEt || '').trim() || new Date().toISOString();
+  const sessionDate = toSessionDateFromNowEt(nowEt) || toDateIso(todayContext?.date || '') || '';
   const phase = String(todayContext?.sessionPhase || '').trim().toLowerCase();
   const insideApprovedActionWindow = isApprovedShadowActionWindow(phase);
+  const persistenceDb = input?.db && typeof input.db.prepare === 'function' ? input.db : null;
+  const persistenceStatements = persistenceDb ? getLiveCandidateStateDbStatements(persistenceDb) : null;
+  const persistenceEnabled = persistenceStatements && input?.persistLiveCandidateState !== false;
   const snapshotTransitions = [];
+  const stateByCandidateKey = new Map();
 
-  const buildObservation = (candidate) => {
-    const currentActionable = isCandidateActionableNow(candidate, {
-      negativeEvTolerance: -15,
-      minStructureQualityScore: 58,
-    });
-    return {
-      timestamp: nowEt,
-      candidateKey: String(candidate?.candidateKey || '').trim() || null,
-      candidateStatus: String(candidate?.candidateStatus || '').trim().toLowerCase() || null,
-      structureQualityScore: Number.isFinite(Number(candidate?.structureQualityScore))
-        ? round2(Number(candidate.structureQualityScore))
-        : null,
-      structureQualityLabel: String(candidate?.structureQualityLabel || '').trim().toLowerCase() || null,
-      candidateWinProb: Number.isFinite(Number(candidate?.candidateWinProb))
-        ? round2(Number(candidate.candidateWinProb))
-        : null,
-      candidateExpectedValue: Number.isFinite(Number(candidate?.candidateExpectedValue))
-        ? round2(Number(candidate.candidateExpectedValue))
-        : null,
+  let observationWritesThisSnapshot = 0;
+  let observationSuppressedThisSnapshot = 0;
+  let transitionWritesThisSnapshot = 0;
+  let priorObservationReadCount = 0;
+
+  for (const candidate of stateRows) {
+    const observation = normalizeLiveCandidateObservation(candidate, {
+      nowEt,
+      sessionDate,
       insideApprovedActionWindow,
-      actionableNow: currentActionable,
-      strategyKey: String(candidate?.strategyKey || '').trim() || null,
-      candidateSource: String(candidate?.candidateSource || '').trim() || null,
-    };
-  };
-
-  const classifyTransitionType = (options = {}) => {
-    if (options.hasPreviousState !== true) return 'first_observation';
-    if (options.currentActionable === true && options.previousActionable === false) return 'crossed_into_actionable';
-    if (options.currentActionable === false && options.previousActionable === true) return 'dropped_out_of_actionable';
-    if (String(options.currentStatus || '') !== String(options.previousStatus || '')) return 'status_changed';
-    if (options.structureDirection === 'improved') return 'structure_improved';
-    if (options.structureDirection === 'worsened') return 'structure_worsened';
-    return 'unchanged';
-  };
-
-  const toTransitionSummaryLine = (transitionType, candidateLabel, previousStatus, currentStatus) => {
-    const label = String(candidateLabel || 'Candidate').trim() || 'Candidate';
-    if (transitionType === 'crossed_into_actionable') return `${label} crossed into actionable structure.`;
-    if (transitionType === 'dropped_out_of_actionable') return `${label} dropped out of actionable structure.`;
-    if (transitionType === 'status_changed') {
-      return `${label} status changed from ${String(previousStatus || 'unknown').trim() || 'unknown'} to ${String(currentStatus || 'unknown').trim() || 'unknown'}.`;
-    }
-    if (transitionType === 'structure_improved') return `${label} structure improved.`;
-    if (transitionType === 'structure_worsened') return `${label} structure worsened.`;
-    if (transitionType === 'first_observation') return `${label} baseline state captured.`;
-    return `${label} structure unchanged.`;
-  };
-
-  const monitoredCandidates = monitored.map((candidate) => {
-    const key = String(candidate?.candidateKey || '').trim();
-    const prev = key ? monitorState.candidateStates[key] : null;
-    const hasPreviousState = Boolean(prev && typeof prev === 'object');
-    const currentStatus = String(candidate?.candidateStatus || '').trim().toLowerCase() || null;
-    const previousStatus = String(prev?.status || '').trim().toLowerCase() || null;
-    const currentStructureQualityScore = Number.isFinite(Number(candidate?.structureQualityScore))
-      ? round2(Number(candidate.structureQualityScore))
-      : null;
-    const previousStructureQualityScore = Number.isFinite(Number(prev?.structureQualityScore))
-      ? round2(Number(prev.structureQualityScore))
-      : null;
-    const currentActionable = isCandidateActionableNow(candidate, {
-      negativeEvTolerance: -15,
-      minStructureQualityScore: 58,
     });
-    const previousActionable = prev?.isActionableNow === true;
+    const key = String(observation?.candidateKey || '').trim();
+    if (!key) continue;
+
+    let priorObservation = null;
+    let previousStateSource = 'none';
+    if (persistenceEnabled) {
+      const durablePriorRow = persistenceStatements.readLatestObservationByCandidate.get(sessionDate || '', key);
+      priorObservation = normalizeDurableObservationRow(durablePriorRow);
+      if (priorObservation) {
+        previousStateSource = 'durable_sqlite';
+        priorObservationReadCount += 1;
+      }
+    }
+    if (!priorObservation) {
+      const fallback = monitorState.candidateStates[key] && typeof monitorState.candidateStates[key] === 'object'
+        ? monitorState.candidateStates[key]
+        : null;
+      if (fallback) {
+        priorObservation = {
+          timestamp: String(fallback.updatedAt || '').trim() || null,
+          sessionDate,
+          candidateKey: key,
+          strategyKey: observation.strategyKey,
+          candidateSource: observation.candidateSource,
+          candidateStatus: String(fallback.status || '').trim().toLowerCase() || null,
+          structureQualityScore: normalizeObservationValue(fallback.structureQualityScore),
+          structureQualityLabel: String(fallback.structureQualityLabel || '').trim().toLowerCase() || null,
+          candidateWinProb: normalizeObservationValue(fallback.candidateWinProb),
+          candidateExpectedValue: normalizeObservationValue(fallback.candidateExpectedValue),
+          insideApprovedActionWindow: fallback.insideApprovedActionWindow === true,
+          actionableNow: fallback.isActionableNow === true,
+        };
+        previousStateSource = 'in_memory';
+      }
+    }
+
+    const hasPreviousState = Boolean(priorObservation);
+    const previousStatus = String(priorObservation?.candidateStatus || '').trim().toLowerCase() || null;
+    const currentStatus = String(observation?.candidateStatus || '').trim().toLowerCase() || null;
+    const previousStructureQualityScore = normalizeObservationValue(priorObservation?.structureQualityScore);
+    const currentStructureQualityScore = normalizeObservationValue(observation?.structureQualityScore);
+    const previousActionable = priorObservation?.actionableNow === true;
+    const currentActionable = observation?.actionableNow === true;
     let structureDirection = 'unchanged';
     if (hasPreviousState && Number.isFinite(previousStructureQualityScore) && Number.isFinite(currentStructureQualityScore)) {
       if (currentStructureQualityScore > previousStructureQualityScore + 0.25) structureDirection = 'improved';
       else if (currentStructureQualityScore < previousStructureQualityScore - 0.25) structureDirection = 'worsened';
     }
-    const crossedIntoActionable = hasPreviousState && currentActionable && !previousActionable;
-    const transitionType = classifyTransitionType({
+    const transitionType = classifyCandidateTransitionType({
       hasPreviousState,
       previousActionable,
       currentActionable,
@@ -1652,30 +1939,120 @@ function buildLiveCandidateStateMonitor(input = {}) {
       structureDirection,
     });
     const candidateLabel = String(candidate?.strategyName || candidate?.strategyKey || 'Candidate').trim() || 'Candidate';
-    const transitionSummaryLine = toTransitionSummaryLine(
+    const transitionSummaryLine = buildTransitionSummaryLine(
       transitionType,
       candidateLabel,
       previousStatus,
       currentStatus
     );
-    if (hasPreviousState && transitionType !== 'unchanged') {
-      snapshotTransitions.push({
-        timestamp: nowEt,
-        candidateKey: key || null,
-        previousStatus,
-        currentStatus,
-        previousStructureQualityScore,
-        currentStructureQualityScore,
-        previousActionable,
-        currentActionable,
-        transitionType,
-        transitionSummaryLine,
-      });
+    const crossedIntoActionable = hasPreviousState && currentActionable && !previousActionable;
+
+    const transitionRow = {
+      timestamp: nowEt,
+      sessionDate: sessionDate || null,
+      candidateKey: key,
+      previousStatus,
+      currentStatus,
+      previousStructureQualityScore,
+      currentStructureQualityScore,
+      previousActionable,
+      currentActionable,
+      transitionType,
+      transitionSummaryLine,
+    };
+
+    const unchanged = hasPreviousState && observationStateEquals(priorObservation, observation);
+    if (persistenceEnabled) {
+      if (!unchanged) {
+        persistenceStatements.insertObservation.run(
+          observation.timestamp || nowEt,
+          observation.sessionDate || sessionDate || '',
+          observation.candidateKey || key,
+          observation.strategyKey || null,
+          observation.candidateSource || null,
+          observation.candidateStatus || null,
+          observation.structureQualityScore,
+          observation.structureQualityLabel || null,
+          observation.candidateWinProb,
+          observation.candidateExpectedValue,
+          observation.insideApprovedActionWindow ? 1 : 0,
+          observation.actionableNow ? 1 : 0
+        );
+        observationWritesThisSnapshot += 1;
+        persistenceStatements.pruneObservationsByCandidate.run(
+          observation.sessionDate || sessionDate || '',
+          key,
+          observation.sessionDate || sessionDate || '',
+          key,
+          LIVE_CANDIDATE_DURABLE_OBSERVATION_LIMIT_PER_CANDIDATE
+        );
+        persistenceStatements.pruneObservationsGlobal.run(LIVE_CANDIDATE_DURABLE_OBSERVATION_LIMIT_GLOBAL);
+      } else {
+        observationSuppressedThisSnapshot += 1;
+      }
+      if (hasPreviousState && transitionType !== 'unchanged' && transitionType !== 'first_observation') {
+        const previousTransitionRow = normalizeDurableTransitionRow(
+          persistenceStatements.readLatestTransitionByCandidate.get(sessionDate || '', key)
+        );
+        if (!isSameTransitionState(previousTransitionRow, transitionRow)) {
+          persistenceStatements.insertTransition.run(
+            transitionRow.timestamp || nowEt,
+            transitionRow.sessionDate || sessionDate || '',
+            key,
+            transitionRow.previousStatus || null,
+            transitionRow.currentStatus || null,
+            transitionRow.previousStructureQualityScore,
+            transitionRow.currentStructureQualityScore,
+            transitionRow.previousActionable ? 1 : 0,
+            transitionRow.currentActionable ? 1 : 0,
+            transitionRow.transitionType || 'status_changed',
+            transitionRow.transitionSummaryLine || null
+          );
+          transitionWritesThisSnapshot += 1;
+        }
+        persistenceStatements.pruneTransitionsGlobal.run(LIVE_CANDIDATE_DURABLE_TRANSITION_LIMIT_GLOBAL);
+      }
+    } else {
+      if (!Array.isArray(monitorState.observationHistoryByCandidate[key])) {
+        monitorState.observationHistoryByCandidate[key] = [];
+      }
+      const bucket = monitorState.observationHistoryByCandidate[key];
+      const latestInMemory = bucket.length ? bucket[bucket.length - 1] : null;
+      if (!latestInMemory || !observationStateEquals(latestInMemory, observation)) {
+        bucket.push(cloneData(observation, observation));
+        observationWritesThisSnapshot += 1;
+      } else {
+        observationSuppressedThisSnapshot += 1;
+      }
+      if (bucket.length > LIVE_CANDIDATE_STATE_HISTORY_LIMIT) {
+        monitorState.observationHistoryByCandidate[key] = bucket.slice(-LIVE_CANDIDATE_STATE_HISTORY_LIMIT);
+      }
+      if (hasPreviousState && transitionType !== 'unchanged' && transitionType !== 'first_observation') {
+        monitorState.transitionRows.push(transitionRow);
+        transitionWritesThisSnapshot += 1;
+      }
+      if (monitorState.transitionRows.length > LIVE_CANDIDATE_TRANSITION_HISTORY_LIMIT) {
+        monitorState.transitionRows = monitorState.transitionRows.slice(-LIVE_CANDIDATE_TRANSITION_HISTORY_LIMIT);
+      }
     }
-    return {
-      candidateKey: key || null,
-      strategyKey: String(candidate?.strategyKey || '').trim() || null,
-      candidateSource: String(candidate?.candidateSource || '').trim() || null,
+
+    if (hasPreviousState && transitionType !== 'unchanged' && transitionType !== 'first_observation') {
+      snapshotTransitions.push(transitionRow);
+    }
+    monitorState.candidateStates[key] = {
+      status: observation.candidateStatus,
+      structureQualityScore: observation.structureQualityScore,
+      structureQualityLabel: observation.structureQualityLabel,
+      candidateWinProb: observation.candidateWinProb,
+      candidateExpectedValue: observation.candidateExpectedValue,
+      insideApprovedActionWindow: observation.insideApprovedActionWindow,
+      isActionableNow: observation.actionableNow,
+      updatedAt: observation.timestamp || nowEt,
+    };
+    stateByCandidateKey.set(key, {
+      priorObservation,
+      previousStateSource,
+      observation,
       previousStatus,
       currentStatus,
       previousStructureQualityScore,
@@ -1686,14 +2063,51 @@ function buildLiveCandidateStateMonitor(input = {}) {
       crossedIntoActionable,
       transitionType,
       transitionSummaryLine,
+    });
+  }
+
+  const monitoredCandidates = monitored.map((candidate) => {
+    const key = String(candidate?.candidateKey || '').trim();
+    const state = key ? stateByCandidateKey.get(key) : null;
+    return {
+      candidateKey: key || null,
+      strategyKey: String(candidate?.strategyKey || '').trim() || null,
+      candidateSource: String(candidate?.candidateSource || '').trim() || null,
+      previousStatus: state?.previousStatus || null,
+      currentStatus: state?.currentStatus || null,
+      previousStructureQualityScore: state?.previousStructureQualityScore ?? null,
+      currentStructureQualityScore: state?.currentStructureQualityScore ?? null,
+      structureDirection: state?.structureDirection || 'unchanged',
+      previousActionable: state?.previousActionable === true,
+      currentActionable: state?.currentActionable === true,
+      crossedIntoActionable: state?.crossedIntoActionable === true,
+      transitionType: state?.transitionType || 'first_observation',
+      previousStateSource: state?.previousStateSource || 'none',
+      previousObservationTimestamp: state?.priorObservation?.timestamp || null,
+      transitionSummaryLine: state?.transitionSummaryLine
+        || buildTransitionSummaryLine('first_observation', candidate?.strategyName || candidate?.strategyKey || 'Candidate'),
     };
   });
 
-  for (const transitionRow of snapshotTransitions) {
-    monitorState.transitionRows.push(transitionRow);
-  }
-  if (monitorState.transitionRows.length > LIVE_CANDIDATE_TRANSITION_HISTORY_LIMIT) {
-    monitorState.transitionRows = monitorState.transitionRows.slice(-LIVE_CANDIDATE_TRANSITION_HISTORY_LIMIT);
+  let durableObservationCount = 0;
+  let durableTransitionCount = 0;
+  let recentObservationSample = [];
+  if (persistenceEnabled) {
+    durableObservationCount = Number(
+      persistenceStatements.countObservationsByDate.get(sessionDate || '')?.c || 0
+    );
+    durableTransitionCount = Number(
+      persistenceStatements.countTransitionsByDate.get(sessionDate || '')?.c || 0
+    );
+    recentObservationSample = persistenceStatements
+      .readRecentObservationsByDate
+      .all(sessionDate || '', 12)
+      .map((row) => normalizeDurableObservationRow(row))
+      .filter(Boolean);
+  } else {
+    recentObservationSample = buildInMemoryObservationSample(monitorState, 12);
+    durableObservationCount = recentObservationSample.length;
+    durableTransitionCount = Array.isArray(monitorState.transitionRows) ? monitorState.transitionRows.length : 0;
   }
 
   const transitionCandidate = monitoredCandidates.find((row) => row.transitionType === 'crossed_into_actionable') || null;
@@ -1712,38 +2126,13 @@ function buildLiveCandidateStateMonitor(input = {}) {
     : (transitionCandidate
       ? 'Transition detected but outside approved action window.'
       : 'No actionable transition detected.');
+  const hasPriorStateReadback = monitoredCandidates.some((row) => String(row?.previousStateSource || '').trim().toLowerCase() !== 'none');
+  const emptyStateReason = !hasPriorStateReadback
+    ? 'no_prior_observations_yet'
+    : durableTransitionCount <= 0
+      ? 'prior_observations_no_transitions'
+      : 'transitions_recorded_no_actionable_transition';
 
-  const stateRows = allCandidates.slice(0, 12);
-  for (const row of stateRows) {
-    const observation = buildObservation(row);
-    const key = String(row?.candidateKey || '').trim();
-    if (!key) continue;
-    if (!Array.isArray(monitorState.observationHistoryByCandidate[key])) {
-      monitorState.observationHistoryByCandidate[key] = [];
-    }
-    const perCandidateHistory = monitorState.observationHistoryByCandidate[key];
-    const previousObservation = perCandidateHistory.length > 0
-      ? perCandidateHistory[perCandidateHistory.length - 1]
-      : null;
-    if (previousObservation && String(previousObservation.timestamp || '') === String(observation.timestamp || '')) {
-      perCandidateHistory[perCandidateHistory.length - 1] = observation;
-    } else {
-      perCandidateHistory.push(observation);
-    }
-    if (perCandidateHistory.length > LIVE_CANDIDATE_STATE_HISTORY_LIMIT) {
-      monitorState.observationHistoryByCandidate[key] = perCandidateHistory.slice(-LIVE_CANDIDATE_STATE_HISTORY_LIMIT);
-    }
-    monitorState.candidateStates[key] = {
-      status: observation.candidateStatus,
-      structureQualityScore: observation.structureQualityScore,
-      structureQualityLabel: observation.structureQualityLabel,
-      candidateWinProb: observation.candidateWinProb,
-      candidateExpectedValue: observation.candidateExpectedValue,
-      insideApprovedActionWindow: observation.insideApprovedActionWindow,
-      isActionableNow: observation.actionableNow,
-      updatedAt: observation.timestamp,
-    };
-  }
   monitorState.lastSnapshotAt = nowEt;
   if (actionableTransitionDetected) {
     monitorState.lastActionableTransition = {
@@ -1760,6 +2149,16 @@ function buildLiveCandidateStateMonitor(input = {}) {
     actionableTransitionTimestamp,
     candidateKey: actionableTransitionCandidateKey,
     insideApprovedActionWindow,
+    storageMode: persistenceEnabled ? 'durable_sqlite' : 'in_memory',
+    sessionDate: sessionDate || null,
+    observationWritesThisSnapshot,
+    observationSuppressedThisSnapshot,
+    transitionWritesThisSnapshot,
+    priorObservationReadCount,
+    durableObservationCount,
+    durableTransitionCount,
+    recentObservationSample,
+    emptyStateReason,
     summaryLine: transitionSummaryLine,
     advisoryOnly: true,
   };
@@ -1772,17 +2171,56 @@ function buildLiveCandidateTransitionHistory(input = {}) {
   if (!Array.isArray(monitorState.transitionRows)) {
     monitorState.transitionRows = [];
   }
-  const recentTransitions = monitorState.transitionRows
+  const db = input?.db && typeof input.db.prepare === 'function' ? input.db : null;
+  const sessionDate = String(input?.sessionDate || '').trim() || '';
+  const persistenceStatements = db ? getLiveCandidateStateDbStatements(db) : null;
+  let storageMode = 'in_memory';
+  let recentTransitions = monitorState.transitionRows
     .slice(-12)
     .reverse()
     .map((row) => cloneData(row, row));
+  let recentObservations = buildInMemoryObservationSample(monitorState, 12);
+  let totalObservationRows = recentObservations.length;
+  let totalTransitionRows = recentTransitions.length;
+
+  if (persistenceStatements) {
+    storageMode = 'durable_sqlite';
+    const transitionRows = persistenceStatements.readRecentTransitionsByDate.all(sessionDate || '', 12);
+    recentTransitions = transitionRows
+      .map((row) => normalizeDurableTransitionRow(row))
+      .filter(Boolean);
+    recentObservations = persistenceStatements
+      .readRecentObservationsByDate
+      .all(sessionDate || '', 12)
+      .map((row) => normalizeDurableObservationRow(row))
+      .filter(Boolean);
+    totalObservationRows = Number(persistenceStatements.countObservationsByDate.get(sessionDate || '')?.c || 0);
+    totalTransitionRows = Number(persistenceStatements.countTransitionsByDate.get(sessionDate || '')?.c || 0);
+  }
+
   const latestTransition = recentTransitions.length ? recentTransitions[0] : null;
+  const hasActionableTransition = recentTransitions.some((row) => String(row?.transitionType || '') === 'crossed_into_actionable');
+  const emptyStateReason = totalObservationRows <= 0
+    ? 'no_prior_observations_yet'
+    : totalTransitionRows <= 0
+      ? 'prior_observations_no_transitions'
+      : (hasActionableTransition ? 'actionable_transitions_exist' : 'transitions_exist_no_actionable');
   const summaryLine = latestTransition
     ? `Latest transition: ${String(latestTransition.transitionSummaryLine || '').trim() || 'state changed.'}`
-    : 'No candidate transitions recorded yet.';
+    : (emptyStateReason === 'no_prior_observations_yet'
+      ? 'No prior observations yet.'
+      : 'No candidate transitions recorded yet.');
   return {
     recentTransitions,
     latestTransition: cloneData(latestTransition, latestTransition),
+    recentObservations,
+    storageMode,
+    sessionDate: sessionDate || null,
+    totalObservationRows,
+    totalTransitionRows,
+    emptyStateReason,
+    observationTable: LIVE_CANDIDATE_STATE_OBSERVATION_TABLE,
+    transitionTable: LIVE_CANDIDATE_STATE_TRANSITION_TABLE,
     summaryLine,
     advisoryOnly: true,
   };
@@ -3596,13 +4034,21 @@ function buildCommandCenterPanels(input = {}) {
   const liveCandidateMonitorState = input?.liveCandidateStateMonitorState && typeof input.liveCandidateStateMonitorState === 'object'
     ? input.liveCandidateStateMonitorState
     : null;
+  const liveCandidatePersistenceDb = input?.db && typeof input.db.prepare === 'function'
+    ? input.db
+    : null;
+  const persistLiveCandidateState = input?.persistLiveCandidateState !== false;
   const liveCandidateStateMonitor = buildLiveCandidateStateMonitor({
     liveOpportunityCandidates,
     todayContext,
     monitorState: liveCandidateMonitorState,
+    db: liveCandidatePersistenceDb,
+    persistLiveCandidateState,
   });
   const liveCandidateTransitionHistory = buildLiveCandidateTransitionHistory({
     monitorState: liveCandidateMonitorState,
+    db: liveCandidatePersistenceDb,
+    sessionDate: liveCandidateStateMonitor?.sessionDate || null,
   });
   const strategyCandidateOpportunityBridge = buildStrategyCandidateBridge({
     opportunityScoring,

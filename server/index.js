@@ -10137,12 +10137,17 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
     ? [options.previewNewsEvent]
     : [];
   const mergedNews = [...previewNews, ...(newsFromElite.length ? newsFromElite : newsFromPlan)];
+  let runtimeDb = null;
+  try {
+    runtimeDb = getDB();
+  } catch {
+    runtimeDb = null;
+  }
   let recentTooAggressiveCheckpoint = null;
   try {
-    const db = getDB();
-    if (db && typeof getLatestTooAggressiveCheckpointSentinel === 'function') {
+    if (runtimeDb && typeof getLatestTooAggressiveCheckpointSentinel === 'function') {
       recentTooAggressiveCheckpoint = getLatestTooAggressiveCheckpointSentinel({
-        db,
+        db: runtimeDb,
         asOfDate: nowEt.date,
         includeSameDay: false,
       });
@@ -10177,6 +10182,8 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
     strategyPortfolio: strategyPortfolioSummary,
     strategyExperiments: strategyExperimentsSummary,
     recentTooAggressiveCheckpoint,
+    db: runtimeDb,
+    persistLiveCandidateState: true,
   });
   if (commandCenter && typeof commandCenter === 'object') {
     commandCenter.regimeDetection = regimeDetection || null;
@@ -10191,10 +10198,9 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
 
   let recommendationPerformance = null;
   try {
-    const db = getDB();
-    if (db) {
+    if (runtimeDb) {
       upsertTodayRecommendationContext({
-        db,
+        db: runtimeDb,
         recDate: nowEt.date,
         sourceType: 'live',
         reconstructionPhase: 'live_intraday',
