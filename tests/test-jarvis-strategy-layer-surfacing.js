@@ -46,6 +46,11 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(typeof snapshot.executionStance === 'string' && snapshot.executionStance.length > 0, `${label} executionStance missing`, { snapshot });
   assert(Array.isArray(snapshot.strategyStack), `${label} strategyStack missing`, { snapshot });
   assert(snapshot.strategyStack.length >= 1, `${label} strategyStack empty`, { snapshot });
+  assert(snapshot.strategyStackCard && typeof snapshot.strategyStackCard === 'object', `${label} strategyStackCard missing`, { snapshot });
+  assert(snapshot.strategyWhyRecommended && typeof snapshot.strategyWhyRecommended === 'object', `${label} strategyWhyRecommended missing`, { snapshot });
+  assert(typeof snapshot.strategyRecommendationLine === 'string' && snapshot.strategyRecommendationLine.length > 0, `${label} strategyRecommendationLine missing`, { snapshot });
+  assert(typeof snapshot.strategyStanceLine === 'string' && snapshot.strategyStanceLine.length > 0, `${label} strategyStanceLine missing`, { snapshot });
+  assert(typeof snapshot.strategyVoiceLine === 'string' && snapshot.strategyVoiceLine.length > 0, `${label} strategyVoiceLine missing`, { snapshot });
   assert(snapshot.todayRecommendationMirror && typeof snapshot.todayRecommendationMirror === 'object', `${label} todayRecommendationMirror missing`, { snapshot });
   assert(snapshot.decisionBoardMirror && typeof snapshot.decisionBoardMirror === 'object', `${label} decisionBoardMirror missing`, { snapshot });
 
@@ -54,6 +59,24 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(row.pineAccess && typeof row.pineAccess === 'object', `${label} strategy stack row pineAccess missing`, { row });
     assert(typeof row.pineAccess.endpoint === 'string' && row.pineAccess.endpoint.startsWith('/api/jarvis/strategy/pine?'), `${label} pineAccess endpoint missing`, { row });
     assert(String(row.pineAccess.format || '').toLowerCase() === 'pine_v6', `${label} pineAccess format must be pine_v6`, { row });
+  }
+
+  const cards = Array.isArray(snapshot?.strategyStackCard?.cards) ? snapshot.strategyStackCard.cards : [];
+  assert(cards.length === 3, `${label} strategyStackCard.cards should expose original/variant/alternative`, { cards });
+  for (const card of cards) {
+    assert(typeof card.title === 'string' && card.title.length > 0, `${label} strategy card title missing`, { card });
+    assert(typeof card.key === 'string' && card.key.length > 0, `${label} strategy card key missing`, { card });
+    assert(typeof card.layer === 'string' && card.layer.length > 0, `${label} strategy card layer missing`, { card });
+    assert(Object.prototype.hasOwnProperty.call(card, 'suitability'), `${label} strategy card suitability missing`, { card });
+    assert(Object.prototype.hasOwnProperty.call(card, 'score'), `${label} strategy card score missing`, { card });
+    assert(Object.prototype.hasOwnProperty.call(card, 'winRate'), `${label} strategy card winRate missing`, { card });
+    assert(Object.prototype.hasOwnProperty.call(card, 'profitFactor'), `${label} strategy card profitFactor missing`, { card });
+    assert(Object.prototype.hasOwnProperty.call(card, 'maxDrawdownDollars'), `${label} strategy card maxDrawdownDollars missing`, { card });
+    assert(typeof card.recommendationStatus === 'string' && card.recommendationStatus.length > 0, `${label} strategy card recommendationStatus missing`, { card });
+    assert(card.pineAccess && typeof card.pineAccess === 'object', `${label} strategy card pineAccess missing`, { card });
+    assert(typeof card.pineAccess.endpoint === 'string' && card.pineAccess.endpoint.startsWith('/api/jarvis/strategy/pine?'), `${label} strategy card pineAccess endpoint missing`, { card });
+    assert(String(card.pineAccess.format || '').toLowerCase() === 'pine_v6', `${label} strategy card pineAccess format invalid`, { card });
+    assert(card.pineContractRef === card.pineAccess.endpoint, `${label} strategy card pine contract ref mismatch`, { card });
   }
 }
 
@@ -93,6 +116,11 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.assistantDecisionBrief && typeof center.assistantDecisionBrief === 'object', 'command-center assistantDecisionBrief root field missing', { center });
     assert(typeof center.executionStance === 'string' && center.executionStance.length > 0, 'command-center executionStance root field missing', { center });
     assert(Array.isArray(center.strategyStack), 'command-center strategyStack root field missing', { center });
+    assert(center.strategyStackCard && typeof center.strategyStackCard === 'object', 'command-center strategyStackCard root field missing', { center });
+    assert(center.strategyWhyRecommended && typeof center.strategyWhyRecommended === 'object', 'command-center strategyWhyRecommended root field missing', { center });
+    assert(typeof center.strategyRecommendationLine === 'string' && center.strategyRecommendationLine.length > 0, 'command-center strategyRecommendationLine root field missing', { center });
+    assert(typeof center.strategyStanceLine === 'string' && center.strategyStanceLine.length > 0, 'command-center strategyStanceLine root field missing', { center });
+    assert(typeof center.strategyVoiceLine === 'string' && center.strategyVoiceLine.length > 0, 'command-center strategyVoiceLine root field missing', { center });
     assert(center.todayRecommendation && typeof center.todayRecommendation === 'object', 'command-center todayRecommendation root mirror missing', { center });
     assert(center.decisionBoard && typeof center.decisionBoard === 'object', 'command-center decisionBoard root mirror missing', { center });
 
@@ -100,6 +128,10 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.commandCenter.strategyLayerSnapshot && typeof center.commandCenter.strategyLayerSnapshot === 'object', 'commandCenter.strategyLayerSnapshot missing', { center });
     assert(center.commandCenter.todayRecommendation && typeof center.commandCenter.todayRecommendation === 'object', 'commandCenter.todayRecommendation missing', { center });
     assert(center.commandCenter.decisionBoard && typeof center.commandCenter.decisionBoard === 'object', 'commandCenter.decisionBoard missing', { center });
+    assert(center.commandCenter.todayRecommendation.strategyStackCard && typeof center.commandCenter.todayRecommendation.strategyStackCard === 'object', 'todayRecommendation strategyStackCard mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.strategyWhyRecommended && typeof center.commandCenter.todayRecommendation.strategyWhyRecommended === 'object', 'todayRecommendation strategyWhyRecommended mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.strategyStackCard && typeof center.commandCenter.decisionBoard.strategyStackCard === 'object', 'decisionBoard strategyStackCard mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.strategyWhyRecommended && typeof center.commandCenter.decisionBoard.strategyWhyRecommended === 'object', 'decisionBoard strategyWhyRecommended mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.originalPlan && typeof center.commandCenter.todayRecommendation.originalPlan === 'object', 'todayRecommendation originalPlan mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.bestVariant && typeof center.commandCenter.todayRecommendation.bestVariant === 'object', 'todayRecommendation bestVariant mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.bestAlternative && typeof center.commandCenter.todayRecommendation.bestAlternative === 'object', 'todayRecommendation bestAlternative mirror missing', { center });
@@ -120,6 +152,11 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(perf.recommendationPerformance.assistantDecisionBrief && typeof perf.recommendationPerformance.assistantDecisionBrief === 'object', 'recommendationPerformance.assistantDecisionBrief missing', { perf });
     assert(typeof perf.recommendationPerformance.executionStance === 'string' && perf.recommendationPerformance.executionStance.length > 0, 'recommendationPerformance.executionStance missing', { perf });
     assert(Array.isArray(perf.recommendationPerformance.strategyStack), 'recommendationPerformance.strategyStack missing', { perf });
+    assert(perf.recommendationPerformance.strategyStackCard && typeof perf.recommendationPerformance.strategyStackCard === 'object', 'recommendationPerformance.strategyStackCard missing', { perf });
+    assert(perf.recommendationPerformance.strategyWhyRecommended && typeof perf.recommendationPerformance.strategyWhyRecommended === 'object', 'recommendationPerformance.strategyWhyRecommended missing', { perf });
+    assert(typeof perf.recommendationPerformance.strategyRecommendationLine === 'string' && perf.recommendationPerformance.strategyRecommendationLine.length > 0, 'recommendationPerformance.strategyRecommendationLine missing', { perf });
+    assert(typeof perf.recommendationPerformance.strategyStanceLine === 'string' && perf.recommendationPerformance.strategyStanceLine.length > 0, 'recommendationPerformance.strategyStanceLine missing', { perf });
+    assert(typeof perf.recommendationPerformance.strategyVoiceLine === 'string' && perf.recommendationPerformance.strategyVoiceLine.length > 0, 'recommendationPerformance.strategyVoiceLine missing', { perf });
     pass('recommendation/performance strategy-layer snapshot contract');
 
     const stackRows = Array.isArray(center.strategyLayerSnapshot?.strategyStack)

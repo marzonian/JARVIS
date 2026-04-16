@@ -82,6 +82,10 @@ const {
   buildPineScriptForStrategy,
 } = require('./jarvis-core/strategy-layers');
 const {
+  buildStrategyStackCardSection,
+  buildStrategyRecommendationWhyBlock,
+} = require('./jarvis-core/strategy-card-surfacing');
+const {
   classifyTradingStatusPromptShape,
   buildTradingStatusReplyFromCanonicalBrief,
   mergeHealthBlockedDecisionReply,
@@ -34777,6 +34781,20 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
   const originalPlanCopy = cloneData(originalPlan, originalPlan);
   const bestVariantCopy = cloneData(bestVariant, bestVariant);
   const bestAlternativeCopy = cloneData(bestAlternative, bestAlternative);
+  const strategyStackCard = buildStrategyStackCardSection({
+    originalPlan: originalPlanCopy,
+    bestVariant: bestVariantCopy,
+    bestAlternative: bestAlternativeCopy,
+  });
+  const strategyWhyRecommended = buildStrategyRecommendationWhyBlock({
+    recommendationBasis: recommendationBasisCopy,
+    assistantDecisionBrief: assistantDecisionBriefCopy,
+    executionStance: executionStanceCopy,
+    stackCards: strategyStackCard,
+  });
+  const strategyRecommendationLine = strategyWhyRecommended.recommendationSummaryLine || null;
+  const strategyStanceLine = strategyWhyRecommended.stanceSummaryLine || null;
+  const strategyVoiceLine = strategyWhyRecommended.voiceSummaryLine || null;
 
   return {
     snapshotVersion: 'v1',
@@ -34790,6 +34808,11 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     executionStance: executionStanceCopy.stance,
     executionStanceCard: executionStanceCopy,
     strategyStack: stackCopy,
+    strategyStackCard,
+    strategyWhyRecommended,
+    strategyRecommendationLine,
+    strategyStanceLine,
+    strategyVoiceLine,
     todayRecommendationMirror: {
       originalPlan: cloneData(originalPlanCopy, originalPlanCopy),
       bestVariant: cloneData(bestVariantCopy, bestVariantCopy),
@@ -34800,6 +34823,11 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       executionStance: executionStanceCopy.stance,
       executionStanceCard: cloneData(executionStanceCopy, executionStanceCopy),
       strategyStack: cloneData(stackCopy, stackCopy),
+      strategyStackCard: cloneData(strategyStackCard, strategyStackCard),
+      strategyWhyRecommended: cloneData(strategyWhyRecommended, strategyWhyRecommended),
+      strategyRecommendationLine,
+      strategyStanceLine,
+      strategyVoiceLine,
       advisoryOnly: true,
     },
     decisionBoardMirror: {
@@ -34812,6 +34840,11 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       executionStance: executionStanceCopy.stance,
       executionStanceCard: cloneData(executionStanceCopy, executionStanceCopy),
       strategyStack: cloneData(stackCopy, stackCopy),
+      strategyStackCard: cloneData(strategyStackCard, strategyStackCard),
+      strategyWhyRecommended: cloneData(strategyWhyRecommended, strategyWhyRecommended),
+      strategyRecommendationLine,
+      strategyStanceLine,
+      strategyVoiceLine,
       advisoryOnly: true,
     },
     summaryLine: `Strategy snapshot: ${recommendationBasis.recommendedStrategyName || 'Original Trading Plan'} (${recommendationBasis.basisLabel || basisType}) | stance ${executionStanceCopy.stance}.`,
@@ -34833,6 +34866,11 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
   commandCenter.executionStance = strategyLayerSnapshot.executionStance || commandCenter.executionStance || null;
   commandCenter.executionStanceCard = cloneData(strategyLayerSnapshot.executionStanceCard, strategyLayerSnapshot.executionStanceCard);
   commandCenter.strategyStack = cloneData(strategyLayerSnapshot.strategyStack, strategyLayerSnapshot.strategyStack);
+  commandCenter.strategyStackCard = cloneData(strategyLayerSnapshot.strategyStackCard, strategyLayerSnapshot.strategyStackCard);
+  commandCenter.strategyWhyRecommended = cloneData(strategyLayerSnapshot.strategyWhyRecommended, strategyLayerSnapshot.strategyWhyRecommended);
+  commandCenter.strategyRecommendationLine = strategyLayerSnapshot.strategyRecommendationLine || null;
+  commandCenter.strategyStanceLine = strategyLayerSnapshot.strategyStanceLine || null;
+  commandCenter.strategyVoiceLine = strategyLayerSnapshot.strategyVoiceLine || null;
 
   if (commandCenter.todayRecommendation && typeof commandCenter.todayRecommendation === 'object') {
     Object.assign(commandCenter.todayRecommendation, cloneData(strategyLayerSnapshot.todayRecommendationMirror, strategyLayerSnapshot.todayRecommendationMirror));
@@ -34906,6 +34944,11 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       recommendationPerformance.executionStance = strategyLayerSnapshot.executionStance || null;
       recommendationPerformance.executionStanceCard = cloneData(strategyLayerSnapshot.executionStanceCard, strategyLayerSnapshot.executionStanceCard);
       recommendationPerformance.strategyStack = cloneData(strategyLayerSnapshot.strategyStack, strategyLayerSnapshot.strategyStack);
+      recommendationPerformance.strategyStackCard = cloneData(strategyLayerSnapshot.strategyStackCard, strategyLayerSnapshot.strategyStackCard);
+      recommendationPerformance.strategyWhyRecommended = cloneData(strategyLayerSnapshot.strategyWhyRecommended, strategyLayerSnapshot.strategyWhyRecommended);
+      recommendationPerformance.strategyRecommendationLine = strategyLayerSnapshot.strategyRecommendationLine || null;
+      recommendationPerformance.strategyStanceLine = strategyLayerSnapshot.strategyStanceLine || null;
+      recommendationPerformance.strategyVoiceLine = strategyLayerSnapshot.strategyVoiceLine || null;
       recommendationPerformance.todayRecommendation = cloneData(
         strategyLayerSnapshot.todayRecommendationMirror,
         strategyLayerSnapshot.todayRecommendationMirror
@@ -34931,6 +34974,11 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       executionStance: strategyLayerSnapshot?.executionStance || null,
       executionStanceCard: strategyLayerSnapshot?.executionStanceCard || null,
       strategyStack: Array.isArray(strategyLayerSnapshot?.strategyStack) ? strategyLayerSnapshot.strategyStack : [],
+      strategyStackCard: strategyLayerSnapshot?.strategyStackCard || null,
+      strategyWhyRecommended: strategyLayerSnapshot?.strategyWhyRecommended || null,
+      strategyRecommendationLine: strategyLayerSnapshot?.strategyRecommendationLine || null,
+      strategyStanceLine: strategyLayerSnapshot?.strategyStanceLine || null,
+      strategyVoiceLine: strategyLayerSnapshot?.strategyVoiceLine || null,
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       generatedAt: performance?.generatedAt || new Date().toISOString(),
@@ -35484,6 +35532,11 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       executionStance: strategyLayerSnapshot?.executionStance || null,
       executionStanceCard: strategyLayerSnapshot?.executionStanceCard || null,
       strategyStack: Array.isArray(strategyLayerSnapshot?.strategyStack) ? strategyLayerSnapshot.strategyStack : [],
+      strategyStackCard: strategyLayerSnapshot?.strategyStackCard || null,
+      strategyWhyRecommended: strategyLayerSnapshot?.strategyWhyRecommended || null,
+      strategyRecommendationLine: strategyLayerSnapshot?.strategyRecommendationLine || null,
+      strategyStanceLine: strategyLayerSnapshot?.strategyStanceLine || null,
+      strategyVoiceLine: strategyLayerSnapshot?.strategyVoiceLine || null,
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       strategyTracking: payload.strategyTracking || null,
