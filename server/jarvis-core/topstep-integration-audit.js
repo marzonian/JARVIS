@@ -315,6 +315,11 @@ function buildTopstepIntegrationAuditSummary(input = {}) {
     };
   }
   const keyPresent = !!toText(input.apiKey || '');
+  const apiEnabled = input.apiEnabled !== false;
+  const apiConfigured = input.apiConfigured === true || keyPresent;
+  const apiDisableReason = toText(input.apiDisableReason || '') || (!apiEnabled
+    ? (apiConfigured ? 'topstep_disabled_by_config' : 'topstep_not_configured')
+    : null);
   const liveSnapshot = input.liveSnapshot && typeof input.liveSnapshot === 'object'
     ? input.liveSnapshot
     : {};
@@ -364,7 +369,8 @@ function buildTopstepIntegrationAuditSummary(input = {}) {
       : ((lastFailureMessage || latestErrorMessage) ? 'failure' : 'unknown');
 
   let currentLiveFeedStatus = 'unknown';
-  if (!latestSync) currentLiveFeedStatus = 'never_synced';
+  if (!apiEnabled) currentLiveFeedStatus = 'disabled';
+  else if (!latestSync) currentLiveFeedStatus = 'never_synced';
   else if (latestStatus === 'ok' || latestStatus === 'noop') currentLiveFeedStatus = 'healthy';
   else if (latestStatus === 'partial') currentLiveFeedStatus = 'degraded';
   else if (latestStatus === 'disabled') currentLiveFeedStatus = 'disabled';
@@ -422,6 +428,11 @@ function buildTopstepIntegrationAuditSummary(input = {}) {
       authError: toText(syncDetails?.authError || '') || null,
       accountFetchError: toText(syncDetails?.accountFetchError || '') || null,
       authUsed: toText(syncDetails?.authUsed || '') || null,
+    },
+    runtimeConfig: {
+      apiEnabled,
+      apiConfigured,
+      apiDisableReason,
     },
     credentialDiagnostics,
     recoveryWindow,

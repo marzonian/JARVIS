@@ -8947,9 +8947,13 @@ async function buildTopstepIntegrationAuditCached(options = {}) {
   }
   const pending = Promise.resolve().then(() => {
     const db = getDB();
+    const runtimeConfig = buildTopstepRuntimeConfigStatus(topstepCfg);
     return buildTopstepIntegrationAuditSummary({
       db,
       apiKey: topstepCfg.key,
+      apiEnabled: runtimeConfig.enabled === true,
+      apiConfigured: runtimeConfig.configured === true,
+      apiDisableReason: runtimeConfig.disableReason || null,
       hasAuthToken: !!topstepGetCachedAuthToken(topstepCfg.username),
       liveSnapshot,
       syncWatch: topstepSyncWatch,
@@ -16946,7 +16950,17 @@ const TOPSTEP_ALT_ACCOUNT_SWEEP_STALE_DAYS = Math.max(1, Math.min(90, Number(pro
 const MARKET_QUOTE_CACHE_TTL_MS = Math.max(2_000, Number(process.env.MARKET_QUOTE_CACHE_TTL_MS || 20_000));
 const LIVE_BARS_CACHE_TTL_MS = Math.max(5_000, Math.min(30_000, Number(process.env.LIVE_BARS_CACHE_TTL_MS || 10_000)));
 const MARKET_HEALTH_ENDPOINT_CACHE_TTL_MS = Math.max(2_000, Number(process.env.MARKET_HEALTH_ENDPOINT_CACHE_TTL_MS || 5_000));
-const TOPSTEP_ENV_FILE_PATH = path.join(__dirname, '..', '.env');
+const TOPSTEP_ROOT_ENV_FILE_PATH = path.join(__dirname, '..', '.env');
+const TOPSTEP_RUNTIME_ENV_FILE_PATH = path.join(__dirname, '..', 'runtime', '.env');
+const TOPSTEP_ENV_HYDRATION_META = (config.envHydration && typeof config.envHydration === 'object')
+  ? config.envHydration
+  : {};
+const TOPSTEP_ENV_FILE_PATH = (() => {
+  const configuredPath = String(TOPSTEP_ENV_HYDRATION_META.topstepDiagnosticEnvFilePath || '').trim();
+  if (configuredPath) return configuredPath;
+  if (fs.existsSync(TOPSTEP_RUNTIME_ENV_FILE_PATH)) return TOPSTEP_RUNTIME_ENV_FILE_PATH;
+  return TOPSTEP_ROOT_ENV_FILE_PATH;
+})();
 const TOPSTEP_CONFIG_LOAD_PATH = path.join(__dirname, 'config.js');
 const TOPSTEP_REQUIRED_ENV_KEYS = Object.freeze([
   'TOPSTEP_API_ENABLED',
@@ -17037,6 +17051,26 @@ function topstepText(value, fallback = null) {
   return v || fallback;
 }
 
+function resolveTopstepApiRuntimeState(topstepCfg = {}) {
+  const cfg = topstepCfg && typeof topstepCfg === 'object' ? topstepCfg : {};
+  const enabled = cfg.enabled === true;
+  const keyPresent = topstepText(cfg.key, null) != null;
+  const usernamePresent = topstepText(cfg.username, null) != null;
+  const configured = keyPresent || usernamePresent;
+  let disableReason = null;
+  if (!configured) disableReason = 'topstep_not_configured';
+  else if (!enabled) disableReason = 'topstep_disabled_by_config';
+  else if (!keyPresent) disableReason = 'topstep_api_key_missing';
+  return {
+    enabled,
+    keyPresent,
+    usernamePresent,
+    configured,
+    disableReason,
+    usable: enabled && keyPresent,
+  };
+}
+
 function maskCredentialValue(value) {
   const raw = String(value == null ? '' : value);
   const trimmed = raw.trim();
@@ -17081,7 +17115,14 @@ function readTopstepEnvFileSnapshot(filePath = TOPSTEP_ENV_FILE_PATH) {
 
 function buildTopstepCredentialDiagnostics(topstepCfg = {}) {
   const cfg = topstepCfg && typeof topstepCfg === 'object' ? topstepCfg : {};
+  const runtimeState = resolveTopstepApiRuntimeState(cfg);
   const envFile = readTopstepEnvFileSnapshot(TOPSTEP_ENV_FILE_PATH);
+  const keySources = (
+    TOPSTEP_ENV_HYDRATION_META.topstepKeySources
+    && typeof TOPSTEP_ENV_HYDRATION_META.topstepKeySources === 'object'
+  )
+    ? TOPSTEP_ENV_HYDRATION_META.topstepKeySources
+    : {};
   const runtimeBaseUrls = [cfg.baseUrl, ...(Array.isArray(cfg.altBaseUrls) ? cfg.altBaseUrls : [])]
     .map((v) => String(v || '').trim())
     .filter(Boolean);
@@ -17102,24 +17143,36 @@ function buildTopstepCredentialDiagnostics(topstepCfg = {}) {
   if (runtimeKey.present && runtimeKey.length < 24) {
     warnings.push('topstep_api_key_length_suspicious');
   }
-  const keyFingerprintMismatch = !!(
+  const runtimeKeySource = String(keySources.TOPSTEP_API_KEY || '').trim()
+    || (envRuntimeKey.present ? 'process_env_unknown' : 'keychain_or_missing');
+  const runtimeUsernameSource = String(keySources.TOPSTEP_API_USERNAME || '').trim()
+    || (envRuntimeUsername.present ? 'process_env_unknown' : 'unset');
+  const keySourceFromEnvFile = runtimeKeySource.startsWith('env_file:');
+  const usernameSourceFromEnvFile = runtimeUsernameSource.startsWith('env_file:');
+  const keyFingerprintMismatchRaw = !!(
     envFile.exists
-    && runtimeKey.present
+    && envRuntimeKey.present
     && envFileKey.present
-    && runtimeKey.fingerprint
+    && envRuntimeKey.fingerprint
     && envFileKey.fingerprint
-    && runtimeKey.fingerprint !== envFileKey.fingerprint
+    && envRuntimeKey.fingerprint !== envFileKey.fingerprint
   );
-  const usernameFingerprintMismatch = !!(
+  const usernameFingerprintMismatchRaw = !!(
     envFile.exists
-    && runtimeUsername.present
+    && envRuntimeUsername.present
     && envFileUsername.present
-    && runtimeUsername.fingerprint
+    && envRuntimeUsername.fingerprint
     && envFileUsername.fingerprint
-    && runtimeUsername.fingerprint !== envFileUsername.fingerprint
+    && envRuntimeUsername.fingerprint !== envFileUsername.fingerprint
   );
+  const keyFingerprintMismatch = keySourceFromEnvFile && keyFingerprintMismatchRaw;
+  const usernameFingerprintMismatch = usernameSourceFromEnvFile && usernameFingerprintMismatchRaw;
+  const keyFingerprintOverrideMismatch = !keySourceFromEnvFile && keyFingerprintMismatchRaw;
+  const usernameFingerprintOverrideMismatch = !usernameSourceFromEnvFile && usernameFingerprintMismatchRaw;
   if (keyFingerprintMismatch || usernameFingerprintMismatch) {
     warnings.push('runtime_env_mismatch_restart_required');
+  } else if (keyFingerprintOverrideMismatch || usernameFingerprintOverrideMismatch) {
+    warnings.push('runtime_env_override_detected');
   }
   return {
     generatedAt: new Date().toISOString(),
@@ -17134,7 +17187,10 @@ function buildTopstepCredentialDiagnostics(topstepCfg = {}) {
       timeoutMs: Math.max(1500, Number(cfg.timeoutMs || 10000)),
       key: runtimeKey,
       username: runtimeUsername,
-      keySourceHint: process.env.TOPSTEP_API_KEY ? 'env' : 'keychain_or_missing',
+      keySourceHint: runtimeKeySource,
+      usernameSourceHint: runtimeUsernameSource,
+      configured: runtimeState.configured,
+      disableReason: runtimeState.disableReason,
     },
     processEnv: {
       TOPSTEP_API_KEY: envRuntimeKey,
@@ -17152,9 +17208,25 @@ function buildTopstepCredentialDiagnostics(topstepCfg = {}) {
       TOPSTEP_API_BASE_URL: maskCredentialValue(envFile.values.TOPSTEP_API_BASE_URL),
       TOPSTEP_API_ACCOUNT_ID: maskCredentialValue(envFile.values.TOPSTEP_API_ACCOUNT_ID),
     },
+    envHydration: {
+      orderedPaths: Array.isArray(TOPSTEP_ENV_HYDRATION_META.orderedPaths)
+        ? TOPSTEP_ENV_HYDRATION_META.orderedPaths.slice()
+        : [],
+      loadedFiles: Array.isArray(TOPSTEP_ENV_HYDRATION_META.loadedFiles)
+        ? TOPSTEP_ENV_HYDRATION_META.loadedFiles.slice()
+        : [],
+      skippedMissingFiles: Array.isArray(TOPSTEP_ENV_HYDRATION_META.skippedMissingFiles)
+        ? TOPSTEP_ENV_HYDRATION_META.skippedMissingFiles.slice()
+        : [],
+      parseErrors: Array.isArray(TOPSTEP_ENV_HYDRATION_META.parseErrors)
+        ? TOPSTEP_ENV_HYDRATION_META.parseErrors.slice()
+        : [],
+    },
     runtimeVsEnvFile: {
       keyFingerprintMismatch,
       usernameFingerprintMismatch,
+      keyFingerprintOverrideMismatch,
+      usernameFingerprintOverrideMismatch,
       likelyStaleRuntime: keyFingerprintMismatch || usernameFingerprintMismatch,
     },
     validation: {
@@ -18322,8 +18394,9 @@ function persistTopstepBarsIntoSessions(options = {}) {
 async function getLiveBarsSnapshot(options = {}) {
   const symbol = String(options.symbol || config.topstep?.autonomy?.defaultSymbol || 'MNQ').toUpperCase();
   const topstepCfg = options.topstepCfg || config.topstep?.api || {};
-  if (!topstepCfg.enabled) return { ok: false, symbol, bars: [], error: 'topstep_api_disabled' };
-  if (!topstepCfg.key) return { ok: false, symbol, bars: [], error: 'topstep_api_key_missing' };
+  const runtimeState = resolveTopstepApiRuntimeState(topstepCfg);
+  if (!runtimeState.enabled) return { ok: false, symbol, bars: [], error: runtimeState.disableReason || 'topstep_api_disabled' };
+  if (!runtimeState.keyPresent) return { ok: false, symbol, bars: [], error: 'topstep_api_key_missing' };
 
   const account = options.account || options.topstepLive?.account || {};
   const live = typeof options.live === 'boolean' ? options.live : inferTopstepLiveFlag(account);
@@ -18591,10 +18664,11 @@ async function runTopstepContractRollGuard(options = {}) {
   const topstepCfg = options.topstepCfg || config.topstep?.api || {};
   const triggerSource = String(options.triggerSource || 'contract_roll_guard').trim() || 'contract_roll_guard';
   const force = options.force === true;
-  if (!topstepCfg.enabled) {
-    return { status: 'skip', reason: 'topstep_api_disabled', symbol };
+  const runtimeState = resolveTopstepApiRuntimeState(topstepCfg);
+  if (!runtimeState.enabled) {
+    return { status: 'skip', reason: runtimeState.disableReason || 'topstep_api_disabled', symbol };
   }
-  if (!topstepCfg.key) {
+  if (!runtimeState.keyPresent) {
     return { status: 'skip', reason: 'topstep_api_key_missing', symbol };
   }
   const timeoutMs = Math.max(2000, Number(options.timeoutMs || topstepCfg.timeoutMs || 10_000));
@@ -19394,6 +19468,22 @@ function getTopstepLiveSnapshot(options = {}) {
   };
 }
 
+function buildTopstepRuntimeConfigStatus(topstepCfg = config.topstep?.api || {}) {
+  const state = resolveTopstepApiRuntimeState(topstepCfg);
+  return {
+    enabled: state.enabled,
+    keyPresent: state.keyPresent,
+    usernamePresent: state.usernamePresent,
+    configured: state.configured,
+    disableReason: state.disableReason,
+    envFilePath: TOPSTEP_ENV_FILE_PATH,
+    envHydrationLoadedFiles: Array.isArray(TOPSTEP_ENV_HYDRATION_META.loadedFiles)
+      ? TOPSTEP_ENV_HYDRATION_META.loadedFiles.slice()
+      : [],
+    advisoryOnly: true,
+  };
+}
+
 function buildTopstepValidationReport(options = {}) {
   const db = getDB();
   const days = Math.max(1, Math.min(120, Number(options.days || 30)));
@@ -19568,13 +19658,14 @@ async function runTopstepReadOnlySync(options = {}) {
 
   const runner = (async () => {
     const topstepCfg = config.topstep?.api || {};
+    const runtimeState = resolveTopstepApiRuntimeState(topstepCfg);
     const credentialDiagnostics = buildTopstepCredentialDiagnostics(topstepCfg);
     const compliance = buildTopstepComplianceSnapshot();
     const triggerSource = String(options.triggerSource || 'manual');
-    if (!topstepCfg.enabled) {
-      return { status: 'disabled', reason: 'topstep_api_disabled', snapshot: getTopstepLiveSnapshot({ fillLimit: 20 }) };
+    if (!runtimeState.enabled) {
+      return { status: 'disabled', reason: runtimeState.disableReason || 'topstep_api_disabled', snapshot: getTopstepLiveSnapshot({ fillLimit: 20 }) };
     }
-    if (!topstepCfg.key) {
+    if (!runtimeState.keyPresent) {
       return { status: 'disabled', reason: 'topstep_api_key_missing', snapshot: getTopstepLiveSnapshot({ fillLimit: 20 }) };
     }
     if (compliance.strictMode && compliance.requireLocalRuntime && compliance.remoteRuntimeLikely) {
@@ -39552,9 +39643,11 @@ app.get('/api/topstep/compliance', (req, res) => {
 app.get('/api/topstep/sync/status', (req, res) => {
   try {
     const live = getTopstepLiveSnapshot({ fillLimit: req.query.fillLimit || 30 });
+    const runtimeConfig = buildTopstepRuntimeConfigStatus(config.topstep?.api || {});
     res.json({
       status: 'ok',
       compliance: buildTopstepComplianceSnapshot(),
+      runtimeConfig,
       watch: { ...topstepSyncWatch },
       autoJournal: getTopstepAutoJournalStatus({ accountId: req.query.accountId || null }),
       live,
@@ -39582,6 +39675,7 @@ app.get('/api/topstep/live/audit', async (req, res) => {
     });
     res.json({
       status: 'ok',
+      runtimeConfig: buildTopstepRuntimeConfigStatus(config.topstep?.api || {}),
       topstepIntegrationAudit,
     });
   } catch (err) {
@@ -40912,7 +41006,9 @@ const server = app.listen(config.port, config.host, () => {
       if (hardIssues.length > 0) {
         console.warn(`[Topstep Credentials] Startup validation failed: ${hardIssues.join(', ')}.`);
       } else if (warnings.includes('runtime_env_mismatch_restart_required')) {
-        console.warn('[Topstep Credentials] Runtime/.env mismatch detected; restart required to load latest credentials.');
+        console.warn(`[Topstep Credentials] Runtime differs from loaded env file (${topstepDiagnostics.envFilePath || 'unknown'}); restart required if .env changed after process start.`);
+      } else if (warnings.includes('runtime_env_override_detected')) {
+        console.log('[Topstep Credentials] Process env overrides .env for Topstep keys; stale-runtime restart warning suppressed.');
       }
     } catch (diagErr) {
       console.warn('[Topstep Credentials] startup diagnostics failed:', diagErr.message);
@@ -41011,6 +41107,8 @@ const server = app.listen(config.port, config.host, () => {
         } else {
           console.log('  Contract roll warm-up: OK');
         }
+      } else if (String(out?.status || '').toLowerCase() === 'skip') {
+        console.log(`  Contract roll warm-up: skipped (${out?.reason || 'not_configured'})`);
       } else {
         console.warn(`[Contract Roll] startup warm-up failed: ${out?.reason || out?.status || 'unknown'}`);
       }

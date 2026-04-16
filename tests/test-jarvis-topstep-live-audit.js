@@ -43,6 +43,10 @@ async function getJson(baseUrl, endpoint) {
   return json;
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function assertAuditContract(audit) {
   assert(audit && typeof audit === 'object', 'audit payload missing');
   assert(['present', 'missing'].includes(String(audit.keyStatus || '')), `invalid keyStatus: ${audit.keyStatus}`);
@@ -145,6 +149,23 @@ async function runUnitChecks() {
     assert(Array.isArray(audit.recoveryChecklist.mustFix), 'mustFix checklist missing');
     db.close();
   }
+
+  {
+    const db = makeDb();
+    const audit = buildTopstepIntegrationAuditSummary({
+      db,
+      apiEnabled: false,
+      apiConfigured: true,
+      apiDisableReason: 'topstep_disabled_by_config',
+      apiKey: 'topstep_test_key',
+      hasAuthToken: false,
+    });
+    assertAuditContract(audit);
+    assert(audit.currentLiveFeedStatus === 'disabled', 'disabled config should surface disabled feed status');
+    assert(audit.runtimeConfig && audit.runtimeConfig.apiEnabled === false, 'runtimeConfig.apiEnabled should be false');
+    assert(audit.runtimeConfig.apiDisableReason === 'topstep_disabled_by_config', 'disabled reason should be preserved');
+    db.close();
+  }
 }
 
 async function runIntegrationChecks() {
@@ -163,8 +184,70 @@ async function runIntegrationChecks() {
     const out = await getJson(server.baseUrl, '/api/topstep/live/audit?force=1');
     assert(out?.status === 'ok', 'topstep live audit endpoint should return ok');
     assertAuditContract(out?.topstepIntegrationAudit);
+    assert(out?.runtimeConfig && typeof out.runtimeConfig === 'object', 'runtimeConfig should be surfaced on live audit endpoint');
+    assert(typeof out.runtimeConfig.enabled === 'boolean', 'runtimeConfig.enabled should be boolean');
   } finally {
     await server.stop();
+  }
+}
+
+async function runStartupStatusChecks() {
+  {
+    const server = await startAuditServer({
+      useExisting: false,
+      port: process.env.JARVIS_AUDIT_PORT ? Number(process.env.JARVIS_AUDIT_PORT) + 1 : 3208,
+      env: {
+        TOPSTEP_API_ENABLED: 'false',
+        TOPSTEP_API_KEY: 'topstep_test_key_disabled',
+        TOPSTEP_API_USERNAME: 'tester',
+      },
+    });
+    try {
+      await wait(900);
+      const status = await getJson(server.baseUrl, '/api/topstep/sync/status');
+      assert(status?.status === 'ok', 'sync status endpoint should return ok');
+      assert(status?.runtimeConfig && typeof status.runtimeConfig === 'object', 'runtimeConfig missing from sync status');
+      assert(status.runtimeConfig.enabled === false, 'TOPSTEP_API_ENABLED=false should disable runtime config');
+      assert(
+        String(status.runtimeConfig.disableReason || '') === 'topstep_disabled_by_config',
+        `unexpected disable reason: ${status.runtimeConfig.disableReason}`
+      );
+      const startupLogs = (server.logs || []).join('');
+      assert(
+        !startupLogs.includes('[Contract Roll] startup warm-up failed: topstep_api_disabled'),
+        'disabled config should not log contract-roll warm-up as failure'
+      );
+      assert(
+        startupLogs.includes('Contract roll warm-up: skipped (topstep_disabled_by_config)'),
+        'disabled config should log contract-roll warm-up as skipped'
+      );
+      assert(
+        !startupLogs.includes('Runtime/.env mismatch detected'),
+        'legacy mismatch warning should not be emitted'
+      );
+    } finally {
+      await server.stop();
+    }
+  }
+
+  {
+    const server = await startAuditServer({
+      useExisting: false,
+      port: process.env.JARVIS_AUDIT_PORT ? Number(process.env.JARVIS_AUDIT_PORT) + 2 : 3209,
+      env: {
+        TOPSTEP_API_ENABLED: 'TRUE',
+        TOPSTEP_API_KEY: 'topstep_test_key_enabled',
+        TOPSTEP_API_USERNAME: 'tester',
+      },
+    });
+    try {
+      await wait(900);
+      const status = await getJson(server.baseUrl, '/api/topstep/sync/status');
+      assert(status?.runtimeConfig?.enabled === true, 'TOPSTEP_API_ENABLED=TRUE should resolve enabled=true');
+      assert(status?.runtimeConfig?.configured === true, 'enabled config should be marked configured');
+    } finally {
+      await server.stop();
+    }
   }
 }
 
@@ -172,6 +255,7 @@ async function runIntegrationChecks() {
   try {
     await runUnitChecks();
     await runIntegrationChecks();
+    await runStartupStatusChecks();
     console.log('✅ topstep live audit checks passed');
   } catch (err) {
     console.error('❌ topstep live audit checks failed');
