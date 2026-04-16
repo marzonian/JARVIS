@@ -84,6 +84,7 @@ const {
 const {
   buildStrategyStackCardSection,
   buildStrategyRecommendationWhyBlock,
+  buildStrategyComparisonReadout,
 } = require('./jarvis-core/strategy-card-surfacing');
 const {
   classifyTradingStatusPromptShape,
@@ -34792,9 +34793,16 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     executionStance: executionStanceCopy,
     stackCards: strategyStackCard,
   });
+  const strategyComparisonReadout = buildStrategyComparisonReadout({
+    strategyStack: stackCopy,
+    recommendationBasis: recommendationBasisCopy,
+    executionStance: executionStanceCopy,
+  });
   const strategyRecommendationLine = strategyWhyRecommended.recommendationSummaryLine || null;
   const strategyStanceLine = strategyWhyRecommended.stanceSummaryLine || null;
   const strategyVoiceLine = strategyWhyRecommended.voiceSummaryLine || null;
+  const strategyComparisonLine = strategyComparisonReadout.summaryLine || null;
+  const strategyComparisonVoiceLine = strategyComparisonReadout.voiceSummaryLine || null;
 
   return {
     snapshotVersion: 'v1',
@@ -34813,6 +34821,9 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     strategyRecommendationLine,
     strategyStanceLine,
     strategyVoiceLine,
+    strategyComparisonReadout,
+    strategyComparisonLine,
+    strategyComparisonVoiceLine,
     todayRecommendationMirror: {
       originalPlan: cloneData(originalPlanCopy, originalPlanCopy),
       bestVariant: cloneData(bestVariantCopy, bestVariantCopy),
@@ -34828,6 +34839,9 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       strategyRecommendationLine,
       strategyStanceLine,
       strategyVoiceLine,
+      strategyComparisonReadout: cloneData(strategyComparisonReadout, strategyComparisonReadout),
+      strategyComparisonLine,
+      strategyComparisonVoiceLine,
       advisoryOnly: true,
     },
     decisionBoardMirror: {
@@ -34845,6 +34859,9 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       strategyRecommendationLine,
       strategyStanceLine,
       strategyVoiceLine,
+      strategyComparisonReadout: cloneData(strategyComparisonReadout, strategyComparisonReadout),
+      strategyComparisonLine,
+      strategyComparisonVoiceLine,
       advisoryOnly: true,
     },
     summaryLine: `Strategy snapshot: ${recommendationBasis.recommendedStrategyName || 'Original Trading Plan'} (${recommendationBasis.basisLabel || basisType}) | stance ${executionStanceCopy.stance}.`,
@@ -34871,6 +34888,9 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
   commandCenter.strategyRecommendationLine = strategyLayerSnapshot.strategyRecommendationLine || null;
   commandCenter.strategyStanceLine = strategyLayerSnapshot.strategyStanceLine || null;
   commandCenter.strategyVoiceLine = strategyLayerSnapshot.strategyVoiceLine || null;
+  commandCenter.strategyComparisonReadout = cloneData(strategyLayerSnapshot.strategyComparisonReadout, strategyLayerSnapshot.strategyComparisonReadout);
+  commandCenter.strategyComparisonLine = strategyLayerSnapshot.strategyComparisonLine || null;
+  commandCenter.strategyComparisonVoiceLine = strategyLayerSnapshot.strategyComparisonVoiceLine || null;
 
   if (commandCenter.todayRecommendation && typeof commandCenter.todayRecommendation === 'object') {
     Object.assign(commandCenter.todayRecommendation, cloneData(strategyLayerSnapshot.todayRecommendationMirror, strategyLayerSnapshot.todayRecommendationMirror));
@@ -34949,6 +34969,9 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       recommendationPerformance.strategyRecommendationLine = strategyLayerSnapshot.strategyRecommendationLine || null;
       recommendationPerformance.strategyStanceLine = strategyLayerSnapshot.strategyStanceLine || null;
       recommendationPerformance.strategyVoiceLine = strategyLayerSnapshot.strategyVoiceLine || null;
+      recommendationPerformance.strategyComparisonReadout = cloneData(strategyLayerSnapshot.strategyComparisonReadout, strategyLayerSnapshot.strategyComparisonReadout);
+      recommendationPerformance.strategyComparisonLine = strategyLayerSnapshot.strategyComparisonLine || null;
+      recommendationPerformance.strategyComparisonVoiceLine = strategyLayerSnapshot.strategyComparisonVoiceLine || null;
       recommendationPerformance.todayRecommendation = cloneData(
         strategyLayerSnapshot.todayRecommendationMirror,
         strategyLayerSnapshot.todayRecommendationMirror
@@ -34979,6 +35002,9 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       strategyRecommendationLine: strategyLayerSnapshot?.strategyRecommendationLine || null,
       strategyStanceLine: strategyLayerSnapshot?.strategyStanceLine || null,
       strategyVoiceLine: strategyLayerSnapshot?.strategyVoiceLine || null,
+      strategyComparisonReadout: strategyLayerSnapshot?.strategyComparisonReadout || null,
+      strategyComparisonLine: strategyLayerSnapshot?.strategyComparisonLine || null,
+      strategyComparisonVoiceLine: strategyLayerSnapshot?.strategyComparisonVoiceLine || null,
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       generatedAt: performance?.generatedAt || new Date().toISOString(),
@@ -35537,6 +35563,9 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       strategyRecommendationLine: strategyLayerSnapshot?.strategyRecommendationLine || null,
       strategyStanceLine: strategyLayerSnapshot?.strategyStanceLine || null,
       strategyVoiceLine: strategyLayerSnapshot?.strategyVoiceLine || null,
+      strategyComparisonReadout: strategyLayerSnapshot?.strategyComparisonReadout || null,
+      strategyComparisonLine: strategyLayerSnapshot?.strategyComparisonLine || null,
+      strategyComparisonVoiceLine: strategyLayerSnapshot?.strategyComparisonVoiceLine || null,
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       strategyTracking: payload.strategyTracking || null,

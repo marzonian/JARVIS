@@ -40,6 +40,30 @@ function summarizeCards(section = {}) {
   }));
 }
 
+function summarizeComparison(readout = {}) {
+  const rows = Array.isArray(readout.comparisonRows) ? readout.comparisonRows : [];
+  return {
+    recommendedKey: readout.recommendedKey || null,
+    recommendedName: readout.recommendedName || null,
+    summaryLine: readout.summaryLine || null,
+    voiceSummaryLine: readout.voiceSummaryLine || null,
+    comparisonRows: rows.map((row) => ({
+      key: row?.key || null,
+      name: row?.name || null,
+      layer: row?.layer || null,
+      isRecommended: row?.isRecommended === true,
+      recommendationStatus: row?.recommendationStatus || null,
+      winRate: row?.winRate ?? null,
+      profitFactor: row?.profitFactor ?? null,
+      maxDrawdownDollars: row?.maxDrawdownDollars ?? null,
+      suitability: row?.suitability ?? null,
+      score: row?.score ?? null,
+      whyChosenOrNot: row?.whyChosenOrNot || null,
+      tradeoffLine: row?.tradeoffLine || null,
+    })),
+  };
+}
+
 (async () => {
   const useExisting = !!process.env.BASE_URL;
   const server = await startAuditServer({
@@ -70,15 +94,21 @@ function summarizeCards(section = {}) {
         recommendationLine: commandCenter?.strategyRecommendationLine || null,
         stanceLine: commandCenter?.strategyStanceLine || null,
         voiceLine: commandCenter?.strategyVoiceLine || null,
+        comparisonLine: commandCenter?.strategyComparisonLine || null,
+        comparisonVoiceLine: commandCenter?.strategyComparisonVoiceLine || null,
         cards: summarizeCards(commandCard),
+        comparison: summarizeComparison(commandCenter?.strategyComparisonReadout || {}),
       },
       recommendationPerformance: {
         recommendationLine: recommendationPerformance?.strategyRecommendationLine || null,
         stanceLine: recommendationPerformance?.strategyStanceLine || null,
         voiceLine: recommendationPerformance?.strategyVoiceLine || null,
+        comparisonLine: recommendationPerformance?.strategyComparisonLine || null,
+        comparisonVoiceLine: recommendationPerformance?.strategyComparisonVoiceLine || null,
         cards: summarizeCards(perfCard),
+        comparison: summarizeComparison(recommendationPerformance?.strategyComparisonReadout || {}),
       },
-      summaryLine: 'Strategy stack card audit complete: command-center and recommendation-performance expose strategy cards, why-recommended block, and stance lines.',
+      summaryLine: 'Strategy stack card audit complete: command-center and recommendation-performance expose strategy cards, why-recommended block, stance lines, and strategy comparison readout.',
       advisoryOnly: true,
     };
 

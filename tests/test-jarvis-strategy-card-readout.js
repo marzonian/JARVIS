@@ -4,6 +4,7 @@ const assert = require('assert');
 const {
   buildStrategyStackCardSection,
   buildStrategyRecommendationWhyBlock,
+  buildStrategyComparisonReadout,
 } = require('../server/jarvis-core/strategy-card-surfacing');
 
 function run() {
@@ -93,6 +94,47 @@ function run() {
   assert(typeof whyBlock.voiceSummaryLine === 'string' && whyBlock.voiceSummaryLine.length > 0, 'voice summary line missing');
   assert(/Original Plan/i.test(whyBlock.recommendationSummaryLine), 'recommendation summary should mention Original Plan');
   assert(/Execution stance:/i.test(whyBlock.stanceSummaryLine), 'stance summary should expose execution stance language');
+
+  const comparison = buildStrategyComparisonReadout({
+    strategyStack: cards.cards.map((card) => ({
+      key: card.key,
+      layer: card.layer,
+      name: card.strategyName,
+      suitability: card.suitability,
+      score: card.score,
+      metrics: { winRate: card.winRate, profitFactor: card.profitFactor },
+      drawdown: { maxDrawdownDollars: card.maxDrawdownDollars },
+      recommendationStatus: card.recommendationStatus,
+      pineAccess: card.pineAccess,
+    })),
+    recommendationBasis: {
+      basisType: 'baseline',
+      recommendedStrategyKey: 'original_plan_orb_3130',
+      recommendedStrategyName: 'Original Trading Plan',
+    },
+    executionStance: {
+      stance: 'Skip',
+      reason: 'Blockers are still active; avoid engagement until clearance.',
+    },
+  });
+
+  assert(comparison && typeof comparison === 'object', 'strategy comparison readout missing');
+  assert(comparison.recommendedKey === 'original_plan_orb_3130', 'strategy comparison recommended key mismatch');
+  assert(Array.isArray(comparison.comparisonRows) && comparison.comparisonRows.length === 3, 'strategy comparison rows should expose all three strategies');
+  const recommendedRows = comparison.comparisonRows.filter((row) => row.isRecommended === true);
+  assert(recommendedRows.length === 1, 'strategy comparison should mark exactly one recommended row');
+  assert(recommendedRows[0].key === 'original_plan_orb_3130', 'recommended row key mismatch');
+  const nonRecommendedRows = comparison.comparisonRows.filter((row) => row.isRecommended !== true);
+  assert(nonRecommendedRows.length === 2, 'expected two non-recommended rows');
+  assert(nonRecommendedRows.every((row) => typeof row.whyChosenOrNot === 'string' && row.whyChosenOrNot.length > 0), 'non-recommended rows should include whyChosenOrNot');
+  assert(nonRecommendedRows.every((row) => typeof row.tradeoffLine === 'string' && row.tradeoffLine.length > 0), 'non-recommended rows should include tradeoffLine');
+  const nullMetricRow = comparison.comparisonRows.find((row) => row.key === 'fhm_1005_70_80_60_rr_tp0sp10');
+  assert(nullMetricRow && nullMetricRow.score === null, 'missing score must stay null');
+  assert(nullMetricRow && nullMetricRow.suitability === null, 'missing suitability must stay null');
+  assert(nullMetricRow && nullMetricRow.winRate === null, 'missing winRate must stay null');
+  assert(nullMetricRow && nullMetricRow.profitFactor === null, 'missing profitFactor must stay null');
+  assert(typeof comparison.summaryLine === 'string' && comparison.summaryLine.length > 0, 'strategy comparison summary line missing');
+  assert(typeof comparison.voiceSummaryLine === 'string' && comparison.voiceSummaryLine.length > 0, 'strategy comparison voice summary missing');
 
   console.log('Jarvis strategy card readout tests passed.');
 }

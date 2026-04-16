@@ -51,6 +51,9 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(typeof snapshot.strategyRecommendationLine === 'string' && snapshot.strategyRecommendationLine.length > 0, `${label} strategyRecommendationLine missing`, { snapshot });
   assert(typeof snapshot.strategyStanceLine === 'string' && snapshot.strategyStanceLine.length > 0, `${label} strategyStanceLine missing`, { snapshot });
   assert(typeof snapshot.strategyVoiceLine === 'string' && snapshot.strategyVoiceLine.length > 0, `${label} strategyVoiceLine missing`, { snapshot });
+  assert(snapshot.strategyComparisonReadout && typeof snapshot.strategyComparisonReadout === 'object', `${label} strategyComparisonReadout missing`, { snapshot });
+  assert(typeof snapshot.strategyComparisonLine === 'string' && snapshot.strategyComparisonLine.length > 0, `${label} strategyComparisonLine missing`, { snapshot });
+  assert(typeof snapshot.strategyComparisonVoiceLine === 'string' && snapshot.strategyComparisonVoiceLine.length > 0, `${label} strategyComparisonVoiceLine missing`, { snapshot });
   assert(snapshot.todayRecommendationMirror && typeof snapshot.todayRecommendationMirror === 'object', `${label} todayRecommendationMirror missing`, { snapshot });
   assert(snapshot.decisionBoardMirror && typeof snapshot.decisionBoardMirror === 'object', `${label} decisionBoardMirror missing`, { snapshot });
 
@@ -78,6 +81,26 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(String(card.pineAccess.format || '').toLowerCase() === 'pine_v6', `${label} strategy card pineAccess format invalid`, { card });
     assert(card.pineContractRef === card.pineAccess.endpoint, `${label} strategy card pine contract ref mismatch`, { card });
   }
+
+  const comparisonRows = Array.isArray(snapshot?.strategyComparisonReadout?.comparisonRows)
+    ? snapshot.strategyComparisonReadout.comparisonRows
+    : [];
+  assert(comparisonRows.length >= 3, `${label} strategy comparison rows missing`, { comparisonRows });
+  const recommendedRows = comparisonRows.filter((row) => row?.isRecommended === true);
+  assert(recommendedRows.length === 1, `${label} strategy comparison should mark exactly one recommended row`, { comparisonRows });
+  for (const row of comparisonRows) {
+    assert(typeof row.key === 'string' && row.key.length > 0, `${label} strategy comparison row key missing`, { row });
+    assert(typeof row.name === 'string' && row.name.length > 0, `${label} strategy comparison row name missing`, { row });
+    assert(typeof row.layer === 'string' && row.layer.length > 0, `${label} strategy comparison row layer missing`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'winRate'), `${label} strategy comparison row winRate missing`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'profitFactor'), `${label} strategy comparison row profitFactor missing`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'maxDrawdownDollars'), `${label} strategy comparison row maxDrawdownDollars missing`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'suitability') || Object.prototype.hasOwnProperty.call(row, 'score'), `${label} strategy comparison row score/suitability missing`, { row });
+    assert(typeof row.whyChosenOrNot === 'string' && row.whyChosenOrNot.length > 0, `${label} strategy comparison row whyChosenOrNot missing`, { row });
+    assert(typeof row.tradeoffLine === 'string' && row.tradeoffLine.length > 0, `${label} strategy comparison row tradeoffLine missing`, { row });
+  }
+  const nonRecommendedRows = comparisonRows.filter((row) => row?.isRecommended !== true);
+  assert(nonRecommendedRows.every((row) => typeof row.whyChosenOrNot === 'string' && row.whyChosenOrNot.length > 0), `${label} non-recommended rows should include whyChosenOrNot`, { nonRecommendedRows });
 }
 
 (async () => {
@@ -121,6 +144,9 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(typeof center.strategyRecommendationLine === 'string' && center.strategyRecommendationLine.length > 0, 'command-center strategyRecommendationLine root field missing', { center });
     assert(typeof center.strategyStanceLine === 'string' && center.strategyStanceLine.length > 0, 'command-center strategyStanceLine root field missing', { center });
     assert(typeof center.strategyVoiceLine === 'string' && center.strategyVoiceLine.length > 0, 'command-center strategyVoiceLine root field missing', { center });
+    assert(center.strategyComparisonReadout && typeof center.strategyComparisonReadout === 'object', 'command-center strategyComparisonReadout root field missing', { center });
+    assert(typeof center.strategyComparisonLine === 'string' && center.strategyComparisonLine.length > 0, 'command-center strategyComparisonLine root field missing', { center });
+    assert(typeof center.strategyComparisonVoiceLine === 'string' && center.strategyComparisonVoiceLine.length > 0, 'command-center strategyComparisonVoiceLine root field missing', { center });
     assert(center.todayRecommendation && typeof center.todayRecommendation === 'object', 'command-center todayRecommendation root mirror missing', { center });
     assert(center.decisionBoard && typeof center.decisionBoard === 'object', 'command-center decisionBoard root mirror missing', { center });
 
@@ -132,6 +158,10 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.commandCenter.todayRecommendation.strategyWhyRecommended && typeof center.commandCenter.todayRecommendation.strategyWhyRecommended === 'object', 'todayRecommendation strategyWhyRecommended mirror missing', { center });
     assert(center.commandCenter.decisionBoard.strategyStackCard && typeof center.commandCenter.decisionBoard.strategyStackCard === 'object', 'decisionBoard strategyStackCard mirror missing', { center });
     assert(center.commandCenter.decisionBoard.strategyWhyRecommended && typeof center.commandCenter.decisionBoard.strategyWhyRecommended === 'object', 'decisionBoard strategyWhyRecommended mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.strategyComparisonReadout && typeof center.commandCenter.todayRecommendation.strategyComparisonReadout === 'object', 'todayRecommendation strategyComparisonReadout mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.strategyComparisonReadout && typeof center.commandCenter.decisionBoard.strategyComparisonReadout === 'object', 'decisionBoard strategyComparisonReadout mirror missing', { center });
+    assert(typeof center.commandCenter.todayRecommendation.strategyComparisonLine === 'string' && center.commandCenter.todayRecommendation.strategyComparisonLine.length > 0, 'todayRecommendation strategyComparisonLine mirror missing', { center });
+    assert(typeof center.commandCenter.decisionBoard.strategyComparisonLine === 'string' && center.commandCenter.decisionBoard.strategyComparisonLine.length > 0, 'decisionBoard strategyComparisonLine mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.originalPlan && typeof center.commandCenter.todayRecommendation.originalPlan === 'object', 'todayRecommendation originalPlan mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.bestVariant && typeof center.commandCenter.todayRecommendation.bestVariant === 'object', 'todayRecommendation bestVariant mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.bestAlternative && typeof center.commandCenter.todayRecommendation.bestAlternative === 'object', 'todayRecommendation bestAlternative mirror missing', { center });
@@ -157,6 +187,9 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(typeof perf.recommendationPerformance.strategyRecommendationLine === 'string' && perf.recommendationPerformance.strategyRecommendationLine.length > 0, 'recommendationPerformance.strategyRecommendationLine missing', { perf });
     assert(typeof perf.recommendationPerformance.strategyStanceLine === 'string' && perf.recommendationPerformance.strategyStanceLine.length > 0, 'recommendationPerformance.strategyStanceLine missing', { perf });
     assert(typeof perf.recommendationPerformance.strategyVoiceLine === 'string' && perf.recommendationPerformance.strategyVoiceLine.length > 0, 'recommendationPerformance.strategyVoiceLine missing', { perf });
+    assert(perf.recommendationPerformance.strategyComparisonReadout && typeof perf.recommendationPerformance.strategyComparisonReadout === 'object', 'recommendationPerformance.strategyComparisonReadout missing', { perf });
+    assert(typeof perf.recommendationPerformance.strategyComparisonLine === 'string' && perf.recommendationPerformance.strategyComparisonLine.length > 0, 'recommendationPerformance.strategyComparisonLine missing', { perf });
+    assert(typeof perf.recommendationPerformance.strategyComparisonVoiceLine === 'string' && perf.recommendationPerformance.strategyComparisonVoiceLine.length > 0, 'recommendationPerformance.strategyComparisonVoiceLine missing', { perf });
     pass('recommendation/performance strategy-layer snapshot contract');
 
     const stackRows = Array.isArray(center.strategyLayerSnapshot?.strategyStack)

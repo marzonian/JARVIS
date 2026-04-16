@@ -169,8 +169,145 @@ function buildStrategyRecommendationWhyBlock({
   };
 }
 
+function metricText(value, suffix = '') {
+  if (value == null || !Number.isFinite(Number(value))) return 'n/a';
+  return `${round2(Number(value))}${suffix}`;
+}
+
+function buildComparisonReason({
+  row = {},
+  recommendedRow = {},
+  recommendationBasis = {},
+  executionStance = {},
+  isRecommended = false,
+} = {}) {
+  const basisType = asLowerText(recommendationBasis?.basisType || 'baseline');
+  const stance = asText(executionStance?.stance || '');
+  const recWin = asFiniteOrNull(recommendedRow?.winRate);
+  const recPf = asFiniteOrNull(recommendedRow?.profitFactor);
+  const recDd = asFiniteOrNull(recommendedRow?.maxDrawdownDollars);
+  const rowWin = asFiniteOrNull(row?.winRate);
+  const rowPf = asFiniteOrNull(row?.profitFactor);
+  const rowDd = asFiniteOrNull(row?.maxDrawdownDollars);
+
+  if (isRecommended) {
+    if (basisType === 'overlay') {
+      return `Chosen: overlay basis is active for this session.`;
+    }
+    if (basisType === 'alternative') {
+      return `Chosen: alternative basis is active for this session.`;
+    }
+    if (stance) {
+      return `Chosen: baseline basis is active while stance is ${stance}.`;
+    }
+    return `Chosen: baseline basis is active for this session.`;
+  }
+
+  if (rowWin != null && recWin != null && rowWin < recWin) {
+    return `Not chosen: lower win rate than the active pick.`;
+  }
+  if (rowPf != null && recPf != null && rowPf < recPf) {
+    return `Not chosen: lower profit factor than the active pick.`;
+  }
+  if (rowDd != null && recDd != null && rowDd > recDd) {
+    return `Not chosen: deeper drawdown profile than the active pick.`;
+  }
+  if (asText(row?.recommendationStatus).toLowerCase().includes('candidate')) {
+    return `Not chosen: kept as backup candidate for now.`;
+  }
+  return `Not chosen: active basis favors another stack layer.`;
+}
+
+function buildTradeoffLine({
+  row = {},
+  recommendedRow = {},
+  isRecommended = false,
+} = {}) {
+  const rowWr = metricText(row?.winRate, '%');
+  const rowPf = metricText(row?.profitFactor);
+  const rowDd = metricText(row?.maxDrawdownDollars);
+  if (isRecommended) {
+    return `Tradeoff: WR ${rowWr}, PF ${rowPf}, DD $${rowDd}.`;
+  }
+  const recWr = metricText(recommendedRow?.winRate, '%');
+  const recPf = metricText(recommendedRow?.profitFactor);
+  const recDd = metricText(recommendedRow?.maxDrawdownDollars);
+  return `Tradeoff vs pick: WR ${rowWr} vs ${recWr}, PF ${rowPf} vs ${recPf}, DD $${rowDd} vs $${recDd}.`;
+}
+
+function buildStrategyComparisonReadout({
+  strategyStack = [],
+  recommendationBasis = {},
+  executionStance = {},
+} = {}) {
+  const stackRows = Array.isArray(strategyStack) ? strategyStack : [];
+  const normalized = stackRows.map((row) => normalizeCardRow(row, {}));
+  const recommendedKey = asNullableText(recommendationBasis?.recommendedStrategyKey || '')
+    || asNullableText(normalized[0]?.key || '');
+  const recommendedByKey = normalized.find((row) => String(row?.key || '') === String(recommendedKey || '')) || null;
+  const recommendedByStatus = normalized.find((row) => String(row?.recommendationStatus || '').toLowerCase() === 'recommended_now') || null;
+  const recommendedRow = recommendedByKey || recommendedByStatus || normalized[0] || null;
+  const recommendedName = asNullableText(
+    recommendationBasis?.recommendedStrategyName
+    || recommendedRow?.strategyName
+    || ''
+  );
+
+  const comparisonRows = normalized.map((row) => {
+    const isRecommended = (
+      recommendedRow
+      && String(row?.key || '') === String(recommendedRow?.key || '')
+    );
+    return {
+      key: row?.key || null,
+      name: row?.strategyName || null,
+      layer: row?.layer || null,
+      isRecommended,
+      recommendationStatus: row?.recommendationStatus || null,
+      winRate: row?.winRate ?? null,
+      profitFactor: row?.profitFactor ?? null,
+      maxDrawdownDollars: row?.maxDrawdownDollars ?? null,
+      suitability: row?.suitability ?? null,
+      score: row?.score ?? null,
+      whyChosenOrNot: buildComparisonReason({
+        row,
+        recommendedRow,
+        recommendationBasis,
+        executionStance,
+        isRecommended,
+      }),
+      tradeoffLine: buildTradeoffLine({
+        row,
+        recommendedRow,
+        isRecommended,
+      }),
+    };
+  });
+
+  const nonRecommended = comparisonRows.filter((row) => row.isRecommended !== true);
+  const quickReasons = nonRecommended
+    .slice(0, 2)
+    .map((row) => `${row.name || row.key || 'backup'}: ${row.whyChosenOrNot}`)
+    .join(' ');
+  const summaryLine = `Picked ${recommendedName || 'current strategy'}. ${quickReasons}`.trim();
+  const stance = asNullableText(executionStance?.stance || '');
+  const voiceSummaryLine = stance
+    ? `${summaryLine} Stance: ${stance}.`
+    : summaryLine;
+
+  return {
+    recommendedKey: recommendedRow?.key || recommendedKey || null,
+    recommendedName: recommendedName || null,
+    comparisonRows,
+    summaryLine,
+    voiceSummaryLine,
+    advisoryOnly: true,
+  };
+}
+
 module.exports = {
   buildStrategyStackCardSection,
   buildStrategyRecommendationWhyBlock,
+  buildStrategyComparisonReadout,
   normalizeCardRow,
 };
