@@ -40,6 +40,7 @@ function summarizeCandidates(snapshot = {}) {
     candidateSourceCounts: candidates.candidateSourceCounts || sourceCounts,
     candidateDiversitySummaryLine: candidates.candidateDiversitySummaryLine || null,
     liveCandidateStateMonitor: snapshot?.liveCandidateStateMonitor || null,
+    liveCandidateTransitionHistory: snapshot?.liveCandidateTransitionHistory || null,
     strategyCandidateOpportunityBridge: snapshot?.strategyCandidateOpportunityBridge || null,
     topCandidate: topRow ? {
       candidateKey: topRow.candidateKey || null,

@@ -65,9 +65,13 @@ const DEFAULT_VARIANT_SPECS = Object.freeze([
 
 const LIVE_CANDIDATE_STATE_MONITOR_STATE = {
   candidateStates: Object.create(null),
+  observationHistoryByCandidate: Object.create(null),
+  transitionRows: [],
   lastSnapshotAt: null,
   lastActionableTransition: null,
 };
+const LIVE_CANDIDATE_STATE_HISTORY_LIMIT = 24;
+const LIVE_CANDIDATE_TRANSITION_HISTORY_LIMIT = 80;
 
 function clampNumber(value, min, max) {
   const n = Number(value);
@@ -1552,6 +1556,12 @@ function buildLiveCandidateStateMonitor(input = {}) {
   if (!monitorState.candidateStates || typeof monitorState.candidateStates !== 'object') {
     monitorState.candidateStates = Object.create(null);
   }
+  if (!monitorState.observationHistoryByCandidate || typeof monitorState.observationHistoryByCandidate !== 'object') {
+    monitorState.observationHistoryByCandidate = Object.create(null);
+  }
+  if (!Array.isArray(monitorState.transitionRows)) {
+    monitorState.transitionRows = [];
+  }
   const allCandidates = Array.isArray(liveOpportunityCandidates?.candidates)
     ? liveOpportunityCandidates.candidates
     : [];
@@ -1559,6 +1569,56 @@ function buildLiveCandidateStateMonitor(input = {}) {
   const nowEt = String(todayContext?.nowEt || '').trim() || new Date().toISOString();
   const phase = String(todayContext?.sessionPhase || '').trim().toLowerCase();
   const insideApprovedActionWindow = isApprovedShadowActionWindow(phase);
+  const snapshotTransitions = [];
+
+  const buildObservation = (candidate) => {
+    const currentActionable = isCandidateActionableNow(candidate, {
+      negativeEvTolerance: -15,
+      minStructureQualityScore: 58,
+    });
+    return {
+      timestamp: nowEt,
+      candidateKey: String(candidate?.candidateKey || '').trim() || null,
+      candidateStatus: String(candidate?.candidateStatus || '').trim().toLowerCase() || null,
+      structureQualityScore: Number.isFinite(Number(candidate?.structureQualityScore))
+        ? round2(Number(candidate.structureQualityScore))
+        : null,
+      structureQualityLabel: String(candidate?.structureQualityLabel || '').trim().toLowerCase() || null,
+      candidateWinProb: Number.isFinite(Number(candidate?.candidateWinProb))
+        ? round2(Number(candidate.candidateWinProb))
+        : null,
+      candidateExpectedValue: Number.isFinite(Number(candidate?.candidateExpectedValue))
+        ? round2(Number(candidate.candidateExpectedValue))
+        : null,
+      insideApprovedActionWindow,
+      actionableNow: currentActionable,
+      strategyKey: String(candidate?.strategyKey || '').trim() || null,
+      candidateSource: String(candidate?.candidateSource || '').trim() || null,
+    };
+  };
+
+  const classifyTransitionType = (options = {}) => {
+    if (options.hasPreviousState !== true) return 'first_observation';
+    if (options.currentActionable === true && options.previousActionable === false) return 'crossed_into_actionable';
+    if (options.currentActionable === false && options.previousActionable === true) return 'dropped_out_of_actionable';
+    if (String(options.currentStatus || '') !== String(options.previousStatus || '')) return 'status_changed';
+    if (options.structureDirection === 'improved') return 'structure_improved';
+    if (options.structureDirection === 'worsened') return 'structure_worsened';
+    return 'unchanged';
+  };
+
+  const toTransitionSummaryLine = (transitionType, candidateLabel, previousStatus, currentStatus) => {
+    const label = String(candidateLabel || 'Candidate').trim() || 'Candidate';
+    if (transitionType === 'crossed_into_actionable') return `${label} crossed into actionable structure.`;
+    if (transitionType === 'dropped_out_of_actionable') return `${label} dropped out of actionable structure.`;
+    if (transitionType === 'status_changed') {
+      return `${label} status changed from ${String(previousStatus || 'unknown').trim() || 'unknown'} to ${String(currentStatus || 'unknown').trim() || 'unknown'}.`;
+    }
+    if (transitionType === 'structure_improved') return `${label} structure improved.`;
+    if (transitionType === 'structure_worsened') return `${label} structure worsened.`;
+    if (transitionType === 'first_observation') return `${label} baseline state captured.`;
+    return `${label} structure unchanged.`;
+  };
 
   const monitoredCandidates = monitored.map((candidate) => {
     const key = String(candidate?.candidateKey || '').trim();
@@ -1578,16 +1638,40 @@ function buildLiveCandidateStateMonitor(input = {}) {
     });
     const previousActionable = prev?.isActionableNow === true;
     let structureDirection = 'unchanged';
-    if (!Number.isFinite(previousStructureQualityScore) && Number.isFinite(currentStructureQualityScore)) {
-      structureDirection = 'improved';
-    } else if (Number.isFinite(previousStructureQualityScore) && Number.isFinite(currentStructureQualityScore)) {
+    if (hasPreviousState && Number.isFinite(previousStructureQualityScore) && Number.isFinite(currentStructureQualityScore)) {
       if (currentStructureQualityScore > previousStructureQualityScore + 0.25) structureDirection = 'improved';
       else if (currentStructureQualityScore < previousStructureQualityScore - 0.25) structureDirection = 'worsened';
     }
     const crossedIntoActionable = hasPreviousState && currentActionable && !previousActionable;
-    const transitionSummaryLine = crossedIntoActionable
-      ? `${String(candidate?.strategyName || candidate?.strategyKey || 'Candidate').trim()} crossed into actionable structure.`
-      : `${String(candidate?.strategyName || candidate?.strategyKey || 'Candidate').trim()} structure ${structureDirection}.`;
+    const transitionType = classifyTransitionType({
+      hasPreviousState,
+      previousActionable,
+      currentActionable,
+      previousStatus,
+      currentStatus,
+      structureDirection,
+    });
+    const candidateLabel = String(candidate?.strategyName || candidate?.strategyKey || 'Candidate').trim() || 'Candidate';
+    const transitionSummaryLine = toTransitionSummaryLine(
+      transitionType,
+      candidateLabel,
+      previousStatus,
+      currentStatus
+    );
+    if (hasPreviousState && transitionType !== 'unchanged') {
+      snapshotTransitions.push({
+        timestamp: nowEt,
+        candidateKey: key || null,
+        previousStatus,
+        currentStatus,
+        previousStructureQualityScore,
+        currentStructureQualityScore,
+        previousActionable,
+        currentActionable,
+        transitionType,
+        transitionSummaryLine,
+      });
+    }
     return {
       candidateKey: key || null,
       strategyKey: String(candidate?.strategyKey || '').trim() || null,
@@ -1600,11 +1684,19 @@ function buildLiveCandidateStateMonitor(input = {}) {
       previousActionable,
       currentActionable,
       crossedIntoActionable,
+      transitionType,
       transitionSummaryLine,
     };
   });
 
-  const transitionCandidate = monitoredCandidates.find((row) => row.crossedIntoActionable) || null;
+  for (const transitionRow of snapshotTransitions) {
+    monitorState.transitionRows.push(transitionRow);
+  }
+  if (monitorState.transitionRows.length > LIVE_CANDIDATE_TRANSITION_HISTORY_LIMIT) {
+    monitorState.transitionRows = monitorState.transitionRows.slice(-LIVE_CANDIDATE_TRANSITION_HISTORY_LIMIT);
+  }
+
+  const transitionCandidate = monitoredCandidates.find((row) => row.transitionType === 'crossed_into_actionable') || null;
   const actionableTransitionDetected = Boolean(transitionCandidate && insideApprovedActionWindow);
   const actionableTransitionReason = actionableTransitionDetected
     ? 'structure_improved_to_actionable'
@@ -1621,24 +1713,37 @@ function buildLiveCandidateStateMonitor(input = {}) {
       ? 'Transition detected but outside approved action window.'
       : 'No actionable transition detected.');
 
-  const stateRows = allCandidates.slice(0, 10);
-  const nextState = Object.create(null);
+  const stateRows = allCandidates.slice(0, 12);
   for (const row of stateRows) {
+    const observation = buildObservation(row);
     const key = String(row?.candidateKey || '').trim();
     if (!key) continue;
-    nextState[key] = {
-      status: String(row?.candidateStatus || '').trim().toLowerCase() || null,
-      structureQualityScore: Number.isFinite(Number(row?.structureQualityScore))
-        ? round2(Number(row.structureQualityScore))
-        : null,
-      isActionableNow: isCandidateActionableNow(row, {
-        negativeEvTolerance: -15,
-        minStructureQualityScore: 58,
-      }),
-      updatedAt: nowEt,
+    if (!Array.isArray(monitorState.observationHistoryByCandidate[key])) {
+      monitorState.observationHistoryByCandidate[key] = [];
+    }
+    const perCandidateHistory = monitorState.observationHistoryByCandidate[key];
+    const previousObservation = perCandidateHistory.length > 0
+      ? perCandidateHistory[perCandidateHistory.length - 1]
+      : null;
+    if (previousObservation && String(previousObservation.timestamp || '') === String(observation.timestamp || '')) {
+      perCandidateHistory[perCandidateHistory.length - 1] = observation;
+    } else {
+      perCandidateHistory.push(observation);
+    }
+    if (perCandidateHistory.length > LIVE_CANDIDATE_STATE_HISTORY_LIMIT) {
+      monitorState.observationHistoryByCandidate[key] = perCandidateHistory.slice(-LIVE_CANDIDATE_STATE_HISTORY_LIMIT);
+    }
+    monitorState.candidateStates[key] = {
+      status: observation.candidateStatus,
+      structureQualityScore: observation.structureQualityScore,
+      structureQualityLabel: observation.structureQualityLabel,
+      candidateWinProb: observation.candidateWinProb,
+      candidateExpectedValue: observation.candidateExpectedValue,
+      insideApprovedActionWindow: observation.insideApprovedActionWindow,
+      isActionableNow: observation.actionableNow,
+      updatedAt: observation.timestamp,
     };
   }
-  monitorState.candidateStates = nextState;
   monitorState.lastSnapshotAt = nowEt;
   if (actionableTransitionDetected) {
     monitorState.lastActionableTransition = {
@@ -1656,6 +1761,29 @@ function buildLiveCandidateStateMonitor(input = {}) {
     candidateKey: actionableTransitionCandidateKey,
     insideApprovedActionWindow,
     summaryLine: transitionSummaryLine,
+    advisoryOnly: true,
+  };
+}
+
+function buildLiveCandidateTransitionHistory(input = {}) {
+  const monitorState = input?.monitorState && typeof input.monitorState === 'object'
+    ? input.monitorState
+    : LIVE_CANDIDATE_STATE_MONITOR_STATE;
+  if (!Array.isArray(monitorState.transitionRows)) {
+    monitorState.transitionRows = [];
+  }
+  const recentTransitions = monitorState.transitionRows
+    .slice(-12)
+    .reverse()
+    .map((row) => cloneData(row, row));
+  const latestTransition = recentTransitions.length ? recentTransitions[0] : null;
+  const summaryLine = latestTransition
+    ? `Latest transition: ${String(latestTransition.transitionSummaryLine || '').trim() || 'state changed.'}`
+    : 'No candidate transitions recorded yet.';
+  return {
+    recentTransitions,
+    latestTransition: cloneData(latestTransition, latestTransition),
+    summaryLine,
     advisoryOnly: true,
   };
 }
@@ -3465,12 +3593,16 @@ function buildCommandCenterPanels(input = {}) {
     regimeLabel,
     projectedWinChance,
   });
+  const liveCandidateMonitorState = input?.liveCandidateStateMonitorState && typeof input.liveCandidateStateMonitorState === 'object'
+    ? input.liveCandidateStateMonitorState
+    : null;
   const liveCandidateStateMonitor = buildLiveCandidateStateMonitor({
     liveOpportunityCandidates,
     todayContext,
-    monitorState: input?.liveCandidateStateMonitorState && typeof input.liveCandidateStateMonitorState === 'object'
-      ? input.liveCandidateStateMonitorState
-      : null,
+    monitorState: liveCandidateMonitorState,
+  });
+  const liveCandidateTransitionHistory = buildLiveCandidateTransitionHistory({
+    monitorState: liveCandidateMonitorState,
   });
   const strategyCandidateOpportunityBridge = buildStrategyCandidateBridge({
     opportunityScoring,
@@ -3677,6 +3809,10 @@ function buildCommandCenterPanels(input = {}) {
     : null;
   todayRecommendation.liveOpportunityCandidates = cloneData(liveOpportunityCandidates, liveOpportunityCandidates);
   todayRecommendation.liveCandidateStateMonitor = cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor);
+  todayRecommendation.liveCandidateTransitionHistory = cloneData(
+    liveCandidateTransitionHistory,
+    liveCandidateTransitionHistory
+  );
   todayRecommendation.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -3715,6 +3851,10 @@ function buildCommandCenterPanels(input = {}) {
     : null;
   decisionBoard.liveOpportunityCandidates = cloneData(liveOpportunityCandidates, liveOpportunityCandidates);
   decisionBoard.liveCandidateStateMonitor = cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor);
+  decisionBoard.liveCandidateTransitionHistory = cloneData(
+    liveCandidateTransitionHistory,
+    liveCandidateTransitionHistory
+  );
   decisionBoard.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -3760,6 +3900,7 @@ function buildCommandCenterPanels(input = {}) {
       : null,
     liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
     liveCandidateStateMonitor: cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor),
+    liveCandidateTransitionHistory: cloneData(liveCandidateTransitionHistory, liveCandidateTransitionHistory),
     strategyCandidateOpportunityBridge: cloneData(
       strategyCandidateOpportunityBridge,
       strategyCandidateOpportunityBridge

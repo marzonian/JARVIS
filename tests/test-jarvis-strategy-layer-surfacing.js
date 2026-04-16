@@ -65,6 +65,10 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(typeof snapshot.liveCandidateStateMonitor.actionableTransitionDetected === 'boolean', `${label} liveCandidateStateMonitor.actionableTransitionDetected missing`, { snapshot });
   assert(typeof snapshot.liveCandidateStateMonitor.actionableTransitionReason === 'string' && snapshot.liveCandidateStateMonitor.actionableTransitionReason.length > 0, `${label} liveCandidateStateMonitor.actionableTransitionReason missing`, { snapshot });
   assert(typeof snapshot.liveCandidateStateMonitor.summaryLine === 'string' && snapshot.liveCandidateStateMonitor.summaryLine.length > 0, `${label} liveCandidateStateMonitor.summaryLine missing`, { snapshot });
+  assert(snapshot.liveCandidateTransitionHistory && typeof snapshot.liveCandidateTransitionHistory === 'object', `${label} liveCandidateTransitionHistory missing`, { snapshot });
+  assert(Array.isArray(snapshot.liveCandidateTransitionHistory.recentTransitions), `${label} liveCandidateTransitionHistory.recentTransitions missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'latestTransition'), `${label} liveCandidateTransitionHistory.latestTransition missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateTransitionHistory.summaryLine === 'string' && snapshot.liveCandidateTransitionHistory.summaryLine.length > 0, `${label} liveCandidateTransitionHistory.summaryLine missing`, { snapshot });
   assert(snapshot.liveOpportunityCandidates.topCandidateOverall && typeof snapshot.liveOpportunityCandidates.topCandidateOverall === 'object', `${label} liveOpportunityCandidates.topCandidateOverall missing`, { snapshot });
   assert(snapshot.liveOpportunityCandidates.topCandidateActionableNow === null || typeof snapshot.liveOpportunityCandidates.topCandidateActionableNow === 'object', `${label} liveOpportunityCandidates.topCandidateActionableNow should be object|null`, { snapshot });
   assert(typeof snapshot.liveOpportunityCandidates.hasActionableCandidateNow === 'boolean', `${label} liveOpportunityCandidates.hasActionableCandidateNow missing`, { snapshot });
@@ -89,6 +93,8 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(snapshot.decisionBoardMirror && typeof snapshot.decisionBoardMirror === 'object', `${label} decisionBoardMirror missing`, { snapshot });
   assert(snapshot.todayRecommendationMirror.liveCandidateStateMonitor && typeof snapshot.todayRecommendationMirror.liveCandidateStateMonitor === 'object', `${label} todayRecommendationMirror.liveCandidateStateMonitor missing`, { snapshot });
   assert(snapshot.decisionBoardMirror.liveCandidateStateMonitor && typeof snapshot.decisionBoardMirror.liveCandidateStateMonitor === 'object', `${label} decisionBoardMirror.liveCandidateStateMonitor missing`, { snapshot });
+  assert(snapshot.todayRecommendationMirror.liveCandidateTransitionHistory && typeof snapshot.todayRecommendationMirror.liveCandidateTransitionHistory === 'object', `${label} todayRecommendationMirror.liveCandidateTransitionHistory missing`, { snapshot });
+  assert(snapshot.decisionBoardMirror.liveCandidateTransitionHistory && typeof snapshot.decisionBoardMirror.liveCandidateTransitionHistory === 'object', `${label} decisionBoardMirror.liveCandidateTransitionHistory missing`, { snapshot });
 
   for (const row of snapshot.strategyStack) {
     assert(typeof row.available === 'boolean', `${label} strategy stack row missing available flag`, { row });
@@ -235,6 +241,7 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.heuristicVsOpportunityComparison && typeof center.heuristicVsOpportunityComparison === 'object', 'command-center heuristicVsOpportunityComparison root field missing', { center });
     assert(center.liveOpportunityCandidates && typeof center.liveOpportunityCandidates === 'object', 'command-center liveOpportunityCandidates root field missing', { center });
     assert(center.liveCandidateStateMonitor && typeof center.liveCandidateStateMonitor === 'object', 'command-center liveCandidateStateMonitor root field missing', { center });
+    assert(center.liveCandidateTransitionHistory && typeof center.liveCandidateTransitionHistory === 'object', 'command-center liveCandidateTransitionHistory root field missing', { center });
     assert(center.strategyCandidateOpportunityBridge && typeof center.strategyCandidateOpportunityBridge === 'object', 'command-center strategyCandidateOpportunityBridge root field missing', { center });
     assert(center.shadowMockTradeDecision && typeof center.shadowMockTradeDecision === 'object', 'command-center shadowMockTradeDecision root field missing', { center });
     assert(center.shadowMockTradeLedger && typeof center.shadowMockTradeLedger === 'object', 'command-center shadowMockTradeLedger root field missing', { center });
@@ -265,6 +272,8 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.commandCenter.decisionBoard.liveOpportunityCandidates && typeof center.commandCenter.decisionBoard.liveOpportunityCandidates === 'object', 'decisionBoard liveOpportunityCandidates mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.liveCandidateStateMonitor && typeof center.commandCenter.todayRecommendation.liveCandidateStateMonitor === 'object', 'todayRecommendation liveCandidateStateMonitor mirror missing', { center });
     assert(center.commandCenter.decisionBoard.liveCandidateStateMonitor && typeof center.commandCenter.decisionBoard.liveCandidateStateMonitor === 'object', 'decisionBoard liveCandidateStateMonitor mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.liveCandidateTransitionHistory && typeof center.commandCenter.todayRecommendation.liveCandidateTransitionHistory === 'object', 'todayRecommendation liveCandidateTransitionHistory mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.liveCandidateTransitionHistory && typeof center.commandCenter.decisionBoard.liveCandidateTransitionHistory === 'object', 'decisionBoard liveCandidateTransitionHistory mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.strategyCandidateOpportunityBridge && typeof center.commandCenter.todayRecommendation.strategyCandidateOpportunityBridge === 'object', 'todayRecommendation strategyCandidateOpportunityBridge mirror missing', { center });
     assert(center.commandCenter.decisionBoard.strategyCandidateOpportunityBridge && typeof center.commandCenter.decisionBoard.strategyCandidateOpportunityBridge === 'object', 'decisionBoard strategyCandidateOpportunityBridge mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.shadowMockTradeDecision && typeof center.commandCenter.todayRecommendation.shadowMockTradeDecision === 'object', 'todayRecommendation shadowMockTradeDecision mirror missing', { center });
@@ -298,6 +307,7 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(perf.recommendationPerformance.heuristicVsOpportunityComparison && typeof perf.recommendationPerformance.heuristicVsOpportunityComparison === 'object', 'recommendationPerformance.heuristicVsOpportunityComparison missing', { perf });
     assert(perf.recommendationPerformance.liveOpportunityCandidates && typeof perf.recommendationPerformance.liveOpportunityCandidates === 'object', 'recommendationPerformance.liveOpportunityCandidates missing', { perf });
     assert(perf.recommendationPerformance.liveCandidateStateMonitor && typeof perf.recommendationPerformance.liveCandidateStateMonitor === 'object', 'recommendationPerformance.liveCandidateStateMonitor missing', { perf });
+    assert(perf.recommendationPerformance.liveCandidateTransitionHistory && typeof perf.recommendationPerformance.liveCandidateTransitionHistory === 'object', 'recommendationPerformance.liveCandidateTransitionHistory missing', { perf });
     assert(perf.recommendationPerformance.strategyCandidateOpportunityBridge && typeof perf.recommendationPerformance.strategyCandidateOpportunityBridge === 'object', 'recommendationPerformance.strategyCandidateOpportunityBridge missing', { perf });
     assert(perf.recommendationPerformance.shadowMockTradeDecision && typeof perf.recommendationPerformance.shadowMockTradeDecision === 'object', 'recommendationPerformance.shadowMockTradeDecision missing', { perf });
     assert(perf.recommendationPerformance.shadowMockTradeLedger && typeof perf.recommendationPerformance.shadowMockTradeLedger === 'object', 'recommendationPerformance.shadowMockTradeLedger missing', { perf });

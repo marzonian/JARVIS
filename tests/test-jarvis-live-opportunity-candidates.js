@@ -139,6 +139,10 @@ function run() {
   assert(typeof commandCenter.liveCandidateStateMonitor.actionableTransitionDetected === 'boolean', 'liveCandidateStateMonitor.actionableTransitionDetected missing');
   assert(typeof commandCenter.liveCandidateStateMonitor.actionableTransitionReason === 'string' && commandCenter.liveCandidateStateMonitor.actionableTransitionReason.length > 0, 'liveCandidateStateMonitor.actionableTransitionReason missing');
   assert(typeof commandCenter.liveCandidateStateMonitor.summaryLine === 'string' && commandCenter.liveCandidateStateMonitor.summaryLine.length > 0, 'liveCandidateStateMonitor.summaryLine missing');
+  assert(commandCenter.liveCandidateTransitionHistory && typeof commandCenter.liveCandidateTransitionHistory === 'object', 'liveCandidateTransitionHistory missing');
+  assert(Array.isArray(commandCenter.liveCandidateTransitionHistory.recentTransitions), 'liveCandidateTransitionHistory.recentTransitions missing');
+  assert(Object.prototype.hasOwnProperty.call(commandCenter.liveCandidateTransitionHistory, 'latestTransition'), 'liveCandidateTransitionHistory.latestTransition missing');
+  assert(typeof commandCenter.liveCandidateTransitionHistory.summaryLine === 'string' && commandCenter.liveCandidateTransitionHistory.summaryLine.length > 0, 'liveCandidateTransitionHistory.summaryLine missing');
   assert(commandCenter.shadowMockTradeDecision && typeof commandCenter.shadowMockTradeDecision === 'object', 'shadowMockTradeDecision missing');
   assert(commandCenter.shadowMockTradeLedger && typeof commandCenter.shadowMockTradeLedger === 'object', 'shadowMockTradeLedger missing');
   assert(typeof commandCenter.shadowMockTradeDecision.tradePlanSummaryLine === 'string' && commandCenter.shadowMockTradeDecision.tradePlanSummaryLine.length > 0, 'shadowMockTradeDecision tradePlanSummaryLine missing');
@@ -147,6 +151,8 @@ function run() {
   assert(commandCenter.decisionBoard.liveOpportunityCandidates && typeof commandCenter.decisionBoard.liveOpportunityCandidates === 'object', 'decisionBoard mirror missing liveOpportunityCandidates');
   assert(commandCenter.todayRecommendation.liveCandidateStateMonitor && typeof commandCenter.todayRecommendation.liveCandidateStateMonitor === 'object', 'todayRecommendation mirror missing liveCandidateStateMonitor');
   assert(commandCenter.decisionBoard.liveCandidateStateMonitor && typeof commandCenter.decisionBoard.liveCandidateStateMonitor === 'object', 'decisionBoard mirror missing liveCandidateStateMonitor');
+  assert(commandCenter.todayRecommendation.liveCandidateTransitionHistory && typeof commandCenter.todayRecommendation.liveCandidateTransitionHistory === 'object', 'todayRecommendation mirror missing liveCandidateTransitionHistory');
+  assert(commandCenter.decisionBoard.liveCandidateTransitionHistory && typeof commandCenter.decisionBoard.liveCandidateTransitionHistory === 'object', 'decisionBoard mirror missing liveCandidateTransitionHistory');
   assert(commandCenter.todayRecommendation.shadowMockTradeDecision && typeof commandCenter.todayRecommendation.shadowMockTradeDecision === 'object', 'todayRecommendation mirror missing shadowMockTradeDecision');
   assert(commandCenter.decisionBoard.shadowMockTradeLedger && typeof commandCenter.decisionBoard.shadowMockTradeLedger === 'object', 'decisionBoard mirror missing shadowMockTradeLedger');
 

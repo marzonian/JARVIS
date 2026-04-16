@@ -262,6 +262,9 @@ function run() {
   });
   assert(transitionPoor.liveCandidateStateMonitor && transitionPoor.liveCandidateStateMonitor.actionableTransitionDetected === false, 'first poor snapshot should not fire actionable transition');
   assert(transitionPoor.liveOpportunityCandidates.hasActionableCandidateNow === false, 'first poor snapshot should remain non-actionable');
+  assert(transitionPoor.liveCandidateTransitionHistory && typeof transitionPoor.liveCandidateTransitionHistory === 'object', 'first poor snapshot missing transition history');
+  assert(Array.isArray(transitionPoor.liveCandidateTransitionHistory.recentTransitions) && transitionPoor.liveCandidateTransitionHistory.recentTransitions.length === 0, 'first poor snapshot should not emit transition rows');
+  assert(transitionPoor.liveCandidateTransitionHistory.latestTransition === null, 'first poor snapshot latestTransition should be null');
 
   const transitionGood = buildCommandCenterPanels({
     strategyLayers,
@@ -304,6 +307,12 @@ function run() {
   });
   assert(transitionGood.liveCandidateStateMonitor && transitionGood.liveCandidateStateMonitor.actionableTransitionDetected === true, 'improved structure snapshot should fire actionable transition');
   assert(typeof transitionGood.liveCandidateStateMonitor.candidateKey === 'string' && transitionGood.liveCandidateStateMonitor.candidateKey.length > 0, 'actionable transition should include candidate key');
+  assert(transitionGood.liveCandidateTransitionHistory && typeof transitionGood.liveCandidateTransitionHistory === 'object', 'improved snapshot missing transition history');
+  assert(Array.isArray(transitionGood.liveCandidateTransitionHistory.recentTransitions) && transitionGood.liveCandidateTransitionHistory.recentTransitions.length >= 1, 'improved snapshot should emit at least one transition row');
+  const latestTransition = transitionGood.liveCandidateTransitionHistory.latestTransition;
+  assert(latestTransition && typeof latestTransition === 'object', 'improved snapshot should include latest transition row');
+  assert(latestTransition.transitionType === 'crossed_into_actionable', 'improved snapshot should classify crossed_into_actionable');
+  assert(latestTransition.previousActionable === false && latestTransition.currentActionable === true, 'improved snapshot transition should capture actionable cross');
   assert(transitionGood.shadowMockTradeDecision && transitionGood.shadowMockTradeDecision.eligible === true, 'actionable transition should allow shadow mock trade');
   assert(transitionGood.shadowMockTradeDecision.triggeredByActionableTransition === true, 'mock trade should be marked as transition-triggered');
   assert(transitionGood.shadowMockTradeDecision.status === 'eligible_ready_transition', 'transition-triggered trade should use eligible_ready_transition status');
@@ -340,6 +349,11 @@ function run() {
     },
   });
   assert(transitionPoorAgain.liveCandidateStateMonitor && transitionPoorAgain.liveCandidateStateMonitor.actionableTransitionDetected === false, 'poor structure should not create false actionable transition');
+  assert(transitionPoorAgain.liveCandidateTransitionHistory && typeof transitionPoorAgain.liveCandidateTransitionHistory === 'object', 'third snapshot missing transition history');
+  assert(Array.isArray(transitionPoorAgain.liveCandidateTransitionHistory.recentTransitions) && transitionPoorAgain.liveCandidateTransitionHistory.recentTransitions.length >= 2, 'third snapshot should retain persistent transition history');
+  const latestAfterDrop = transitionPoorAgain.liveCandidateTransitionHistory.latestTransition;
+  assert(latestAfterDrop && latestAfterDrop.transitionType === 'dropped_out_of_actionable', 'third snapshot should classify dropped_out_of_actionable');
+  assert(latestAfterDrop.previousActionable === true && latestAfterDrop.currentActionable === false, 'third snapshot should capture actionable drop');
 
   console.log('Jarvis live opportunity actionability ranking test passed.');
 }

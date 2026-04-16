@@ -170,6 +170,8 @@ function run() {
     liveCandidateStateMonitorState: outsideWindowTransitionState,
   });
   assert(outsideWindowSeed.liveCandidateStateMonitor && outsideWindowSeed.liveCandidateStateMonitor.actionableTransitionDetected === false, 'seed snapshot should not transition');
+  assert(outsideWindowSeed.liveCandidateTransitionHistory && typeof outsideWindowSeed.liveCandidateTransitionHistory === 'object', 'seed snapshot missing liveCandidateTransitionHistory');
+  assert(Array.isArray(outsideWindowSeed.liveCandidateTransitionHistory.recentTransitions) && outsideWindowSeed.liveCandidateTransitionHistory.recentTransitions.length === 0, 'seed snapshot should not emit transition rows');
 
   const outsideWindowFollow = buildCommandCenterPanels({
     ...buildInput({
@@ -191,6 +193,7 @@ function run() {
     liveCandidateStateMonitorState: outsideWindowTransitionState,
   });
   assert(outsideWindowFollow.liveCandidateStateMonitor && outsideWindowFollow.liveCandidateStateMonitor.actionableTransitionDetected === false, 'outside window should not emit actionable transition');
+  assert(outsideWindowFollow.liveCandidateTransitionHistory && typeof outsideWindowFollow.liveCandidateTransitionHistory === 'object', 'outside window follow-up missing transition history');
   assert(outsideWindowFollow.shadowMockTradeDecision && outsideWindowFollow.shadowMockTradeDecision.eligible === true, 'outside window follow-up should remain queue-eligible');
   assert(outsideWindowFollow.shadowMockTradeDecision.status === 'queued_next_session', 'outside window follow-up should queue next session');
   assert(outsideWindowFollow.shadowMockTradeDecision.triggeredByActionableTransition === false, 'outside window queue should not be transition-triggered');
