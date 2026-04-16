@@ -60,6 +60,10 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(snapshot.liveOpportunityCandidates && typeof snapshot.liveOpportunityCandidates === 'object', `${label} liveOpportunityCandidates missing`, { snapshot });
   assert(Array.isArray(snapshot.liveOpportunityCandidates.candidates), `${label} liveOpportunityCandidates.candidates missing`, { snapshot });
   assert(typeof snapshot.liveOpportunityCandidates.summaryLine === 'string' && snapshot.liveOpportunityCandidates.summaryLine.length > 0, `${label} liveOpportunityCandidates.summaryLine missing`, { snapshot });
+  assert(snapshot.liveOpportunityCandidates.topCandidateOverall && typeof snapshot.liveOpportunityCandidates.topCandidateOverall === 'object', `${label} liveOpportunityCandidates.topCandidateOverall missing`, { snapshot });
+  assert(snapshot.liveOpportunityCandidates.topCandidateActionableNow === null || typeof snapshot.liveOpportunityCandidates.topCandidateActionableNow === 'object', `${label} liveOpportunityCandidates.topCandidateActionableNow should be object|null`, { snapshot });
+  assert(typeof snapshot.liveOpportunityCandidates.hasActionableCandidateNow === 'boolean', `${label} liveOpportunityCandidates.hasActionableCandidateNow missing`, { snapshot });
+  assert(typeof snapshot.liveOpportunityCandidates.actionableNowSummaryLine === 'string' && snapshot.liveOpportunityCandidates.actionableNowSummaryLine.length > 0, `${label} liveOpportunityCandidates.actionableNowSummaryLine missing`, { snapshot });
   assert(snapshot.strategyCandidateOpportunityBridge && typeof snapshot.strategyCandidateOpportunityBridge === 'object', `${label} strategyCandidateOpportunityBridge missing`, { snapshot });
   assert(['agree', 'disagree'].includes(String(snapshot.strategyCandidateOpportunityBridge.status || '')), `${label} strategyCandidateOpportunityBridge status missing`, { snapshot });
   assert(snapshot.shadowMockTradeDecision && typeof snapshot.shadowMockTradeDecision === 'object', `${label} shadowMockTradeDecision missing`, { snapshot });
@@ -157,6 +161,8 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(row.candidateFeatureVector && typeof row.candidateFeatureVector === 'object', `${label} candidate row feature vector missing`, { row });
     assert(typeof row.candidateScoreSummaryLine === 'string' && row.candidateScoreSummaryLine.length > 0, `${label} candidate row score summary missing`, { row });
     assert(typeof row.candidateSummaryLine === 'string' && row.candidateSummaryLine.length > 0, `${label} candidate row summary line missing`, { row });
+    assert(Object.prototype.hasOwnProperty.call(row, 'candidateQualityPenalty'), `${label} candidate row quality penalty missing`, { row });
+    assert(Array.isArray(row.candidateQualityReasonCodes), `${label} candidate row quality reasons missing`, { row });
   }
 }
 

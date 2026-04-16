@@ -800,6 +800,82 @@ function statusToCandidateAdjustment(status = '') {
   return { winProb: 0, ev: 0, score: 0 };
 }
 
+function isApprovedShadowActionWindow(sessionPhase = '') {
+  const approvedActionWindows = new Set(['orb_window', 'opening_window', 'entry_window', 'post_orb', 'momentum_window']);
+  const normalizedPhase = String(sessionPhase || '').trim().toLowerCase();
+  return approvedActionWindows.has(normalizedPhase);
+}
+
+function isCandidateActionableNow(candidate = {}, options = {}) {
+  const phase = String(candidate?.sessionPhase || options?.sessionPhase || '').trim().toLowerCase();
+  const status = String(candidate?.candidateStatus || '').trim().toLowerCase();
+  const expectedValue = Number(candidate?.candidateExpectedValue);
+  const negativeEvTolerance = Number.isFinite(Number(options?.negativeEvTolerance))
+    ? Number(options.negativeEvTolerance)
+    : -15;
+  if (status === 'blocked') return false;
+  if (status === 'await_next_session') return false;
+  if (!isApprovedShadowActionWindow(phase)) return false;
+  if (Number.isFinite(expectedValue) && expectedValue < negativeEvTolerance) return false;
+  return status === 'ready_now' || status === 'secondary_watch' || status === 'watch_trigger';
+}
+
+function buildCandidateQualityPenalty({
+  candidateStatus = '',
+  candidateExpectedValue = null,
+  sessionPhase = '',
+} = {}) {
+  const status = String(candidateStatus || '').trim().toLowerCase();
+  const phase = String(sessionPhase || '').trim().toLowerCase();
+  const ev = Number(candidateExpectedValue);
+  const reasonCodes = [];
+  let penalty = 0;
+
+  if (status === 'blocked') {
+    penalty -= 18;
+    reasonCodes.push('blocked_candidate');
+  } else if (status === 'await_next_session') {
+    penalty -= 9;
+    reasonCodes.push('next_session_only');
+  } else if (status === 'pre_open_watch') {
+    penalty -= 7;
+    reasonCodes.push('pre_open_watch');
+  } else if (status === 'watch_trigger') {
+    penalty -= 4;
+    reasonCodes.push('watch_trigger_only');
+  }
+
+  if (!isApprovedShadowActionWindow(phase) && status !== 'await_next_session') {
+    penalty -= 12;
+    reasonCodes.push('outside_action_window');
+  }
+  if (phase === 'late_window' || phase === 'outside_window') {
+    penalty -= 6;
+    reasonCodes.push('late_or_outside_phase');
+  }
+
+  if (Number.isFinite(ev) && ev < 0) {
+    if (ev <= -60) {
+      penalty -= 16;
+      reasonCodes.push('deep_negative_ev');
+    } else if (ev <= -25) {
+      penalty -= 10;
+      reasonCodes.push('strong_negative_ev');
+    } else if (ev < -5) {
+      penalty -= 6;
+      reasonCodes.push('negative_ev');
+    } else {
+      penalty -= 3;
+      reasonCodes.push('slightly_negative_ev');
+    }
+  }
+
+  return {
+    penalty: round2(penalty),
+    reasonCodes,
+  };
+}
+
 function buildCandidateSummaryLine(row = {}, blockers = []) {
   const status = String(row?.candidateStatus || '').trim().toLowerCase();
   const name = String(row?.strategyName || row?.strategyKey || 'Candidate').trim();
@@ -892,11 +968,21 @@ function buildLiveOpportunityCandidates(input = {}) {
     const strategyScore = Number.isFinite(Number(opportunityRow?.opportunityCompositeScore))
       ? Number(opportunityRow.opportunityCompositeScore)
       : Number(opportunityRow?.heuristicCompositeScore || 0);
-    const candidateCompositeScore = round2(clampNumber(
+    const candidateQualityPenalty = buildCandidateQualityPenalty({
+      candidateStatus,
+      candidateExpectedValue,
+      sessionPhase: todayContext?.sessionPhase || '',
+    });
+    const baseCandidateScore = round2(clampNumber(
       (candidateWinProb * 0.6)
       + (evNormalized * 0.3)
       + (strategyScore * 0.1)
       + statusAdjustment.score,
+      0,
+      100
+    ));
+    const candidateCompositeScore = round2(clampNumber(
+      baseCandidateScore + Number(candidateQualityPenalty.penalty || 0),
       0,
       100
     ));
@@ -957,6 +1043,8 @@ function buildLiveOpportunityCandidates(input = {}) {
       candidateExpectedValue,
       candidateCalibrationBand,
       candidateFeatureVector,
+      candidateQualityPenalty: candidateQualityPenalty.penalty,
+      candidateQualityReasonCodes: candidateQualityPenalty.reasonCodes,
       candidateCompositeScore,
       candidateScoreSummaryLine,
       advisoryOnly: true,
@@ -965,16 +1053,26 @@ function buildLiveOpportunityCandidates(input = {}) {
     return candidateRow;
   }).sort((a, b) => Number(b.candidateCompositeScore || 0) - Number(a.candidateCompositeScore || 0));
 
-  const topCandidate = candidates[0] || null;
-  const topCandidateKey = topCandidate?.candidateKey || null;
-  const topCandidateSummaryLine = topCandidate?.candidateSummaryLine || null;
-  const summaryLine = topCandidate
-    ? `Top live candidate: ${topCandidate.strategyName} (${topCandidate.direction?.toUpperCase() || 'LONG'}) | ${topCandidate.candidateScoreSummaryLine}.`
+  const topCandidateOverall = candidates[0] || null;
+  const actionableCandidates = candidates.filter((candidate) => isCandidateActionableNow(candidate, { negativeEvTolerance: -15 }));
+  const topCandidateActionableNow = actionableCandidates[0] || null;
+  const topCandidateKey = topCandidateOverall?.candidateKey || null;
+  const topCandidateSummaryLine = topCandidateOverall?.candidateSummaryLine || null;
+  const hasActionableCandidateNow = Boolean(topCandidateActionableNow);
+  const actionableNowSummaryLine = hasActionableCandidateNow
+    ? `Actionable now: ${topCandidateActionableNow.strategyName} (${topCandidateActionableNow.direction?.toUpperCase() || 'LONG'}) | ${topCandidateActionableNow.candidateScoreSummaryLine}.`
+    : `Actionable now: none (${String(topCandidateOverall?.candidateStatus || 'no_candidate').replace(/_/g, ' ')}).`;
+  const summaryLine = topCandidateOverall
+    ? `Watchlist top: ${topCandidateOverall.strategyName} (${topCandidateOverall.direction?.toUpperCase() || 'LONG'}) | ${topCandidateOverall.candidateScoreSummaryLine}. ${actionableNowSummaryLine}`
     : 'No live candidate opportunities available.';
   return {
     candidates,
+    topCandidateOverall,
+    topCandidateActionableNow,
+    hasActionableCandidateNow,
     topCandidateKey,
     topCandidateSummaryLine,
+    actionableNowSummaryLine,
     summaryLine,
     advisoryOnly: true,
   };
@@ -1082,9 +1180,18 @@ function buildShadowMockTradeDecision(input = {}) {
   const latestSession = input?.latestSession && typeof input.latestSession === 'object'
     ? input.latestSession
     : {};
-  const topCandidate = Array.isArray(liveOpportunityCandidates?.candidates)
-    ? liveOpportunityCandidates.candidates[0]
+  const topCandidateActionableNow = liveOpportunityCandidates?.topCandidateActionableNow
+    && typeof liveOpportunityCandidates.topCandidateActionableNow === 'object'
+    ? liveOpportunityCandidates.topCandidateActionableNow
     : null;
+  const topCandidateOverall = liveOpportunityCandidates?.topCandidateOverall
+    && typeof liveOpportunityCandidates.topCandidateOverall === 'object'
+    ? liveOpportunityCandidates.topCandidateOverall
+    : (Array.isArray(liveOpportunityCandidates?.candidates) ? liveOpportunityCandidates.candidates[0] : null);
+  const topCandidate = topCandidateActionableNow
+    || (String(topCandidateOverall?.candidateStatus || '').trim().toLowerCase() === 'await_next_session'
+      ? topCandidateOverall
+      : null);
 
   const fallbackDecision = {
     eligible: false,
@@ -1100,17 +1207,60 @@ function buildShadowMockTradeDecision(input = {}) {
     tradePlanSummaryLine: 'Shadow mock-trade: no actionable candidate available.',
     advisoryOnly: true,
   };
-  if (!topCandidate || typeof topCandidate !== 'object') return fallbackDecision;
+  if (!topCandidate || typeof topCandidate !== 'object') {
+    if (topCandidateOverall && typeof topCandidateOverall === 'object') {
+      const overallStatus = String(topCandidateOverall?.candidateStatus || '').trim().toLowerCase();
+      const overallExpectedValue = Number(topCandidateOverall?.candidateExpectedValue);
+      if (overallStatus === 'blocked') {
+        return {
+          ...fallbackDecision,
+          reason: 'candidate_blocked',
+          candidateKey: topCandidateOverall?.candidateKey || null,
+          strategyKey: topCandidateOverall?.strategyKey || null,
+          direction: topCandidateOverall?.direction || null,
+          tradePlanSummaryLine: 'Shadow mock-trade: blocked candidate, no paper trade queued.',
+        };
+      }
+      if (!isApprovedShadowActionWindow(String(topCandidateOverall?.sessionPhase || '').trim().toLowerCase())) {
+        return {
+          ...fallbackDecision,
+          reason: 'outside_shadow_action_window',
+          candidateKey: topCandidateOverall?.candidateKey || null,
+          strategyKey: topCandidateOverall?.strategyKey || null,
+          direction: topCandidateOverall?.direction || null,
+          tradePlanSummaryLine: `Shadow mock-trade: phase ${String(topCandidateOverall?.sessionPhase || 'unknown').trim().toLowerCase() || 'unknown'} is outside approved action windows.`,
+        };
+      }
+      if (Number.isFinite(overallExpectedValue) && overallExpectedValue < -15) {
+        return {
+          ...fallbackDecision,
+          reason: 'negative_expected_value',
+          candidateKey: topCandidateOverall?.candidateKey || null,
+          strategyKey: topCandidateOverall?.strategyKey || null,
+          direction: topCandidateOverall?.direction || null,
+          tradePlanSummaryLine: `Shadow mock-trade: EV $${round2(overallExpectedValue)} is below tolerance.`,
+        };
+      }
+      return {
+        ...fallbackDecision,
+        reason: 'no_actionable_candidate_now',
+        candidateKey: topCandidateOverall?.candidateKey || null,
+        strategyKey: topCandidateOverall?.strategyKey || null,
+        direction: topCandidateOverall?.direction || null,
+        tradePlanSummaryLine: `Shadow mock-trade: no actionable candidate now (${overallStatus || 'none'}).`,
+      };
+    }
+    return fallbackDecision;
+  }
 
   const candidateStatus = String(topCandidate?.candidateStatus || '').trim().toLowerCase();
   const sessionPhase = String(topCandidate?.sessionPhase || todayContext?.sessionPhase || '').trim().toLowerCase();
   const candidateExpectedValue = Number(topCandidate?.candidateExpectedValue);
   const negativeEvTolerance = -15;
   const actionableStatuses = new Set(['ready_now', 'secondary_watch', 'watch_trigger', 'await_next_session']);
-  const approvedActionWindows = new Set(['orb_window', 'opening_window', 'entry_window', 'post_orb', 'momentum_window']);
   const nextSessionQueued = candidateStatus === 'await_next_session';
   const blocked = candidateStatus === 'blocked';
-  const insideApprovedActionWindow = approvedActionWindows.has(sessionPhase);
+  const insideApprovedActionWindow = isApprovedShadowActionWindow(sessionPhase);
 
   if (blocked) {
     return {
@@ -1332,9 +1482,14 @@ function buildShadowMockTradeLedger(input = {}) {
 function buildStrategyCandidateBridge({ opportunityScoring = null, liveOpportunityCandidates = null } = {}) {
   const strategyTopKey = String(opportunityScoring?.recommendedByOpportunityKey || '').trim() || null;
   const strategyTopName = String(opportunityScoring?.recommendedByOpportunityName || '').trim() || null;
-  const topCandidate = Array.isArray(liveOpportunityCandidates?.candidates)
-    ? liveOpportunityCandidates.candidates[0]
-    : null;
+  const topCandidate = (
+    liveOpportunityCandidates?.topCandidateActionableNow
+    && typeof liveOpportunityCandidates.topCandidateActionableNow === 'object'
+  )
+    ? liveOpportunityCandidates.topCandidateActionableNow
+    : (Array.isArray(liveOpportunityCandidates?.candidates)
+      ? liveOpportunityCandidates.candidates[0]
+      : null);
   const candidateTopKey = String(topCandidate?.candidateKey || '').trim() || null;
   const candidateTopStrategyKey = String(topCandidate?.strategyKey || '').trim() || null;
   const agreement = Boolean(strategyTopKey && candidateTopStrategyKey && strategyTopKey === candidateTopStrategyKey);

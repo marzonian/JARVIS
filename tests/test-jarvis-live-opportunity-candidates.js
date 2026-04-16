@@ -87,6 +87,10 @@ function run() {
   assert(Array.isArray(commandCenter.liveOpportunityCandidates.candidates), 'liveOpportunityCandidates.candidates missing');
   assert(commandCenter.liveOpportunityCandidates.candidates.length >= 2, 'liveOpportunityCandidates should include rows for visible strategies');
   assert(typeof commandCenter.liveOpportunityCandidates.topCandidateKey === 'string' && commandCenter.liveOpportunityCandidates.topCandidateKey.length > 0, 'topCandidateKey missing');
+  assert(commandCenter.liveOpportunityCandidates.topCandidateOverall && typeof commandCenter.liveOpportunityCandidates.topCandidateOverall === 'object', 'topCandidateOverall missing');
+  assert(commandCenter.liveOpportunityCandidates.topCandidateActionableNow === null || typeof commandCenter.liveOpportunityCandidates.topCandidateActionableNow === 'object', 'topCandidateActionableNow should be object|null');
+  assert(typeof commandCenter.liveOpportunityCandidates.hasActionableCandidateNow === 'boolean', 'hasActionableCandidateNow missing');
+  assert(typeof commandCenter.liveOpportunityCandidates.actionableNowSummaryLine === 'string' && commandCenter.liveOpportunityCandidates.actionableNowSummaryLine.length > 0, 'actionableNowSummaryLine missing');
   assert(typeof commandCenter.liveOpportunityCandidates.summaryLine === 'string' && commandCenter.liveOpportunityCandidates.summaryLine.length > 0, 'liveOpportunityCandidates summaryLine missing');
 
   const topCandidate = commandCenter.liveOpportunityCandidates.candidates[0];
@@ -98,6 +102,10 @@ function run() {
   assert(typeof topCandidate.candidateCalibrationBand === 'string' && topCandidate.candidateCalibrationBand.length > 0, 'candidateCalibrationBand missing');
   assert(topCandidate.candidateFeatureVector && typeof topCandidate.candidateFeatureVector === 'object', 'candidateFeatureVector missing');
   assert(typeof topCandidate.candidateScoreSummaryLine === 'string' && topCandidate.candidateScoreSummaryLine.length > 0, 'candidateScoreSummaryLine missing');
+  assert(Object.prototype.hasOwnProperty.call(topCandidate, 'candidateQualityPenalty'), 'candidateQualityPenalty missing');
+  assert(Array.isArray(topCandidate.candidateQualityReasonCodes), 'candidateQualityReasonCodes missing');
+  assert(commandCenter.liveOpportunityCandidates.topCandidateActionableNow === null, 'outside_window should not expose actionable now candidate');
+  assert(commandCenter.liveOpportunityCandidates.hasActionableCandidateNow === false, 'outside_window should report hasActionableCandidateNow=false');
 
   assert(commandCenter.strategyCandidateOpportunityBridge && typeof commandCenter.strategyCandidateOpportunityBridge === 'object', 'strategyCandidateOpportunityBridge missing');
   assert(['agree', 'disagree'].includes(String(commandCenter.strategyCandidateOpportunityBridge.status || '')), 'strategyCandidateOpportunityBridge status invalid');
