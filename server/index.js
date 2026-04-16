@@ -34524,11 +34524,42 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       reconstructionPhase: reconstructionPhase || undefined,
       nowEt,
     });
-    const recommendationPerformance = performance?.summary
-      || summarizeRecommendationPerformance({ scorecards: [] });
+    const recommendationPerformance = (
+      performance?.summary && typeof performance.summary === 'object'
+    )
+      ? { ...performance.summary }
+      : summarizeRecommendationPerformance({ scorecards: [] });
+    let liveDecisionCard = null;
+    try {
+      const liveSnapshot = await buildStrategyLayerSnapshotCached({
+        forceFresh,
+        includeDiscovery: false,
+        includePerDate: false,
+        nowEtOverride: `${nowEt.date} ${nowEt.time}`,
+        performanceWindow: windowSessions,
+        performanceSource: sourceFilter,
+        performancePhase: reconstructionPhase || undefined,
+      });
+      if (liveSnapshot?.commandCenter?.executionStanceCard
+        && typeof liveSnapshot.commandCenter.executionStanceCard === 'object') {
+        liveDecisionCard = { ...liveSnapshot.commandCenter.executionStanceCard };
+      }
+    } catch {}
+    const liveDecisionCardLine = String(
+      liveDecisionCard?.summaryLine
+      || ''
+    ).trim() || null;
+    if (liveDecisionCard) {
+      recommendationPerformance.liveDecisionCard = { ...liveDecisionCard };
+      recommendationPerformance.liveDecisionCardLine = liveDecisionCardLine;
+      recommendationPerformance.liveDecisionStance = liveDecisionCard.stance || null;
+      recommendationPerformance.liveDecisionAdjustment = liveDecisionCard.executionAdjustment || null;
+    }
     res.json({
       status: 'ok',
       recommendationPerformance,
+      liveDecisionCard,
+      liveDecisionCardLine,
       generatedAt: performance?.generatedAt || new Date().toISOString(),
       rowCountUsed: Number(recommendationPerformance?.rowCountUsed || performance?.rowCountUsed || 0),
       provenanceSummary: recommendationPerformance?.provenanceSummary || performance?.provenanceSummary || null,

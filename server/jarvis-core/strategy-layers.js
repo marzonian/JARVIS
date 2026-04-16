@@ -1325,6 +1325,166 @@ function buildDecisionQualityCard(input = {}) {
   };
 }
 
+function normalizeConfidenceLabel(value = '') {
+  const label = String(value || '').trim().toLowerCase();
+  if (label === 'high' || label === 'medium' || label === 'low') return label;
+  return '';
+}
+
+function normalizePostureKey(value = '') {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+function toStanceExecutionAdjustment(stance = '') {
+  const normalized = String(stance || '').trim().toLowerCase();
+  if (normalized === 'attack') return 'standard management';
+  if (normalized === 'standard') return 'standard management';
+  if (normalized === 'caution') return 'size down';
+  if (normalized === 'degraded target') return 'nearer TP';
+  return 'avoid';
+}
+
+function buildExecutionStanceCard(input = {}) {
+  const decision = input?.decision && typeof input.decision === 'object' ? input.decision : {};
+  const todayRecommendation = input?.todayRecommendation && typeof input.todayRecommendation === 'object'
+    ? input.todayRecommendation
+    : {};
+  const decisionQualityCard = input?.decisionQualityCard && typeof input.decisionQualityCard === 'object'
+    ? input.decisionQualityCard
+    : {};
+  const primaryGuidance = todayRecommendation?.frontLinePrimaryBlockerGuidance
+    && typeof todayRecommendation.frontLinePrimaryBlockerGuidance === 'object'
+    ? todayRecommendation.frontLinePrimaryBlockerGuidance
+    : null;
+  const blockers = Array.isArray(decisionQualityCard?.blockers)
+    ? decisionQualityCard.blockers.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const signal = normalizeDecisionSignal(
+    decision?.signalLabel
+    || decision?.signal
+    || decision?.verdict
+    || todayRecommendation?.frontLineBlockerGateSignal
+    || ''
+  );
+  const postureKey = normalizePostureKey(todayRecommendation?.posture || '');
+  const projectedWinChance = Number(todayRecommendation?.projectedWinChance);
+  const confidenceScore = Number(todayRecommendation?.confidenceScore);
+  const confidenceLabel = normalizeConfidenceLabel(todayRecommendation?.confidenceLabel || '');
+  const recommendedTpMode = String(todayRecommendation?.recommendedTpMode || '').trim() || null;
+  const hasBlockers = blockers.length > 0;
+  const signalNoTrade = signal === 'NO_TRADE';
+  const standDown = postureKey === 'stand_down';
+  const waitSignal = signal === 'WAIT';
+  const waitPosture = postureKey === 'wait_for_clearance' || postureKey === 'wait_for_news';
+  const confidenceImmature = confidenceLabel === 'low'
+    || (Number.isFinite(confidenceScore) && confidenceScore < 55);
+  const setupValid = !signalNoTrade && !standDown && (
+    signal === 'TRADE'
+    || postureKey === 'trade_normally'
+    || postureKey === 'trade_selectively'
+    || (
+      !hasBlockers
+      && (waitSignal || waitPosture)
+    )
+  );
+  const validButConfidenceImmature = setupValid && confidenceImmature;
+  const strengthFactors = [];
+  const weaknessFactors = [];
+
+  if (signal === 'TRADE') strengthFactors.push('Front-line signal is trade-enabled.');
+  if (!hasBlockers) strengthFactors.push('No active blocker gates.');
+  if (Number.isFinite(projectedWinChance) && projectedWinChance >= 58) {
+    strengthFactors.push(`Projected edge is constructive (${round2(projectedWinChance)}%).`);
+  }
+  if (confidenceLabel === 'high') strengthFactors.push('Confidence is high.');
+  else if (confidenceLabel === 'medium') strengthFactors.push('Confidence is in the workable band.');
+  if (postureKey === 'trade_normally') strengthFactors.push('Posture supports standard execution.');
+  if (postureKey === 'trade_selectively') strengthFactors.push('Posture supports selective execution.');
+
+  if (hasBlockers) {
+    weaknessFactors.push(`Active blockers: ${blockers.join(', ')}.`);
+    if (primaryGuidance?.blockedBy) weaknessFactors.push(primaryGuidance.blockedBy);
+  }
+  if (waitSignal || waitPosture) weaknessFactors.push('Entry timing still needs cleaner confirmation.');
+  if (confidenceImmature) {
+    weaknessFactors.push(
+      Number.isFinite(confidenceScore)
+        ? `Confidence is immature (${round2(confidenceScore)}).`
+        : 'Confidence is immature.'
+    );
+  }
+  if (Number.isFinite(projectedWinChance) && projectedWinChance < 55) {
+    weaknessFactors.push(`Projected edge is below preferred attack band (${round2(projectedWinChance)}%).`);
+  }
+  if (recommendedTpMode && normalizePostureKey(recommendedTpMode) === 'nearest') {
+    weaknessFactors.push('Target profile is conservative (Nearest TP).');
+  }
+
+  let stance = 'Standard';
+  if (signalNoTrade || standDown) {
+    stance = 'Skip';
+  } else if (hasBlockers) {
+    const clearanceState = String(primaryGuidance?.clearanceState || '').trim().toLowerCase();
+    stance = clearanceState === 'near_clearance' || clearanceState === 'approaching_clearance'
+      ? 'Degraded Target'
+      : 'Skip';
+  } else if (waitSignal || waitPosture) {
+    stance = validButConfidenceImmature ? 'Caution' : 'Degraded Target';
+  } else if (
+    signal === 'TRADE'
+    && postureKey === 'trade_normally'
+    && confidenceLabel === 'high'
+    && Number.isFinite(projectedWinChance)
+    && projectedWinChance >= 62
+  ) {
+    stance = 'Attack';
+  } else if (confidenceImmature || postureKey === 'trade_selectively') {
+    stance = 'Caution';
+  }
+
+  const stanceReason = (() => {
+    if (stance === 'Attack') {
+      return 'Setup quality is strong with aligned signal and confidence.';
+    }
+    if (stance === 'Standard') {
+      return 'Setup is valid with balanced confirmation and risk.';
+    }
+    if (stance === 'Caution') {
+      return validButConfidenceImmature
+        ? 'Setup is valid, but confidence is still immature.'
+        : 'Setup is valid, but confirmation quality is mixed.';
+    }
+    if (stance === 'Degraded Target') {
+      return 'Setup is tradable only with degraded targeting due timing/quality drag.';
+    }
+    return hasBlockers
+      ? 'Blockers are still active; avoid engagement until clearance.'
+      : 'Signal and posture are not trade-valid right now.';
+  })();
+
+  const confidenceMaturityNote = validButConfidenceImmature
+    ? 'Setup is valid but confidence is immature; manage risk with sizing/target discipline instead of defaulting to fear-based wait logic.'
+    : null;
+  const executionAdjustment = toStanceExecutionAdjustment(stance);
+  const summaryLine = `Stance ${stance}: ${stanceReason} Execution adjustment: ${executionAdjustment}.`;
+
+  return {
+    stance,
+    reason: stanceReason,
+    strengthFactors: strengthFactors.slice(0, 4),
+    weaknessFactors: weaknessFactors.slice(0, 4),
+    executionAdjustment,
+    validButConfidenceImmature,
+    confidenceMaturityNote,
+    setupValid,
+    signal: signal || null,
+    posture: todayRecommendation?.posture || null,
+    recommendedTpMode,
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
 function buildAssistantDecisionBrief(input = {}) {
   const decision = input?.decision && typeof input.decision === 'object' ? input.decision : {};
   const todayRecommendation = input?.todayRecommendation && typeof input.todayRecommendation === 'object'
@@ -1776,6 +1936,11 @@ function buildCommandCenterPanels(input = {}) {
     todayContext,
     latestCheckpointTradeDate: input?.latestCheckpointTradeDate || null,
   });
+  const executionStanceCard = buildExecutionStanceCard({
+    decision,
+    todayRecommendation,
+    decisionQualityCard,
+  });
   todayRecommendation.decisionSummary = decisionQualityCard.decisionSummary;
   todayRecommendation.recommendation = decisionQualityCard.recommendation;
   todayRecommendation.frontLineRecommendationText = decisionQualityCard.frontLineRecommendationText;
@@ -1785,6 +1950,11 @@ function buildCommandCenterPanels(input = {}) {
   todayRecommendation.marketStateLabel = decisionQualityCard.marketStateLabel;
   todayRecommendation.nowEt = decisionQualityCard.nowEt;
   todayRecommendation.latestCheckpointTradeDate = decisionQualityCard.latestCheckpointTradeDate;
+  todayRecommendation.executionStanceCard = { ...executionStanceCard };
+  todayRecommendation.executionStance = executionStanceCard.stance;
+  todayRecommendation.executionStanceReason = executionStanceCard.reason;
+  todayRecommendation.executionAdjustment = executionStanceCard.executionAdjustment;
+  todayRecommendation.executionStanceLine = executionStanceCard.summaryLine;
   const decisionBoard = buildDecisionBoard({
     originalPlan,
     bestAlternative,
@@ -1805,6 +1975,11 @@ function buildCommandCenterPanels(input = {}) {
   decisionBoard.nowEt = decisionQualityCard.nowEt;
   decisionBoard.latestCheckpointTradeDate = decisionQualityCard.latestCheckpointTradeDate;
   decisionBoard.topActionSummaryLine = decisionQualityCard.summaryLine;
+  decisionBoard.executionStanceCard = { ...executionStanceCard };
+  decisionBoard.executionStance = executionStanceCard.stance;
+  decisionBoard.executionStanceReason = executionStanceCard.reason;
+  decisionBoard.executionAdjustment = executionStanceCard.executionAdjustment;
+  decisionBoard.executionStanceLine = executionStanceCard.summaryLine;
 
   return {
     layout: {
@@ -1832,6 +2007,11 @@ function buildCommandCenterPanels(input = {}) {
     marketStateLabel: decisionQualityCard.marketStateLabel,
     nowEt: decisionQualityCard.nowEt,
     latestCheckpointTradeDate: decisionQualityCard.latestCheckpointTradeDate,
+    executionStanceCard: executionStanceCard,
+    executionStance: executionStanceCard.stance,
+    executionStanceReason: executionStanceCard.reason,
+    executionAdjustment: executionStanceCard.executionAdjustment,
+    executionStanceLine: executionStanceCard.summaryLine,
     assistantDecisionBrief,
     assistantDecisionBriefText: assistantDecisionBrief.assistantText,
     recentAggressiveMissSentinel,

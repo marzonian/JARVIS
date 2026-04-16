@@ -168,16 +168,21 @@ function run() {
   assert(typeof commandCenter.marketStateLabel === 'string' && commandCenter.marketStateLabel.length > 0, 'commandCenter.marketStateLabel missing');
   assert(commandCenter.nowEt === '2026-03-07 09:35', 'commandCenter.nowEt should mirror context');
   assert(Object.prototype.hasOwnProperty.call(commandCenter, 'latestCheckpointTradeDate'), 'commandCenter.latestCheckpointTradeDate should exist');
+  assert(commandCenter.executionStanceCard && typeof commandCenter.executionStanceCard === 'object', 'commandCenter.executionStanceCard missing');
+  assert(['Attack', 'Standard', 'Caution', 'Degraded Target', 'Skip'].includes(String(commandCenter.executionStanceCard.stance || '')), 'commandCenter.execution stance invalid');
+  assert(typeof commandCenter.executionStanceLine === 'string' && commandCenter.executionStanceLine.length > 0, 'commandCenter.executionStanceLine missing');
   assert(commandCenter.todayRecommendation.assistantDecisionBrief && typeof commandCenter.todayRecommendation.assistantDecisionBrief === 'object', 'todayRecommendation missing assistantDecisionBrief mirror');
   assert(commandCenter.todayRecommendation.assistantDecisionBriefText === commandCenter.assistantDecisionBriefText, 'todayRecommendation assistantDecisionBriefText should mirror root brief text');
   assert(commandCenter.todayRecommendation.topAction === commandCenter.topAction, 'todayRecommendation.topAction should mirror root topAction');
   assert(commandCenter.todayRecommendation.recommendation === commandCenter.recommendation, 'todayRecommendation.recommendation should mirror root recommendation');
   assert(Array.isArray(commandCenter.todayRecommendation.blockers), 'todayRecommendation.blockers missing');
   assert(Object.prototype.hasOwnProperty.call(commandCenter.todayRecommendation, 'latestCheckpointTradeDate'), 'todayRecommendation.latestCheckpointTradeDate should exist');
+  assert(commandCenter.todayRecommendation.executionStanceCard && typeof commandCenter.todayRecommendation.executionStanceCard === 'object', 'todayRecommendation.executionStanceCard missing');
   assert(commandCenter.decisionBoard.topAction === commandCenter.topAction, 'decisionBoard.topAction should mirror root topAction');
   assert(typeof commandCenter.decisionBoard.topActionSummaryLine === 'string' && commandCenter.decisionBoard.topActionSummaryLine.includes('Action now:'), 'decisionBoard.topActionSummaryLine missing');
   assert(Array.isArray(commandCenter.decisionBoard.blockers), 'decisionBoard.blockers missing');
   assert(Object.prototype.hasOwnProperty.call(commandCenter.decisionBoard, 'latestCheckpointTradeDate'), 'decisionBoard.latestCheckpointTradeDate should exist');
+  assert(commandCenter.decisionBoard.executionStanceCard && typeof commandCenter.decisionBoard.executionStanceCard === 'object', 'decisionBoard.executionStanceCard missing');
   assert(!/recent miss pattern: too aggressive/i.test(String(commandCenter.assistantDecisionBriefText || '')), 'no recent too-aggressive sentinel should leave brief text unchanged');
   assert(commandCenter.jarvisBrief.originalPlanStatus && /original trading plan/i.test(commandCenter.jarvisBrief.originalPlanStatus), 'jarvis brief must frame original plan explicitly');
   assert(commandCenter.jarvisBrief.overlayStatus && /overlay/i.test(commandCenter.jarvisBrief.overlayStatus), 'jarvis brief must frame overlay explicitly');
@@ -372,6 +377,46 @@ function run() {
   assert(Array.isArray(waitBlockedCommandCenter?.blockers) && waitBlockedCommandCenter.blockers.includes('prob_green_below_50'), 'blocked WAIT case should expose blocker list');
   assert(/Action now: Wait for clearance\./.test(String(waitBlockedCommandCenter?.summaryLine || '')), 'blocked WAIT case summary line should include action now');
   assert(/Blockers: prob_green_below_50/.test(String(waitBlockedCommandCenter?.summaryLine || '')), 'blocked WAIT case summary line should include blocker list');
+  assert(waitBlockedCommandCenter?.executionStanceCard?.stance === 'Skip', 'blocked WAIT case should classify as Skip stance');
+  assert(waitBlockedCommandCenter?.executionStanceCard?.executionAdjustment === 'avoid', 'blocked WAIT case should map to avoid execution adjustment');
+
+  const validButImmatureCommandCenter = buildCommandCenterPanels({
+    strategyLayers: snapshot,
+    decision: {
+      signalLabel: 'WAIT',
+      blockers: [],
+      warnings: [],
+      confidence: 44,
+    },
+    latestSession: { orb: { high: 22135, low: 22095, range_ticks: 160 } },
+    news: [],
+    commandSnapshot: {
+      elite: {
+        winModel: { point: 56.4, confidencePct: 57 },
+      },
+    },
+    todayContext: {
+      nowEt: '2026-03-17 09:05',
+      sessionPhase: 'pre_open',
+      regime: 'mixed',
+      trend: 'ranging',
+      volatility: 'normal',
+    },
+    mechanicsResearchSummary: {
+      recommendedTpMode: 'Skip 2',
+      contextualRecommendation: {
+        contextUsed: { weekday: 'Tuesday', timeBucket: 'pre_open', regime: null },
+        fallbackLevel: 'drop_regime',
+        sampleSize: 6,
+        confidenceLabel: 'low',
+        contextualRecommendedTpMode: 'Skip 2',
+      },
+    },
+  });
+  assert(validButImmatureCommandCenter?.executionStanceCard?.stance === 'Caution', 'valid but immature setup should be Caution, not Skip');
+  assert(validButImmatureCommandCenter?.executionStanceCard?.validButConfidenceImmature === true, 'valid but immature setup should flag confidence immaturity');
+  assert(/fear-based wait logic/i.test(String(validButImmatureCommandCenter?.executionStanceCard?.confidenceMaturityNote || '')), 'valid but immature setup should include explicit anti-fear wait note');
+  assert(validButImmatureCommandCenter?.executionStanceCard?.executionAdjustment === 'size down', 'valid but immature setup should map to size down');
 
   const noTradeBlockedCommandCenter = buildCommandCenterPanels({
     strategyLayers: snapshot,
