@@ -77,6 +77,8 @@ const LIVE_CANDIDATE_STATE_TRANSITION_TABLE = 'jarvis_live_candidate_state_trans
 const LIVE_CANDIDATE_DURABLE_OBSERVATION_LIMIT_PER_CANDIDATE = 120;
 const LIVE_CANDIDATE_DURABLE_OBSERVATION_LIMIT_GLOBAL = 5000;
 const LIVE_CANDIDATE_DURABLE_TRANSITION_LIMIT_GLOBAL = 2000;
+const LIVE_CANDIDATE_RECENT_HISTORY_LIMIT = 12;
+const LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT = 240;
 const LIVE_CANDIDATE_DB_STATEMENT_CACHE = new WeakMap();
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY = 'read_only';
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO = 'loop_auto';
@@ -1633,6 +1635,151 @@ function buildLiveCandidateHistoryProvenance(sourceCounts = {}) {
   };
 }
 
+function getLiveCandidateWriteSourceCount(sourceCounts = {}, source = '') {
+  const normalizedSource = normalizeLiveCandidateObservationWriteSource(source);
+  const counts = sourceCounts && typeof sourceCounts === 'object'
+    ? sourceCounts
+    : {};
+  const value = Number(counts[normalizedSource] || 0);
+  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+}
+
+function filterLiveCandidateRowsByWriteSource(rows = [], sourceField = '', source = '') {
+  const normalizedSource = normalizeLiveCandidateObservationWriteSource(source);
+  const field = String(sourceField || '').trim();
+  if (!Array.isArray(rows) || !field || !normalizedSource) return [];
+  return rows.filter((row) => normalizeLiveCandidateObservationWriteSource(row?.[field]) === normalizedSource);
+}
+
+function buildLiveCandidateFilteredHistoryViews(options = {}) {
+  const allRecentObservations = Array.isArray(options.recentObservations)
+    ? options.recentObservations
+    : [];
+  const allRecentTransitions = Array.isArray(options.recentTransitions)
+    ? options.recentTransitions
+    : [];
+  const observationSourceCounts = options.observationSourceCounts && typeof options.observationSourceCounts === 'object'
+    ? options.observationSourceCounts
+    : {};
+  const transitionSourceCounts = options.transitionSourceCounts && typeof options.transitionSourceCounts === 'object'
+    ? options.transitionSourceCounts
+    : {};
+  const totalObservationRows = Number.isFinite(Number(options.totalObservationRows))
+    ? Math.max(0, Math.round(Number(options.totalObservationRows)))
+    : allRecentObservations.length;
+  const totalTransitionRows = Number.isFinite(Number(options.totalTransitionRows))
+    ? Math.max(0, Math.round(Number(options.totalTransitionRows)))
+    : allRecentTransitions.length;
+
+  const allObservationProvenance = buildLiveCandidateHistoryProvenance(observationSourceCounts);
+  const allTransitionProvenance = buildLiveCandidateHistoryProvenance(transitionSourceCounts);
+
+  const loopOnlyObservationCount = getLiveCandidateWriteSourceCount(
+    observationSourceCounts,
+    LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO
+  );
+  const loopOnlyTransitionCount = getLiveCandidateWriteSourceCount(
+    transitionSourceCounts,
+    LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO
+  );
+  const diagnosticOnlyObservationCount = getLiveCandidateWriteSourceCount(
+    observationSourceCounts,
+    LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC
+  );
+  const diagnosticOnlyTransitionCount = getLiveCandidateWriteSourceCount(
+    transitionSourceCounts,
+    LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC
+  );
+
+  const loopOnlyRecentObservations = filterLiveCandidateRowsByWriteSource(
+    allRecentObservations,
+    'observationWriteSource',
+    LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO
+  );
+  const loopOnlyRecentTransitions = filterLiveCandidateRowsByWriteSource(
+    allRecentTransitions,
+    'transitionWriteSource',
+    LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO
+  );
+  const diagnosticOnlyRecentObservations = filterLiveCandidateRowsByWriteSource(
+    allRecentObservations,
+    'observationWriteSource',
+    LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC
+  );
+  const diagnosticOnlyRecentTransitions = filterLiveCandidateRowsByWriteSource(
+    allRecentTransitions,
+    'transitionWriteSource',
+    LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC
+  );
+
+  const loopOnlyObservationProvenance = buildLiveCandidateHistoryProvenance({
+    [LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO]: loopOnlyObservationCount,
+  });
+  const loopOnlyTransitionProvenance = buildLiveCandidateHistoryProvenance({
+    [LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO]: loopOnlyTransitionCount,
+  });
+  const diagnosticOnlyObservationProvenance = buildLiveCandidateHistoryProvenance({
+    [LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC]: diagnosticOnlyObservationCount,
+  });
+  const diagnosticOnlyTransitionProvenance = buildLiveCandidateHistoryProvenance({
+    [LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC]: diagnosticOnlyTransitionCount,
+  });
+
+  const allLatestTransition = allRecentTransitions.length > 0 ? allRecentTransitions[0] : null;
+  const loopOnlyLatestTransition = loopOnlyRecentTransitions.length > 0 ? loopOnlyRecentTransitions[0] : null;
+  const diagnosticOnlyLatestTransition = diagnosticOnlyRecentTransitions.length > 0 ? diagnosticOnlyRecentTransitions[0] : null;
+
+  const allSummaryLine = `All history: ${totalObservationRows} observation(s), ${totalTransitionRows} transition(s).`;
+  const loopOnlySummaryLine = loopOnlyObservationCount <= 0 && loopOnlyTransitionCount <= 0
+    ? 'Loop-only history: no rows yet.'
+    : `Loop-only history: ${loopOnlyObservationCount} observation(s), ${loopOnlyTransitionCount} transition(s).`;
+  const diagnosticOnlySummaryLine = diagnosticOnlyObservationCount <= 0 && diagnosticOnlyTransitionCount <= 0
+    ? 'Diagnostic history: no rows.'
+    : `Diagnostic history: ${diagnosticOnlyObservationCount} observation(s), ${diagnosticOnlyTransitionCount} transition(s).`;
+
+  return {
+    all: {
+      observationCount: totalObservationRows,
+      transitionCount: totalTransitionRows,
+      latestTransition: cloneData(allLatestTransition, allLatestTransition),
+      recentObservations: cloneData(allRecentObservations, allRecentObservations),
+      recentTransitions: cloneData(allRecentTransitions, allRecentTransitions),
+      observationProvenanceClassification: allObservationProvenance.classification,
+      transitionProvenanceClassification: allTransitionProvenance.classification,
+      observationProvenanceSummaryLine: allObservationProvenance.summaryLine,
+      transitionProvenanceSummaryLine: allTransitionProvenance.summaryLine,
+      summaryLine: allSummaryLine,
+    },
+    loopOnly: {
+      source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+      observationCount: loopOnlyObservationCount,
+      transitionCount: loopOnlyTransitionCount,
+      latestTransition: cloneData(loopOnlyLatestTransition, loopOnlyLatestTransition),
+      recentObservations: cloneData(loopOnlyRecentObservations, loopOnlyRecentObservations),
+      recentTransitions: cloneData(loopOnlyRecentTransitions, loopOnlyRecentTransitions),
+      observationProvenanceClassification: loopOnlyObservationProvenance.classification,
+      transitionProvenanceClassification: loopOnlyTransitionProvenance.classification,
+      observationProvenanceSummaryLine: loopOnlyObservationProvenance.summaryLine,
+      transitionProvenanceSummaryLine: loopOnlyTransitionProvenance.summaryLine,
+      summaryLine: loopOnlySummaryLine,
+    },
+    diagnosticOnly: {
+      source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+      observationCount: diagnosticOnlyObservationCount,
+      transitionCount: diagnosticOnlyTransitionCount,
+      latestTransition: cloneData(diagnosticOnlyLatestTransition, diagnosticOnlyLatestTransition),
+      recentObservations: cloneData(diagnosticOnlyRecentObservations, diagnosticOnlyRecentObservations),
+      recentTransitions: cloneData(diagnosticOnlyRecentTransitions, diagnosticOnlyRecentTransitions),
+      observationProvenanceClassification: diagnosticOnlyObservationProvenance.classification,
+      transitionProvenanceClassification: diagnosticOnlyTransitionProvenance.classification,
+      observationProvenanceSummaryLine: diagnosticOnlyObservationProvenance.summaryLine,
+      transitionProvenanceSummaryLine: diagnosticOnlyTransitionProvenance.summaryLine,
+      summaryLine: diagnosticOnlySummaryLine,
+    },
+    summaryLine: `${allSummaryLine} ${loopOnlySummaryLine} ${diagnosticOnlySummaryLine}`,
+  };
+}
+
 function normalizeLiveCandidateObservation(candidate = {}, options = {}) {
   const nowEt = String(options.nowEt || '').trim() || new Date().toISOString();
   const insideApprovedActionWindow = options.insideApprovedActionWindow === true;
@@ -2261,6 +2408,9 @@ function buildLiveCandidateStateMonitor(input = {}) {
   let durableObservationCount = 0;
   let durableTransitionCount = 0;
   let recentObservationSample = [];
+  let recentTransitionSample = [];
+  let recentObservationRowsForViews = [];
+  let recentTransitionRowsForViews = [];
   let observationSourceCounts = {};
   let transitionSourceCounts = {};
   if (persistenceAvailable) {
@@ -2270,11 +2420,18 @@ function buildLiveCandidateStateMonitor(input = {}) {
     durableTransitionCount = Number(
       persistenceStatements.countTransitionsByDate.get(sessionDate || '')?.c || 0
     );
-    recentObservationSample = persistenceStatements
+    recentObservationRowsForViews = persistenceStatements
       .readRecentObservationsByDate
-      .all(sessionDate || '', 12)
+      .all(sessionDate || '', LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
       .map((row) => normalizeDurableObservationRow(row))
       .filter(Boolean);
+    recentObservationSample = recentObservationRowsForViews.slice(0, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
+    recentTransitionRowsForViews = persistenceStatements
+      .readRecentTransitionsByDate
+      .all(sessionDate || '', LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
+      .map((row) => normalizeDurableTransitionRow(row))
+      .filter(Boolean);
+    recentTransitionSample = recentTransitionRowsForViews.slice(0, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
     observationSourceCounts = (persistenceStatements.countObservationSourcesByDate.all(sessionDate || '') || [])
       .reduce((acc, row) => {
         const key = normalizeLiveCandidateObservationWriteSource(row?.source);
@@ -2290,7 +2447,18 @@ function buildLiveCandidateStateMonitor(input = {}) {
         return acc;
       }, {});
   } else {
-    recentObservationSample = buildInMemoryObservationSample(monitorState, 12);
+    recentObservationRowsForViews = buildInMemoryObservationSample(
+      monitorState,
+      LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT
+    );
+    recentObservationSample = recentObservationRowsForViews.slice(0, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
+    recentTransitionRowsForViews = Array.isArray(monitorState.transitionRows)
+      ? monitorState.transitionRows
+        .slice(-LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
+        .reverse()
+        .map((row) => cloneData(row, row))
+      : [];
+    recentTransitionSample = recentTransitionRowsForViews.slice(0, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
     durableObservationCount = recentObservationSample.length;
     durableTransitionCount = Array.isArray(monitorState.transitionRows) ? monitorState.transitionRows.length : 0;
     observationSourceCounts = {
@@ -2301,6 +2469,14 @@ function buildLiveCandidateStateMonitor(input = {}) {
     };
   }
   const historyProvenance = buildLiveCandidateHistoryProvenance(observationSourceCounts);
+  const historyViews = buildLiveCandidateFilteredHistoryViews({
+    recentObservations: recentObservationRowsForViews,
+    recentTransitions: recentTransitionRowsForViews,
+    observationSourceCounts,
+    transitionSourceCounts,
+    totalObservationRows: durableObservationCount,
+    totalTransitionRows: durableTransitionCount,
+  });
   const responseWriteMode = responseReadOnly
     ? LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY
     : observationWriteSource;
@@ -2312,6 +2488,8 @@ function buildLiveCandidateStateMonitor(input = {}) {
       ? `Read-only response skipped ${readOnlySkippedWritesThisSnapshot} candidate write(s).`
       : 'Read-only response; no candidate writes attempted.')
     : `${responseWriteMode} wrote ${observationWritesThisSnapshot} observation(s) and ${transitionWritesThisSnapshot} transition(s).`;
+  const historyEvaluationMode = 'all_history';
+  const historyEvaluationSummaryLine = 'Transition monitoring uses all provenance rows; use loop-only fields for clean trust view.';
 
   const transitionCandidate = monitoredCandidates.find((row) => row.transitionType === 'crossed_into_actionable') || null;
   const actionableTransitionDetected = Boolean(transitionCandidate && insideApprovedActionWindow);
@@ -2370,12 +2548,28 @@ function buildLiveCandidateStateMonitor(input = {}) {
     durableTransitionCount,
     observationSourceCounts: historyProvenance.sourceCounts,
     transitionSourceCounts,
+    loopOnlyObservationCount: Number(historyViews?.loopOnly?.observationCount || 0),
+    loopOnlyTransitionCount: Number(historyViews?.loopOnly?.transitionCount || 0),
+    loopOnlyLatestTransition: cloneData(historyViews?.loopOnly?.latestTransition, historyViews?.loopOnly?.latestTransition),
+    loopOnlyRecentObservations: cloneData(historyViews?.loopOnly?.recentObservations, historyViews?.loopOnly?.recentObservations),
+    loopOnlyRecentTransitions: cloneData(historyViews?.loopOnly?.recentTransitions, historyViews?.loopOnly?.recentTransitions),
+    loopOnlyHistorySummaryLine: String(historyViews?.loopOnly?.summaryLine || '').trim() || 'Loop-only history: no rows yet.',
+    diagnosticOnlyObservationCount: Number(historyViews?.diagnosticOnly?.observationCount || 0),
+    diagnosticOnlyTransitionCount: Number(historyViews?.diagnosticOnly?.transitionCount || 0),
+    diagnosticOnlyLatestTransition: cloneData(historyViews?.diagnosticOnly?.latestTransition, historyViews?.diagnosticOnly?.latestTransition),
+    diagnosticOnlyRecentObservations: cloneData(historyViews?.diagnosticOnly?.recentObservations, historyViews?.diagnosticOnly?.recentObservations),
+    diagnosticOnlyRecentTransitions: cloneData(historyViews?.diagnosticOnly?.recentTransitions, historyViews?.diagnosticOnly?.recentTransitions),
+    diagnosticOnlyHistorySummaryLine: String(historyViews?.diagnosticOnly?.summaryLine || '').trim() || 'Diagnostic history: no rows.',
+    historyViews: cloneData(historyViews, historyViews),
+    historyEvaluationMode,
+    historyEvaluationSummaryLine,
     historyProvenanceClassification: historyProvenance.classification,
     historyProvenanceSources: historyProvenance.sources,
     historyProvenanceSummaryLine: historyProvenance.summaryLine,
     historyFromLoopOnly: historyProvenance.classification === 'loop_only',
-    historyMixedProvenance: historyProvenance.classification === 'mixed',
+    historyMixedProvenance: String(historyProvenance.classification || '').startsWith('mixed'),
     recentObservationSample,
+    recentTransitionSample,
     emptyStateReason,
     summaryLine: transitionSummaryLine,
     advisoryOnly: true,
@@ -2394,27 +2588,48 @@ function buildLiveCandidateTransitionHistory(input = {}) {
   const persistenceStatements = db ? getLiveCandidateStateDbStatements(db) : null;
   let storageMode = 'in_memory';
   let recentTransitions = monitorState.transitionRows
-    .slice(-12)
+    .slice(-LIVE_CANDIDATE_RECENT_HISTORY_LIMIT)
     .reverse()
     .map((row) => cloneData(row, row));
-  let recentObservations = buildInMemoryObservationSample(monitorState, 12);
+  let recentObservations = buildInMemoryObservationSample(monitorState, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
+  let recentTransitionRowsForViews = monitorState.transitionRows
+    .slice(-LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
+    .reverse()
+    .map((row) => cloneData(row, row));
+  let recentObservationRowsForViews = buildInMemoryObservationSample(
+    monitorState,
+    LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT
+  );
   let totalObservationRows = recentObservations.length;
   let totalTransitionRows = recentTransitions.length;
+  let observationSourceCounts = {};
   let transitionSourceCounts = {};
 
   if (persistenceStatements) {
     storageMode = 'durable_sqlite';
-    const transitionRows = persistenceStatements.readRecentTransitionsByDate.all(sessionDate || '', 12);
-    recentTransitions = transitionRows
+    const transitionRows = persistenceStatements.readRecentTransitionsByDate.all(
+      sessionDate || '',
+      LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT
+    );
+    recentTransitionRowsForViews = transitionRows
       .map((row) => normalizeDurableTransitionRow(row))
       .filter(Boolean);
-    recentObservations = persistenceStatements
+    recentTransitions = recentTransitionRowsForViews.slice(0, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
+    recentObservationRowsForViews = persistenceStatements
       .readRecentObservationsByDate
-      .all(sessionDate || '', 12)
+      .all(sessionDate || '', LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
       .map((row) => normalizeDurableObservationRow(row))
       .filter(Boolean);
+    recentObservations = recentObservationRowsForViews.slice(0, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
     totalObservationRows = Number(persistenceStatements.countObservationsByDate.get(sessionDate || '')?.c || 0);
     totalTransitionRows = Number(persistenceStatements.countTransitionsByDate.get(sessionDate || '')?.c || 0);
+    observationSourceCounts = (persistenceStatements.countObservationSourcesByDate.all(sessionDate || '') || [])
+      .reduce((acc, row) => {
+        const key = normalizeLiveCandidateObservationWriteSource(row?.source);
+        const value = Number(row?.c || 0);
+        acc[key] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+        return acc;
+      }, {});
     transitionSourceCounts = (persistenceStatements.countTransitionSourcesByDate.all(sessionDate || '') || [])
       .reduce((acc, row) => {
         const key = normalizeLiveCandidateObservationWriteSource(row?.source);
@@ -2423,11 +2638,23 @@ function buildLiveCandidateTransitionHistory(input = {}) {
         return acc;
       }, {});
   } else {
+    observationSourceCounts = {
+      [LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO]: totalObservationRows,
+    };
     transitionSourceCounts = {
       [LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO]: totalTransitionRows,
     };
   }
-  const historyProvenance = buildLiveCandidateHistoryProvenance(transitionSourceCounts);
+  const historyProvenance = buildLiveCandidateHistoryProvenance(observationSourceCounts);
+  const transitionProvenance = buildLiveCandidateHistoryProvenance(transitionSourceCounts);
+  const historyViews = buildLiveCandidateFilteredHistoryViews({
+    recentObservations: recentObservationRowsForViews,
+    recentTransitions: recentTransitionRowsForViews,
+    observationSourceCounts,
+    transitionSourceCounts,
+    totalObservationRows,
+    totalTransitionRows,
+  });
 
   const latestTransition = recentTransitions.length ? recentTransitions[0] : null;
   const hasActionableTransition = recentTransitions.some((row) => String(row?.transitionType || '') === 'crossed_into_actionable');
@@ -2449,11 +2676,30 @@ function buildLiveCandidateTransitionHistory(input = {}) {
     sessionDate: sessionDate || null,
     totalObservationRows,
     totalTransitionRows,
+    loopOnlyObservationCount: Number(historyViews?.loopOnly?.observationCount || 0),
+    loopOnlyTransitionCount: Number(historyViews?.loopOnly?.transitionCount || 0),
+    loopOnlyLatestTransition: cloneData(historyViews?.loopOnly?.latestTransition, historyViews?.loopOnly?.latestTransition),
+    loopOnlyRecentObservations: cloneData(historyViews?.loopOnly?.recentObservations, historyViews?.loopOnly?.recentObservations),
+    loopOnlyRecentTransitions: cloneData(historyViews?.loopOnly?.recentTransitions, historyViews?.loopOnly?.recentTransitions),
+    loopOnlyHistorySummaryLine: String(historyViews?.loopOnly?.summaryLine || '').trim() || 'Loop-only history: no rows yet.',
+    diagnosticOnlyObservationCount: Number(historyViews?.diagnosticOnly?.observationCount || 0),
+    diagnosticOnlyTransitionCount: Number(historyViews?.diagnosticOnly?.transitionCount || 0),
+    diagnosticOnlyLatestTransition: cloneData(historyViews?.diagnosticOnly?.latestTransition, historyViews?.diagnosticOnly?.latestTransition),
+    diagnosticOnlyRecentObservations: cloneData(historyViews?.diagnosticOnly?.recentObservations, historyViews?.diagnosticOnly?.recentObservations),
+    diagnosticOnlyRecentTransitions: cloneData(historyViews?.diagnosticOnly?.recentTransitions, historyViews?.diagnosticOnly?.recentTransitions),
+    diagnosticOnlyHistorySummaryLine: String(historyViews?.diagnosticOnly?.summaryLine || '').trim() || 'Diagnostic history: no rows.',
+    historyViews: cloneData(historyViews, historyViews),
+    historyEvaluationMode: 'all_history',
+    historyEvaluationSummaryLine: 'Transition history summary uses all provenance rows; use loop-only fields for clean trust view.',
     emptyStateReason,
-    transitionSourceCounts: historyProvenance.sourceCounts,
+    observationSourceCounts: historyProvenance.sourceCounts,
+    transitionSourceCounts: transitionProvenance.sourceCounts,
     historyProvenanceClassification: historyProvenance.classification,
     historyProvenanceSources: historyProvenance.sources,
     historyProvenanceSummaryLine: historyProvenance.summaryLine,
+    transitionHistoryProvenanceClassification: transitionProvenance.classification,
+    transitionHistoryProvenanceSources: transitionProvenance.sources,
+    transitionHistoryProvenanceSummaryLine: transitionProvenance.summaryLine,
     observationTable: LIVE_CANDIDATE_STATE_OBSERVATION_TABLE,
     transitionTable: LIVE_CANDIDATE_STATE_TRANSITION_TABLE,
     summaryLine,

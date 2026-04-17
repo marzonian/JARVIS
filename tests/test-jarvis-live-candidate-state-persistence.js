@@ -148,6 +148,10 @@ function run() {
   assert(first.liveCandidateStateMonitor.observationWriteSource === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC, 'diagnostic write snapshot should report write source');
   assert(first.liveCandidateStateMonitor.actionableTransitionDetected === false, 'first snapshot should not detect actionable transition');
   assert(first.liveCandidateStateMonitor.emptyStateReason === 'no_prior_observations_yet', 'first snapshot should mark no_prior_observations_yet on monitor');
+  assert(first.liveCandidateStateMonitor.loopOnlyObservationCount === 0, 'diagnostic-only seed should report zero loop-only observations');
+  assert(first.liveCandidateStateMonitor.diagnosticOnlyObservationCount > 0, 'diagnostic-only seed should report diagnostic observations');
+  assert(first.liveCandidateTransitionHistory.loopOnlyTransitionCount === 0, 'diagnostic-only seed should report zero loop-only transitions');
+  assert(first.liveCandidateTransitionHistory.diagnosticOnlyTransitionCount === 0, 'diagnostic-only seed should report zero diagnostic transitions before first transition event');
   assert(first.liveCandidateTransitionHistory.emptyStateReason === 'prior_observations_no_transitions', 'first snapshot history should mark prior_observations_no_transitions after baseline capture');
   const obsAfterFirst = countRows(db, OBS_TABLE);
   const trAfterFirst = countRows(db, TRANS_TABLE);
@@ -248,6 +252,98 @@ function run() {
   );
 
   db.close();
+
+  {
+    const mixedDb = new Database(':memory:');
+    const monitorState = { candidateStates: Object.create(null), observationHistoryByCandidate: Object.create(null), transitionRows: [] };
+
+    buildCommandCenterPanels(buildInput({
+      signal: 'WAIT',
+      probability: 0.4,
+      expectedValueDollars: -18,
+      nowEt: '2026-04-16 10:20',
+      latestSession: { no_trade_reason: 'no_confirmation' },
+      db: mixedDb,
+      monitorState,
+      observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    }));
+    buildCommandCenterPanels(buildInput({
+      signal: 'TRADE',
+      probability: 0.82,
+      expectedValueDollars: 84,
+      nowEt: '2026-04-16 10:21',
+      latestSession: {
+        trade: {
+          direction: 'long',
+          entry_time: '2026-04-16 10:21',
+          entry_price: 22140,
+          sl_price: 22095,
+          tp_price: 22200,
+        },
+      },
+      db: mixedDb,
+      monitorState,
+      observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    }));
+
+    const mixed = buildCommandCenterPanels(buildInput({
+      signal: 'WAIT',
+      probability: 0.42,
+      expectedValueDollars: -22,
+      nowEt: '2026-04-16 10:22',
+      latestSession: { no_trade_reason: 'no_confirmation' },
+      db: mixedDb,
+      monitorState,
+      observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+    }));
+
+    assert(mixed.liveCandidateStateMonitor.historyProvenanceClassification === 'mixed_loop_and_endpoint', 'mixed run should classify monitor history as mixed_loop_and_endpoint');
+    assert(mixed.liveCandidateStateMonitor.loopOnlyObservationCount > 0, 'mixed run should expose loop-only observation count');
+    assert(mixed.liveCandidateStateMonitor.diagnosticOnlyObservationCount > 0, 'mixed run should expose diagnostic-only observation count');
+    assert(mixed.liveCandidateTransitionHistory.loopOnlyTransitionCount > 0, 'mixed run should expose loop-only transition count');
+    assert(mixed.liveCandidateTransitionHistory.diagnosticOnlyTransitionCount > 0, 'mixed run should expose diagnostic-only transition count');
+    assert(
+      String(mixed.liveCandidateTransitionHistory.loopOnlyLatestTransition?.transitionWriteSource || '') === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+      'loop-only latest transition should come from loop_auto rows'
+    );
+    assert(
+      String(mixed.liveCandidateTransitionHistory.diagnosticOnlyLatestTransition?.transitionWriteSource || '') === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+      'diagnostic-only latest transition should come from endpoint_diagnostic rows'
+    );
+    assert(
+      Array.isArray(mixed.liveCandidateTransitionHistory.loopOnlyRecentTransitions)
+      && mixed.liveCandidateTransitionHistory.loopOnlyRecentTransitions.every(
+        (row) => String(row?.transitionWriteSource || '') === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO
+      ),
+      'loop-only transition view should exclude endpoint_diagnostic rows'
+    );
+    assert(
+      Array.isArray(mixed.liveCandidateStateMonitor.loopOnlyRecentObservations)
+      && mixed.liveCandidateStateMonitor.loopOnlyRecentObservations.every(
+        (row) => String(row?.observationWriteSource || '') === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO
+      ),
+      'loop-only observation view should exclude endpoint_diagnostic rows'
+    );
+
+    const beforeReadOnlyObs = countRows(mixedDb, OBS_TABLE);
+    const beforeReadOnlyTr = countRows(mixedDb, TRANS_TABLE);
+    const readOnlyMixed = buildCommandCenterPanels(buildInput({
+      signal: 'WAIT',
+      probability: 0.42,
+      expectedValueDollars: -22,
+      nowEt: '2026-04-16 10:23',
+      latestSession: { no_trade_reason: 'no_confirmation' },
+      db: mixedDb,
+      monitorState,
+      persistLiveCandidateState: false,
+      observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+    }));
+    assert(readOnlyMixed.liveCandidateStateMonitor.responseReadOnly === true, 'read-only mixed snapshot should stay read-only');
+    assert(countRows(mixedDb, OBS_TABLE) === beforeReadOnlyObs, 'read-only mixed snapshot should not add observation rows');
+    assert(countRows(mixedDb, TRANS_TABLE) === beforeReadOnlyTr, 'read-only mixed snapshot should not add transition rows');
+    mixedDb.close();
+  }
+
   console.log('Jarvis live candidate state persistence test passed.');
 }
 

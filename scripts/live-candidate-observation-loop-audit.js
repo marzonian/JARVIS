@@ -105,6 +105,13 @@ function pullStatus(payload = {}) {
           responseReadOnly: firstMonitor.responseReadOnly === true,
           observationWriteSource: firstMonitor.observationWriteSource || null,
           historyProvenanceClassification: firstMonitor.historyProvenanceClassification || null,
+          historyEvaluationMode: firstMonitor.historyEvaluationMode || null,
+          loopOnlyObservationCount: Number(firstMonitor.loopOnlyObservationCount || 0),
+          loopOnlyTransitionCount: Number(firstMonitor.loopOnlyTransitionCount || 0),
+          diagnosticOnlyObservationCount: Number(firstMonitor.diagnosticOnlyObservationCount || 0),
+          diagnosticOnlyTransitionCount: Number(firstMonitor.diagnosticOnlyTransitionCount || 0),
+          loopOnlyHistorySummaryLine: firstMonitor.loopOnlyHistorySummaryLine || null,
+          diagnosticOnlyHistorySummaryLine: firstMonitor.diagnosticOnlyHistorySummaryLine || null,
           durableObservationCount: firstMonitor.durableObservationCount ?? null,
           durableTransitionCount: firstMonitor.durableTransitionCount ?? null,
         },
@@ -136,6 +143,19 @@ function pullStatus(payload = {}) {
           responseReadOnly: secondMonitor.responseReadOnly === true,
           observationWriteSource: secondMonitor.observationWriteSource || null,
           historyProvenanceClassification: secondMonitor.historyProvenanceClassification || null,
+          historyEvaluationMode: secondMonitor.historyEvaluationMode || null,
+          loopOnlyObservationCount: Number(secondMonitor.loopOnlyObservationCount || 0),
+          loopOnlyTransitionCount: Number(secondMonitor.loopOnlyTransitionCount || 0),
+          diagnosticOnlyObservationCount: Number(secondMonitor.diagnosticOnlyObservationCount || 0),
+          diagnosticOnlyTransitionCount: Number(secondMonitor.diagnosticOnlyTransitionCount || 0),
+          loopOnlyHistorySummaryLine: secondMonitor.loopOnlyHistorySummaryLine || null,
+          diagnosticOnlyHistorySummaryLine: secondMonitor.diagnosticOnlyHistorySummaryLine || null,
+          loopOnlyRecentObservationSources: Array.isArray(secondMonitor.loopOnlyRecentObservations)
+            ? secondMonitor.loopOnlyRecentObservations.map((row) => row?.observationWriteSource).filter(Boolean)
+            : [],
+          diagnosticOnlyRecentObservationSources: Array.isArray(secondMonitor.diagnosticOnlyRecentObservations)
+            ? secondMonitor.diagnosticOnlyRecentObservations.map((row) => row?.observationWriteSource).filter(Boolean)
+            : [],
           durableObservationCount: secondMonitor.durableObservationCount ?? null,
           durableTransitionCount: secondMonitor.durableTransitionCount ?? null,
         },
@@ -168,6 +188,16 @@ function pullStatus(payload = {}) {
         endpointReadOnlyDefault: secondMonitor.responseReadOnly === true && Number(secondMonitor.observationWritesThisSnapshot || 0) === 0,
         endpointReadNoInflationOnImmediateRepeat: immediateReadOnlyDelta === 0,
         endpointDiagnosticWriteExplicitOnly: diagnosticMonitor.responseReadOnly === false && String(diagnosticMonitor.observationWriteSource || '') === 'endpoint_diagnostic',
+        loopOnlyAndMixedSurfaced: typeof secondMonitor.loopOnlyObservationCount === 'number'
+          && typeof secondMonitor.diagnosticOnlyObservationCount === 'number'
+          && typeof secondMonitor.durableObservationCount === 'number',
+        loopOnlyViewExcludesDiagnosticRows: Array.isArray(secondMonitor.loopOnlyRecentObservations)
+          ? secondMonitor.loopOnlyRecentObservations.every((row) => String(row?.observationWriteSource || '') !== 'endpoint_diagnostic')
+          : true,
+        diagnosticViewExcludesLoopRows: Array.isArray(secondMonitor.diagnosticOnlyRecentObservations)
+          ? secondMonitor.diagnosticOnlyRecentObservations.every((row) => String(row?.observationWriteSource || '') !== 'loop_auto')
+          : true,
+        historyTrustabilityExplicit: typeof secondMonitor.historyEvaluationMode === 'string' && secondMonitor.historyEvaluationMode.length > 0,
         staleVsUnchangedSurfaced: typeof secondStatus.lastStateClassification === 'string' && secondStatus.lastStateClassification.length > 0,
       },
       summaryLine: `Loop delta polls ${deltaPolls}, evaluated ${deltaEvaluated}, writes ${deltaWrites}, suppressed ${deltaSuppressed}; immediate read-only delta ${immediateReadOnlyDelta}.`,
