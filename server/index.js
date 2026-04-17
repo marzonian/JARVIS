@@ -82,6 +82,9 @@ const {
   buildPineScriptForStrategy,
 } = require('./jarvis-core/strategy-layers');
 const {
+  createLiveCandidateObservationLoop,
+} = require('./jarvis-core/live-candidate-observation-loop');
+const {
   buildStrategyStackCardSection,
   buildStrategyRecommendationWhyBlock,
   buildStrategyComparisonReadout,
@@ -1350,6 +1353,12 @@ const JARVIS_TEST_FORCE_HEALTH_FETCH_ERROR = /^(1|true|yes|on)$/i.test(String(pr
 const JARVIS_PHONE_LINK_BASE_URL = String(process.env.JARVIS_PHONE_LINK_BASE_URL || '').trim();
 const JARVIS_OS_AGENT_URL = String(process.env.JARVIS_OS_AGENT_URL || '').trim();
 const JARVIS_TRACE_STORE_MAX_ITEMS = Math.max(120, Math.min(4000, Number(process.env.JARVIS_TRACE_STORE_MAX_ITEMS || 1200)));
+const LIVE_CANDIDATE_OBSERVATION_LOOP_ENABLED = !/^(0|false|off|no)$/i.test(String(process.env.LIVE_CANDIDATE_OBSERVATION_LOOP_ENABLED || 'true').trim());
+const LIVE_CANDIDATE_OBSERVATION_ACTIVE_INTERVAL_MS = Math.max(15_000, Math.min(30 * 60 * 1000, Number(process.env.LIVE_CANDIDATE_OBSERVATION_ACTIVE_INTERVAL_MS || 60_000)));
+const LIVE_CANDIDATE_OBSERVATION_MONITOR_INTERVAL_MS = Math.max(30_000, Math.min(30 * 60 * 1000, Number(process.env.LIVE_CANDIDATE_OBSERVATION_MONITOR_INTERVAL_MS || 180_000)));
+const LIVE_CANDIDATE_OBSERVATION_IDLE_INTERVAL_MS = Math.max(60_000, Math.min(60 * 60 * 1000, Number(process.env.LIVE_CANDIDATE_OBSERVATION_IDLE_INTERVAL_MS || 300_000)));
+const LIVE_CANDIDATE_OBSERVATION_ACTIVE_WINDOW = String(process.env.LIVE_CANDIDATE_OBSERVATION_ACTIVE_WINDOW || '09:20-12:00').trim();
+const LIVE_CANDIDATE_OBSERVATION_MONITOR_WINDOW = String(process.env.LIVE_CANDIDATE_OBSERVATION_MONITOR_WINDOW || '08:00-20:30').trim();
 const VOICE_TRADING_SESSION_ACTIVE_TTL_MS = Math.max(60_000, Number(process.env.VOICE_TRADING_SESSION_ACTIVE_TTL_MS || (12 * 60 * 1000)));
 const VOICE_TRADING_SESSION_MAX_ITEMS = Math.max(20, Math.min(1000, Number(process.env.VOICE_TRADING_SESSION_MAX_ITEMS || 300)));
 const VOICE_TRADING_SESSION_MAX_BACKOFF_MS = Math.max(60_000, Number(process.env.VOICE_TRADING_SESSION_MAX_BACKOFF_MS || (5 * 60 * 1000)));
@@ -1401,6 +1410,126 @@ async function ensureVoiceTradingSessionHealth(input = {}) {
   } catch {
     return null;
   }
+}
+
+let liveCandidateObservationLoopController = null;
+
+function parseEtWindowRange(value, fallbackStart, fallbackEnd) {
+  const text = String(value || '').trim();
+  const m = text.match(/^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/);
+  if (!m) return { start: fallbackStart, end: fallbackEnd };
+  return {
+    start: m[1],
+    end: m[2],
+  };
+}
+
+function getLiveCandidateObservationLoopStatus() {
+  if (liveCandidateObservationLoopController && typeof liveCandidateObservationLoopController.getStatus === 'function') {
+    try {
+      return liveCandidateObservationLoopController.getStatus();
+    } catch {}
+  }
+  return {
+    enabled: LIVE_CANDIDATE_OBSERVATION_LOOP_ENABLED,
+    running: false,
+    started: false,
+    currentMode: LIVE_CANDIDATE_OBSERVATION_LOOP_ENABLED ? 'idle' : 'disabled',
+    currentModeReason: LIVE_CANDIDATE_OBSERVATION_LOOP_ENABLED ? 'not_started' : 'disabled_by_config',
+    currentIntervalMs: LIVE_CANDIDATE_OBSERVATION_IDLE_INTERVAL_MS,
+    sessionDate: null,
+    lastPollAt: null,
+    lastObservationAt: null,
+    lastSuccessfulWriteAt: null,
+    lastIdleReason: null,
+    lastError: null,
+    nextPollAt: null,
+    pollsTotal: 0,
+    pollsThisSession: 0,
+    writesThisSession: 0,
+    suppressedWritesThisSession: 0,
+    transitionWritesThisSession: 0,
+    observationsEvaluatedThisSession: 0,
+    lastResult: null,
+    summaryLine: LIVE_CANDIDATE_OBSERVATION_LOOP_ENABLED
+      ? 'Live candidate observation loop is ready; first poll pending.'
+      : 'Live candidate observation loop is disabled by config.',
+    advisoryOnly: true,
+  };
+}
+
+function attachLiveCandidateObservationLoopStatus(commandCenter = null) {
+  if (!commandCenter || typeof commandCenter !== 'object') return commandCenter;
+  const status = getLiveCandidateObservationLoopStatus();
+  commandCenter.liveCandidateObservationLoopStatus = cloneData(status, status);
+  commandCenter.liveCandidateObservationLoopStatusLine = String(status?.summaryLine || '').trim() || null;
+  if (commandCenter.todayRecommendation && typeof commandCenter.todayRecommendation === 'object') {
+    commandCenter.todayRecommendation.liveCandidateObservationLoopStatus = cloneData(status, status);
+    commandCenter.todayRecommendation.liveCandidateObservationLoopStatusLine = String(status?.summaryLine || '').trim() || null;
+  }
+  if (commandCenter.decisionBoard && typeof commandCenter.decisionBoard === 'object') {
+    commandCenter.decisionBoard.liveCandidateObservationLoopStatus = cloneData(status, status);
+    commandCenter.decisionBoard.liveCandidateObservationLoopStatusLine = String(status?.summaryLine || '').trim() || null;
+  }
+  return commandCenter;
+}
+
+async function runLiveCandidateObservationPoll(input = {}) {
+  const nowEt = input?.nowEt && typeof input.nowEt === 'object'
+    ? input.nowEt
+    : nowInTimezone('America/New_York');
+  const nowEtOverride = `${String(nowEt.date || '').trim()} ${String(nowEt.time || '').trim()}`;
+  const snapshot = await buildStrategyLayerSnapshotPayload({
+    forceFresh: true,
+    includeDiscovery: false,
+    includePerDate: false,
+    nowEtOverride,
+    observationOnly: true,
+    trackingWindowSessions: 120,
+    trackingIncludeContext: false,
+    previewNewsEvent: null,
+  });
+  const monitor = snapshot?.commandCenter?.liveCandidateStateMonitor
+    && typeof snapshot.commandCenter.liveCandidateStateMonitor === 'object'
+    ? snapshot.commandCenter.liveCandidateStateMonitor
+    : null;
+  const history = snapshot?.commandCenter?.liveCandidateTransitionHistory
+    && typeof snapshot.commandCenter.liveCandidateTransitionHistory === 'object'
+    ? snapshot.commandCenter.liveCandidateTransitionHistory
+    : null;
+  return {
+    monitor,
+    liveCandidateStateMonitor: monitor,
+    history,
+    liveCandidateTransitionHistory: history,
+    summaryLine: String(monitor?.summaryLine || history?.summaryLine || '').trim() || null,
+    advisoryOnly: true,
+  };
+}
+
+function startLiveCandidateObservationLoop() {
+  if (liveCandidateObservationLoopController) return liveCandidateObservationLoopController;
+  const activeWindow = parseEtWindowRange(LIVE_CANDIDATE_OBSERVATION_ACTIVE_WINDOW, '09:20', '12:00');
+  const monitorWindow = parseEtWindowRange(LIVE_CANDIDATE_OBSERVATION_MONITOR_WINDOW, '08:00', '20:30');
+  liveCandidateObservationLoopController = createLiveCandidateObservationLoop({
+    enabled: LIVE_CANDIDATE_OBSERVATION_LOOP_ENABLED,
+    activeIntervalMs: LIVE_CANDIDATE_OBSERVATION_ACTIVE_INTERVAL_MS,
+    monitorIntervalMs: LIVE_CANDIDATE_OBSERVATION_MONITOR_INTERVAL_MS,
+    idleIntervalMs: LIVE_CANDIDATE_OBSERVATION_IDLE_INTERVAL_MS,
+    activeStartEt: activeWindow.start,
+    activeEndEt: activeWindow.end,
+    monitorStartEt: monitorWindow.start,
+    monitorEndEt: monitorWindow.end,
+    nowProvider: () => nowInTimezone('America/New_York'),
+    poller: ({ nowEt, triggerSource }) => runLiveCandidateObservationPoll({ nowEt, triggerSource }),
+  });
+  liveCandidateObservationLoopController.start({ immediate: true });
+  return liveCandidateObservationLoopController;
+}
+
+function stopLiveCandidateObservationLoop(reason = 'shutdown') {
+  if (!liveCandidateObservationLoopController || typeof liveCandidateObservationLoopController.stop !== 'function') return null;
+  return liveCandidateObservationLoopController.stop({ reason });
 }
 
 const ANALYST_GUARDRAIL_EXPLAIN_TTL_MS = Math.max(60_000, Number(process.env.ANALYST_GUARDRAIL_EXPLAIN_TTL_MS || (10 * 60 * 1000)));
@@ -9997,6 +10126,7 @@ function buildBackfillRecommendationContextForDate(options = {}) {
 }
 
 async function buildStrategyLayerSnapshotPayload(options = {}) {
+  const observationOnly = options.observationOnly === true;
   const sessions = loadAllSessions();
   const dates = Object.keys(sessions).sort();
   if (dates.length === 0) return null;
@@ -10015,32 +10145,40 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
     Math.min(MAX_TRACKING_WINDOW_SESSIONS, Number(options.trackingWindowSessions || options.windowSessions || DEFAULT_TRACKING_WINDOW_SESSIONS))
   );
   const trackingIncludeContext = options.trackingIncludeContext !== false;
-  const strategyTrackingSummary = await buildStrategyTrackingSummaryCached({
-    forceFresh: !!options.forceFresh,
-    windowSessions: trackingWindowSessions,
-    includeContext: trackingIncludeContext,
-    sessions,
-    regimeByDate: regimes,
-  });
-  const strategyDiscoverySummary = await buildStrategyDiscoverySummaryCached({
-    forceFresh: !!options.forceFresh,
-    windowSessions: Number(options.strategyDiscoveryWindowSessions || options.windowSessions || DEFAULT_DISCOVERY_WINDOW_SESSIONS),
-    candidateLimit: Number(options.strategyDiscoveryCandidateLimit || options.candidateLimit || DEFAULT_DISCOVERY_CANDIDATE_LIMIT),
-    family: options.strategyDiscoveryFamily || options.family || null,
-    sessions,
-  });
-  const mechanicsResearchSummary = await buildMechanicsResearchSummaryCached({
-    forceFresh: !!options.forceFresh,
-    windowTrades: Number(options.windowTrades || process.env.MECHANICS_RESEARCH_WINDOW_TRADES || 120),
-    segmentWeekday: options.segmentWeekday !== false,
-    segmentTimeBucket: options.segmentTimeBucket !== false,
-    segmentRegime: options.segmentRegime === true,
-    nowEt,
-    currentRegime: latestRegime?.regime || latestRegime?.trend || null,
-    sessions,
-    regimeByDate: regimes,
-  });
-  const mechanicsSummary = buildMechanicsSummaryContract(mechanicsResearchSummary);
+  const strategyTrackingSummary = observationOnly
+    ? null
+    : await buildStrategyTrackingSummaryCached({
+      forceFresh: !!options.forceFresh,
+      windowSessions: trackingWindowSessions,
+      includeContext: trackingIncludeContext,
+      sessions,
+      regimeByDate: regimes,
+    });
+  const strategyDiscoverySummary = observationOnly
+    ? null
+    : await buildStrategyDiscoverySummaryCached({
+      forceFresh: !!options.forceFresh,
+      windowSessions: Number(options.strategyDiscoveryWindowSessions || options.windowSessions || DEFAULT_DISCOVERY_WINDOW_SESSIONS),
+      candidateLimit: Number(options.strategyDiscoveryCandidateLimit || options.candidateLimit || DEFAULT_DISCOVERY_CANDIDATE_LIMIT),
+      family: options.strategyDiscoveryFamily || options.family || null,
+      sessions,
+    });
+  const mechanicsResearchSummary = observationOnly
+    ? null
+    : await buildMechanicsResearchSummaryCached({
+      forceFresh: !!options.forceFresh,
+      windowTrades: Number(options.windowTrades || process.env.MECHANICS_RESEARCH_WINDOW_TRADES || 120),
+      segmentWeekday: options.segmentWeekday !== false,
+      segmentTimeBucket: options.segmentTimeBucket !== false,
+      segmentRegime: options.segmentRegime === true,
+      nowEt,
+      currentRegime: latestRegime?.regime || latestRegime?.trend || null,
+      sessions,
+      regimeByDate: regimes,
+    });
+  const mechanicsSummary = mechanicsResearchSummary
+    ? buildMechanicsSummaryContract(mechanicsResearchSummary)
+    : null;
   const latestSessionAnalysis = processSession(sessions[latestDate] || [], { ...ORIGINAL_PLAN_SPEC.engineOptions });
   let commandSnapshot = null;
   try {
@@ -10082,27 +10220,31 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
     discoverySummary: strategyDiscoverySummary,
     strategyTrackingSummary,
   });
-  const strategyPortfolioSummary = await buildStrategyPortfolioSummaryCached({
-    forceFresh: !!options.forceFresh,
-    windowSessions: trackingWindowSessions,
-    includeContext: trackingIncludeContext,
-    sessions,
-    regimeByDate: regimes,
-    strategyTracking: strategyTrackingSummary,
-    strategyDiscovery: strategyDiscoverySummary,
-    strategyLayers,
-  });
-  const strategyExperimentsSummary = await buildStrategyExperimentsSummaryCached({
-    forceFresh: !!options.forceFresh,
-    windowSessions: trackingWindowSessions,
-    includeContext: trackingIncludeContext,
-    sessions,
-    regimeByDate: regimes,
-    strategyTracking: strategyTrackingSummary,
-    strategyPortfolio: strategyPortfolioSummary,
-    strategyDiscovery: strategyDiscoverySummary,
-  });
-  if (strategyLayers && typeof strategyLayers === 'object') {
+  const strategyPortfolioSummary = observationOnly
+    ? null
+    : await buildStrategyPortfolioSummaryCached({
+      forceFresh: !!options.forceFresh,
+      windowSessions: trackingWindowSessions,
+      includeContext: trackingIncludeContext,
+      sessions,
+      regimeByDate: regimes,
+      strategyTracking: strategyTrackingSummary,
+      strategyDiscovery: strategyDiscoverySummary,
+      strategyLayers,
+    });
+  const strategyExperimentsSummary = observationOnly
+    ? null
+    : await buildStrategyExperimentsSummaryCached({
+      forceFresh: !!options.forceFresh,
+      windowSessions: trackingWindowSessions,
+      includeContext: trackingIncludeContext,
+      sessions,
+      regimeByDate: regimes,
+      strategyTracking: strategyTrackingSummary,
+      strategyPortfolio: strategyPortfolioSummary,
+      strategyDiscovery: strategyDiscoverySummary,
+    });
+  if (!observationOnly && strategyLayers && typeof strategyLayers === 'object') {
     strategyLayers.strategyPortfolioSummary = strategyPortfolioSummary;
     strategyLayers.strategyExperimentsSummary = strategyExperimentsSummary;
   }
@@ -10194,6 +10336,23 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
     commandCenter.regimeInsight = canonicalRegimeReason
       ? `${canonicalRegimeLabel} regime (${canonicalRegimeConfidence} confidence): ${canonicalRegimeReason}`
       : `${canonicalRegimeLabel} regime (${canonicalRegimeConfidence} confidence).`;
+    attachLiveCandidateObservationLoopStatus(commandCenter);
+  }
+
+  if (observationOnly) {
+    return {
+      generatedAt: new Date().toISOString(),
+      observationOnly: true,
+      strategyLayers,
+      commandCenter,
+      regimeDetection,
+      context: {
+        latestDate,
+        nowEt,
+        sessionPhase,
+        regime: latestRegime || null,
+      },
+    };
   }
 
   let recommendationPerformance = null;
@@ -16222,6 +16381,7 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
 
 async function buildStrategyLayerSnapshotCached(options = {}) {
   const marketDate = dateInTimezone('America/New_York');
+  const observationOnly = options.observationOnly === true;
   const includeDiscovery = options.includeDiscovery !== false;
   const includePerDate = options.includePerDate === true;
   const nowEtOverride = String(options.nowEtOverride || '').trim();
@@ -16249,6 +16409,7 @@ async function buildStrategyLayerSnapshotCached(options = {}) {
   const trackingIncludeContext = options.trackingIncludeContext !== false;
   const cacheKey = [
     marketDate,
+    observationOnly ? 'observation_only' : 'full_payload',
     includeDiscovery ? 'with_discovery' : 'no_discovery',
     includePerDate ? 'with_perdate' : 'no_perdate',
     nowEtOverride || 'live_now',
@@ -34867,6 +35028,22 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
   const liveCandidateTransitionHistory = liveCandidateTransitionHistorySource
     ? cloneData(liveCandidateTransitionHistorySource, liveCandidateTransitionHistorySource)
     : null;
+  const liveCandidateObservationLoopStatusSource = (
+    commandCenter?.liveCandidateObservationLoopStatus && typeof commandCenter.liveCandidateObservationLoopStatus === 'object'
+      ? commandCenter.liveCandidateObservationLoopStatus
+      : (strategyLayers?.liveCandidateObservationLoopStatus && typeof strategyLayers.liveCandidateObservationLoopStatus === 'object'
+        ? strategyLayers.liveCandidateObservationLoopStatus
+        : null)
+  );
+  const liveCandidateObservationLoopStatus = liveCandidateObservationLoopStatusSource
+    ? cloneData(liveCandidateObservationLoopStatusSource, liveCandidateObservationLoopStatusSource)
+    : null;
+  const liveCandidateObservationLoopStatusLine = asNullableText(
+    commandCenter?.liveCandidateObservationLoopStatusLine
+    || strategyLayers?.liveCandidateObservationLoopStatusLine
+    || liveCandidateObservationLoopStatus?.summaryLine
+    || ''
+  );
   const strategyCandidateOpportunityBridgeSource = (
     commandCenter?.strategyCandidateOpportunityBridge && typeof commandCenter.strategyCandidateOpportunityBridge === 'object'
       ? commandCenter.strategyCandidateOpportunityBridge
@@ -34924,6 +35101,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     liveOpportunityCandidates,
     liveCandidateStateMonitor,
     liveCandidateTransitionHistory,
+    liveCandidateObservationLoopStatus,
+    liveCandidateObservationLoopStatusLine,
     strategyCandidateOpportunityBridge,
     shadowMockTradeDecision,
     shadowMockTradeLedger,
@@ -34951,6 +35130,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
       liveCandidateStateMonitor: cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor),
       liveCandidateTransitionHistory: cloneData(liveCandidateTransitionHistory, liveCandidateTransitionHistory),
+      liveCandidateObservationLoopStatus: cloneData(liveCandidateObservationLoopStatus, liveCandidateObservationLoopStatus),
+      liveCandidateObservationLoopStatusLine,
       strategyCandidateOpportunityBridge: cloneData(
         strategyCandidateOpportunityBridge,
         strategyCandidateOpportunityBridge
@@ -34983,6 +35164,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
       liveCandidateStateMonitor: cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor),
       liveCandidateTransitionHistory: cloneData(liveCandidateTransitionHistory, liveCandidateTransitionHistory),
+      liveCandidateObservationLoopStatus: cloneData(liveCandidateObservationLoopStatus, liveCandidateObservationLoopStatus),
+      liveCandidateObservationLoopStatusLine,
       strategyCandidateOpportunityBridge: cloneData(
         strategyCandidateOpportunityBridge,
         strategyCandidateOpportunityBridge
@@ -35036,6 +35219,11 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
     strategyLayerSnapshot.liveCandidateTransitionHistory,
     strategyLayerSnapshot.liveCandidateTransitionHistory
   );
+  commandCenter.liveCandidateObservationLoopStatus = cloneData(
+    strategyLayerSnapshot.liveCandidateObservationLoopStatus,
+    strategyLayerSnapshot.liveCandidateObservationLoopStatus
+  );
+  commandCenter.liveCandidateObservationLoopStatusLine = strategyLayerSnapshot.liveCandidateObservationLoopStatusLine || null;
   commandCenter.strategyCandidateOpportunityBridge = cloneData(
     strategyLayerSnapshot.strategyCandidateOpportunityBridge,
     strategyLayerSnapshot.strategyCandidateOpportunityBridge
@@ -35147,6 +35335,11 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
         strategyLayerSnapshot.liveCandidateTransitionHistory,
         strategyLayerSnapshot.liveCandidateTransitionHistory
       );
+      recommendationPerformance.liveCandidateObservationLoopStatus = cloneData(
+        strategyLayerSnapshot.liveCandidateObservationLoopStatus,
+        strategyLayerSnapshot.liveCandidateObservationLoopStatus
+      );
+      recommendationPerformance.liveCandidateObservationLoopStatusLine = strategyLayerSnapshot.liveCandidateObservationLoopStatusLine || null;
       recommendationPerformance.strategyCandidateOpportunityBridge = cloneData(
         strategyLayerSnapshot.strategyCandidateOpportunityBridge,
         strategyLayerSnapshot.strategyCandidateOpportunityBridge
@@ -35198,6 +35391,8 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       liveOpportunityCandidates: strategyLayerSnapshot?.liveOpportunityCandidates || null,
       liveCandidateStateMonitor: strategyLayerSnapshot?.liveCandidateStateMonitor || null,
       liveCandidateTransitionHistory: strategyLayerSnapshot?.liveCandidateTransitionHistory || null,
+      liveCandidateObservationLoopStatus: strategyLayerSnapshot?.liveCandidateObservationLoopStatus || null,
+      liveCandidateObservationLoopStatusLine: strategyLayerSnapshot?.liveCandidateObservationLoopStatusLine || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
       shadowMockTradeDecision: strategyLayerSnapshot?.shadowMockTradeDecision || null,
       shadowMockTradeLedger: strategyLayerSnapshot?.shadowMockTradeLedger || null,
@@ -35768,6 +35963,8 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       liveOpportunityCandidates: strategyLayerSnapshot?.liveOpportunityCandidates || null,
       liveCandidateStateMonitor: strategyLayerSnapshot?.liveCandidateStateMonitor || null,
       liveCandidateTransitionHistory: strategyLayerSnapshot?.liveCandidateTransitionHistory || null,
+      liveCandidateObservationLoopStatus: strategyLayerSnapshot?.liveCandidateObservationLoopStatus || null,
+      liveCandidateObservationLoopStatusLine: strategyLayerSnapshot?.liveCandidateObservationLoopStatusLine || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
       shadowMockTradeDecision: strategyLayerSnapshot?.shadowMockTradeDecision || null,
       shadowMockTradeLedger: strategyLayerSnapshot?.shadowMockTradeLedger || null,
@@ -41886,6 +42083,13 @@ const server = app.listen(config.port, config.host, () => {
       }, ASSISTANT_INTEL_PREWARM_DELAY_MS);
     }
   }, 250);
+  try {
+    startLiveCandidateObservationLoop();
+    const loopStatus = getLiveCandidateObservationLoopStatus();
+    console.log(`  Live candidate observation loop: ${loopStatus.summaryLine}`);
+  } catch (err) {
+    console.warn('[Live Candidate Observation Loop] startup failed:', err.message);
+  }
   console.log('');
 });
 
@@ -42279,6 +42483,7 @@ process.on('uncaughtException', (err) => {
   if (fatalExitScheduled) return;
   fatalExitScheduled = true;
   setTimeout(() => {
+    try { stopLiveCandidateObservationLoop('fatal_exit'); } catch {}
     try { closeDB(); } catch {}
     process.exit(1);
   }, 2000);
@@ -42286,6 +42491,7 @@ process.on('uncaughtException', (err) => {
 
 process.on('SIGINT', () => {
   console.log('\n[3130] Shutting down...');
+  try { stopLiveCandidateObservationLoop('sigint'); } catch {}
   if (discordBot.enabled) {
     discordBot.stop().catch(() => {});
   }
