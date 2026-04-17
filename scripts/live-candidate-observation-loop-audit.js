@@ -79,6 +79,15 @@ function pullStatus(payload = {}) {
           writesThisSession: Number(firstStatus.writesThisSession || 0),
           suppressedWritesThisSession: Number(firstStatus.suppressedWritesThisSession || 0),
           observationsEvaluatedThisSession: Number(firstStatus.observationsEvaluatedThisSession || 0),
+          lastInputRefreshAt: firstStatus.lastInputRefreshAt || null,
+          refreshedInputSources: Array.isArray(firstStatus.refreshedInputSources) ? firstStatus.refreshedInputSources : [],
+          staleInputWarning: firstStatus.staleInputWarning === true,
+          staleInputReasonCodes: Array.isArray(firstStatus.staleInputReasonCodes) ? firstStatus.staleInputReasonCodes : [],
+          lastObservedMarketTimestamp: firstStatus.lastObservedMarketTimestamp || null,
+          lastObservedDecisionTimestamp: firstStatus.lastObservedDecisionTimestamp || null,
+          lastObservedContextTimestamp: firstStatus.lastObservedContextTimestamp || null,
+          lastStateClassification: firstStatus.lastStateClassification || null,
+          lastStateClassificationReason: firstStatus.lastStateClassificationReason || null,
           lastPollAt: firstStatus.lastPollAt || null,
           summaryLine: firstStatus.summaryLine || null,
         },
@@ -98,6 +107,15 @@ function pullStatus(payload = {}) {
           writesThisSession: Number(secondStatus.writesThisSession || 0),
           suppressedWritesThisSession: Number(secondStatus.suppressedWritesThisSession || 0),
           observationsEvaluatedThisSession: Number(secondStatus.observationsEvaluatedThisSession || 0),
+          lastInputRefreshAt: secondStatus.lastInputRefreshAt || null,
+          refreshedInputSources: Array.isArray(secondStatus.refreshedInputSources) ? secondStatus.refreshedInputSources : [],
+          staleInputWarning: secondStatus.staleInputWarning === true,
+          staleInputReasonCodes: Array.isArray(secondStatus.staleInputReasonCodes) ? secondStatus.staleInputReasonCodes : [],
+          lastObservedMarketTimestamp: secondStatus.lastObservedMarketTimestamp || null,
+          lastObservedDecisionTimestamp: secondStatus.lastObservedDecisionTimestamp || null,
+          lastObservedContextTimestamp: secondStatus.lastObservedContextTimestamp || null,
+          lastStateClassification: secondStatus.lastStateClassification || null,
+          lastStateClassificationReason: secondStatus.lastStateClassificationReason || null,
           lastPollAt: secondStatus.lastPollAt || null,
           summaryLine: secondStatus.summaryLine || null,
         },
@@ -115,6 +133,7 @@ function pullStatus(payload = {}) {
       },
       proof: {
         loopAdvancedWithoutContinuousEndpointPolling: deltaPolls > 0 && deltaEvaluated > 0,
+        staleVsUnchangedSurfaced: typeof secondStatus.lastStateClassification === 'string' && secondStatus.lastStateClassification.length > 0,
       },
       summaryLine: `Loop delta polls ${deltaPolls}, evaluated ${deltaEvaluated}, writes ${deltaWrites}, suppressed ${deltaSuppressed}.`,
       advisoryOnly: true,
@@ -129,4 +148,3 @@ function pullStatus(payload = {}) {
     await server.stop();
   }
 })();
-

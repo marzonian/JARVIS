@@ -166,6 +166,16 @@ function createLiveCandidateObservationLoop(options = {}) {
     suppressedWritesThisSession: 0,
     transitionWritesThisSession: 0,
     observationsEvaluatedThisSession: 0,
+    lastInputRefreshAt: null,
+    refreshedInputSources: [],
+    staleInputWarning: false,
+    staleInputReasonCodes: [],
+    lastObservedMarketTimestamp: null,
+    lastObservedDecisionTimestamp: null,
+    lastObservedContextTimestamp: null,
+    lastStateClassification: 'no_state_evaluated',
+    lastStateClassificationReason: 'loop_not_started',
+    lastInputFingerprint: null,
     sessionDate: null,
     nextPollAt: null,
     lastResult: null,
@@ -187,7 +197,15 @@ function createLiveCandidateObservationLoop(options = {}) {
     if (state.currentMode === 'idle') {
       return `Live candidate observation loop idle (${state.currentModeReason || 'outside window'}); next poll in ${Math.max(1, Math.round((state.currentIntervalMs || 0) / 1000))}s.`;
     }
-    return `Live candidate observation loop ${state.currentMode}; polls ${state.pollsThisSession}, writes ${state.writesThisSession}, suppressed ${state.suppressedWritesThisSession}.`;
+    const classification = String(state.lastStateClassification || '').trim().toLowerCase();
+    const classificationNote = classification === 'stale_input_warning'
+      ? ' stale-input warning.'
+      : classification === 'real_state_unchanged'
+        ? ' unchanged state appears real.'
+        : classification === 'state_changed'
+          ? ' state changed.'
+          : '';
+    return `Live candidate observation loop ${state.currentMode}; polls ${state.pollsThisSession}, writes ${state.writesThisSession}, suppressed ${state.suppressedWritesThisSession}.${classificationNote}`;
   }
 
   function getStatus() {
@@ -211,6 +229,16 @@ function createLiveCandidateObservationLoop(options = {}) {
       suppressedWritesThisSession: state.suppressedWritesThisSession,
       transitionWritesThisSession: state.transitionWritesThisSession,
       observationsEvaluatedThisSession: state.observationsEvaluatedThisSession,
+      lastInputRefreshAt: state.lastInputRefreshAt || null,
+      refreshedInputSources: Array.isArray(state.refreshedInputSources) ? [...state.refreshedInputSources] : [],
+      staleInputWarning: state.staleInputWarning === true,
+      staleInputReasonCodes: Array.isArray(state.staleInputReasonCodes) ? [...state.staleInputReasonCodes] : [],
+      lastObservedMarketTimestamp: state.lastObservedMarketTimestamp || null,
+      lastObservedDecisionTimestamp: state.lastObservedDecisionTimestamp || null,
+      lastObservedContextTimestamp: state.lastObservedContextTimestamp || null,
+      lastStateClassification: String(state.lastStateClassification || '').trim() || 'no_state_evaluated',
+      lastStateClassificationReason: String(state.lastStateClassificationReason || '').trim() || null,
+      lastInputFingerprint: String(state.lastInputFingerprint || '').trim() || null,
       lastResult: copyObject(state.lastResult, null),
       summaryLine: state.lastSummaryLine || buildSummaryLine(),
       advisoryOnly: true,
@@ -244,6 +272,8 @@ function createLiveCandidateObservationLoop(options = {}) {
     state.running = true;
 
     if (!mode.shouldObserve) {
+      state.lastStateClassification = 'no_state_evaluated';
+      state.lastStateClassificationReason = String(mode.reason || 'outside_monitoring_window').trim().toLowerCase() || 'outside_monitoring_window';
       state.lastResult = {
         status: 'idle',
         reason: mode.reason,
@@ -274,12 +304,43 @@ function createLiveCandidateObservationLoop(options = {}) {
       const observationsEvaluated = Array.isArray(monitor?.recentObservationSample)
         ? monitor.recentObservationSample.length
         : clampInt(monitor?.priorObservationReadCount, 0, 0, Number.MAX_SAFE_INTEGER);
+      const freshness = pollResult?.freshness && typeof pollResult.freshness === 'object'
+        ? pollResult.freshness
+        : null;
       state.writesThisSession += writes;
       state.suppressedWritesThisSession += suppressed;
       state.transitionWritesThisSession += transitionWrites;
       state.observationsEvaluatedThisSession += Math.max(observationsEvaluated, writes + suppressed);
       state.lastObservationAt = isoNow();
       if (writes > 0) state.lastSuccessfulWriteAt = state.lastObservationAt;
+      if (freshness) {
+        state.lastInputRefreshAt = String(freshness.lastInputRefreshAt || '').trim() || state.lastObservationAt;
+        state.refreshedInputSources = Array.isArray(freshness.refreshedInputSources)
+          ? freshness.refreshedInputSources.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+          : [];
+        state.staleInputWarning = freshness.staleInputWarning === true;
+        state.staleInputReasonCodes = Array.isArray(freshness.staleInputReasonCodes)
+          ? freshness.staleInputReasonCodes.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+          : [];
+        state.lastObservedMarketTimestamp = String(freshness.lastObservedMarketTimestamp || '').trim() || null;
+        state.lastObservedDecisionTimestamp = String(freshness.lastObservedDecisionTimestamp || '').trim() || null;
+        state.lastObservedContextTimestamp = String(freshness.lastObservedContextTimestamp || '').trim() || null;
+        state.lastInputFingerprint = String(freshness.inputFingerprint || '').trim() || null;
+      }
+      let stateClassification = 'no_state_evaluated';
+      let stateClassificationReason = 'no_candidate_observations';
+      if (writes > 0 || transitionWrites > 0) {
+        stateClassification = 'state_changed';
+        stateClassificationReason = transitionWrites > 0 ? 'transition_or_observation_write' : 'observation_write';
+      } else if (state.staleInputWarning) {
+        stateClassification = 'stale_input_warning';
+        stateClassificationReason = state.staleInputReasonCodes[0] || 'stale_input_warning';
+      } else if (suppressed > 0 || observationsEvaluated > 0) {
+        stateClassification = 'real_state_unchanged';
+        stateClassificationReason = 'input_refreshed_but_state_unchanged';
+      }
+      state.lastStateClassification = stateClassification;
+      state.lastStateClassificationReason = stateClassificationReason;
       state.lastError = null;
       state.lastResult = {
         status: 'ok',
@@ -289,12 +350,19 @@ function createLiveCandidateObservationLoop(options = {}) {
         suppressed,
         transitionWrites,
         nowEt: `${mode.nowEt.date} ${mode.nowEt.time}`,
+        stateClassification,
+        stateClassificationReason,
+        staleInputWarning: state.staleInputWarning === true,
+        staleInputReasonCodes: Array.isArray(state.staleInputReasonCodes) ? [...state.staleInputReasonCodes] : [],
+        refreshedInputSources: Array.isArray(state.refreshedInputSources) ? [...state.refreshedInputSources] : [],
         summaryLine: monitor?.summaryLine || pollResult?.summaryLine || null,
       };
       state.lastSummaryLine = buildSummaryLine();
       return state.lastResult;
     } catch (err) {
       state.lastError = String(err?.message || 'live_candidate_observation_poll_failed');
+      state.lastStateClassification = 'poll_error';
+      state.lastStateClassificationReason = state.lastError;
       state.lastResult = {
         status: 'error',
         reason: state.lastError,

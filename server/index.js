@@ -712,12 +712,25 @@ function invalidateSessionDataCache() {
   };
 }
 
-function loadAllSessions() {
+function loadAllSessions(options = {}) {
+  const forceFresh = options && options.forceFresh === true;
+  const meta = options && typeof options.meta === 'object' ? options.meta : null;
   const now = Date.now();
   if (
-    sessionDataCache.sessions
+    !forceFresh
+    && sessionDataCache.sessions
     && (now - sessionDataCache.fetchedAt) < SESSION_DATA_CACHE_TTL_MS
   ) {
+    if (meta) {
+      meta.source = 'sessions_5m_candles';
+      meta.cacheHit = true;
+      meta.cacheAgeMs = Math.max(0, now - Number(sessionDataCache.fetchedAt || 0));
+      meta.fetchedAt = Number(sessionDataCache.fetchedAt || 0) > 0
+        ? new Date(sessionDataCache.fetchedAt).toISOString()
+        : null;
+      meta.sessionCount = Number(sessionDataCache.sessionCount || 0);
+      meta.candleCount = Number(sessionDataCache.candleCount || 0);
+    }
     return sessionDataCache.sessions;
   }
 
@@ -775,6 +788,14 @@ function loadAllSessions() {
     sessionCount: Object.keys(result).length,
     candleCount: rows.length,
   };
+  if (meta) {
+    meta.source = 'sessions_5m_candles';
+    meta.cacheHit = false;
+    meta.cacheAgeMs = 0;
+    meta.fetchedAt = new Date(now).toISOString();
+    meta.sessionCount = Number(sessionDataCache.sessionCount || 0);
+    meta.candleCount = Number(sessionDataCache.candleCount || 0);
+  }
   return result;
 }
 
@@ -1018,7 +1039,7 @@ function validateRecentSessionDataCoverage(options = {}) {
     ORDER BY date DESC
     LIMIT ?
   `).all(lookbackSessions);
-  const sessions = loadAllSessions();
+  const sessions = loadAllSessions({ forceFresh: !!options.forceFresh });
   const checks = [];
   let issues = 0;
 
@@ -1450,6 +1471,15 @@ function getLiveCandidateObservationLoopStatus() {
     suppressedWritesThisSession: 0,
     transitionWritesThisSession: 0,
     observationsEvaluatedThisSession: 0,
+    lastInputRefreshAt: null,
+    refreshedInputSources: [],
+    staleInputWarning: false,
+    staleInputReasonCodes: [],
+    lastObservedMarketTimestamp: null,
+    lastObservedDecisionTimestamp: null,
+    lastObservedContextTimestamp: null,
+    lastStateClassification: 'no_state_evaluated',
+    lastStateClassificationReason: 'loop_not_started',
     lastResult: null,
     summaryLine: LIVE_CANDIDATE_OBSERVATION_LOOP_ENABLED
       ? 'Live candidate observation loop is ready; first poll pending.'
@@ -1472,6 +1502,40 @@ function attachLiveCandidateObservationLoopStatus(commandCenter = null) {
     commandCenter.decisionBoard.liveCandidateObservationLoopStatusLine = String(status?.summaryLine || '').trim() || null;
   }
   return commandCenter;
+}
+
+function parseEtDateMinute(value = '') {
+  const text = String(value || '').trim();
+  const m = text.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/);
+  if (!m) return null;
+  const hour = Number(m[2]);
+  const minute = Number(m[3]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return {
+    date: m[1],
+    hour,
+    minute,
+  };
+}
+
+function deriveEtAgeMinutes(observedEt = '', nowEtText = '') {
+  const observed = parseEtDateMinute(observedEt);
+  const now = parseEtDateMinute(nowEtText);
+  if (!observed || !now) return null;
+  const dayDelta = diffIsoDays(observed.date, now.date);
+  if (!Number.isFinite(dayDelta)) return null;
+  const observedMinutes = (observed.hour * 60) + observed.minute;
+  const nowMinutes = (now.hour * 60) + now.minute;
+  return Math.round((dayDelta * 1440) + (nowMinutes - observedMinutes));
+}
+
+function deriveIsoAgeMinutes(observedIso = '', nowIso = null) {
+  const observedMs = Date.parse(String(observedIso || '').trim());
+  if (!Number.isFinite(observedMs)) return null;
+  const baseNow = String(nowIso || '').trim() || new Date().toISOString();
+  const nowMs = Date.parse(baseNow);
+  if (!Number.isFinite(nowMs)) return null;
+  return Math.round((nowMs - observedMs) / 60000);
 }
 
 async function runLiveCandidateObservationPoll(input = {}) {
@@ -1497,11 +1561,80 @@ async function runLiveCandidateObservationPoll(input = {}) {
     && typeof snapshot.commandCenter.liveCandidateTransitionHistory === 'object'
     ? snapshot.commandCenter.liveCandidateTransitionHistory
     : null;
+  const freshnessSource = snapshot?.observationFreshness && typeof snapshot.observationFreshness === 'object'
+    ? snapshot.observationFreshness
+    : {};
+  const sourceRows = Array.isArray(freshnessSource?.inputSources)
+    ? freshnessSource.inputSources.filter((row) => row && typeof row === 'object')
+    : [];
+  const refreshedInputSources = sourceRows
+    .filter((row) => row.refreshed === true)
+    .map((row) => String(row.source || '').trim().toLowerCase())
+    .filter(Boolean);
+  const staleInputReasonCodes = [];
+  const sessionSource = sourceRows.find((row) => String(row.source || '').trim().toLowerCase() === 'sessions_5m_candles') || null;
+  if (sessionSource && sessionSource.cacheHit === true && freshnessSource.forceFreshRequested === true) {
+    staleInputReasonCodes.push('session_cache_hit_under_force_fresh');
+  }
+  const latestMarketTimestamp = String(freshnessSource?.latestMarketTimestamp || '').trim() || null;
+  const latestDecisionTimestamp = String(freshnessSource?.latestDecisionTimestamp || '').trim() || null;
+  const latestContextTimestamp = String(freshnessSource?.latestContextTimestamp || '').trim() || null;
+  const marketAgeMinutes = deriveEtAgeMinutes(latestMarketTimestamp, nowEtOverride);
+  const decisionAgeMinutes = deriveIsoAgeMinutes(latestDecisionTimestamp);
+  const contextAgeMinutes = deriveEtAgeMinutes(latestContextTimestamp, nowEtOverride);
+  const sessionPhase = String(snapshot?.context?.sessionPhase || '').trim().toLowerCase();
+  const marketStaleThresholdMinutes = ['orb_window', 'momentum_window', 'entry_window'].includes(sessionPhase)
+    ? 20
+    : (sessionPhase === 'outside_window' ? 240 : 60);
+  const marketParts = parseEtDateMinute(latestMarketTimestamp);
+  const nowParts = parseEtDateMinute(nowEtOverride);
+  const preOpenCarryForward = sessionPhase === 'pre_open'
+    && marketParts
+    && nowParts
+    && Number.isFinite(diffIsoDays(marketParts.date, nowParts.date))
+    && diffIsoDays(marketParts.date, nowParts.date) >= 1;
+  if (!latestMarketTimestamp) {
+    staleInputReasonCodes.push('market_timestamp_unavailable');
+  } else if (!preOpenCarryForward && Number.isFinite(marketAgeMinutes) && marketAgeMinutes > marketStaleThresholdMinutes) {
+    staleInputReasonCodes.push(`market_timestamp_stale_${marketStaleThresholdMinutes}m`);
+  }
+  if (!latestDecisionTimestamp) {
+    staleInputReasonCodes.push('decision_timestamp_unavailable');
+  } else if (Number.isFinite(decisionAgeMinutes) && decisionAgeMinutes > 5) {
+    staleInputReasonCodes.push('decision_timestamp_stale_5m');
+  }
+  if (!latestContextTimestamp) {
+    staleInputReasonCodes.push('context_timestamp_unavailable');
+  }
+  const staleInputWarning = staleInputReasonCodes.length > 0;
+  const freshness = {
+    lastInputRefreshAt: String(freshnessSource?.refreshedAt || '').trim() || new Date().toISOString(),
+    refreshedInputSources,
+    staleInputWarning,
+    staleInputReasonCodes,
+    lastObservedMarketTimestamp: latestMarketTimestamp,
+    lastObservedDecisionTimestamp: latestDecisionTimestamp,
+    lastObservedContextTimestamp: latestContextTimestamp,
+    marketAgeMinutes: Number.isFinite(marketAgeMinutes) ? marketAgeMinutes : null,
+    decisionAgeMinutes: Number.isFinite(decisionAgeMinutes) ? decisionAgeMinutes : null,
+    contextAgeMinutes: Number.isFinite(contextAgeMinutes) ? contextAgeMinutes : null,
+    inputFingerprint: [
+      latestMarketTimestamp || 'market:unknown',
+      latestDecisionTimestamp || 'decision:unknown',
+      latestContextTimestamp || 'context:unknown',
+      sessionPhase || 'phase:unknown',
+    ].join('|'),
+    summaryLine: staleInputWarning
+      ? `Input refresh warning: ${staleInputReasonCodes.join(', ')}.`
+      : `Input refresh ok: ${refreshedInputSources.join(', ') || 'none'}.`,
+    advisoryOnly: true,
+  };
   return {
     monitor,
     liveCandidateStateMonitor: monitor,
     history,
     liveCandidateTransitionHistory: history,
+    freshness,
     summaryLine: String(monitor?.summaryLine || history?.summaryLine || '').trim() || null,
     advisoryOnly: true,
   };
@@ -10127,7 +10260,11 @@ function buildBackfillRecommendationContextForDate(options = {}) {
 
 async function buildStrategyLayerSnapshotPayload(options = {}) {
   const observationOnly = options.observationOnly === true;
-  const sessions = loadAllSessions();
+  const sessionRefreshMeta = {};
+  const sessions = loadAllSessions({
+    forceFresh: !!options.forceFresh,
+    meta: sessionRefreshMeta,
+  });
   const dates = Object.keys(sessions).sort();
   if (dates.length === 0) return null;
   const latestDate = dates[dates.length - 1];
@@ -10179,6 +10316,10 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
   const mechanicsSummary = mechanicsResearchSummary
     ? buildMechanicsSummaryContract(mechanicsResearchSummary)
     : null;
+  const latestSessionCandles = Array.isArray(sessions?.[latestDate]) ? sessions[latestDate] : [];
+  const latestSessionCandle = latestSessionCandles.length ? latestSessionCandles[latestSessionCandles.length - 1] : null;
+  const latestMarketTimestamp = String(latestSessionCandle?.timestamp || '').trim()
+    || (latestSessionCandle?.time ? `${latestDate} ${latestSessionCandle.time}` : null);
   const latestSessionAnalysis = processSession(sessions[latestDate] || [], { ...ORIGINAL_PLAN_SPEC.engineOptions });
   let commandSnapshot = null;
   try {
@@ -10186,6 +10327,52 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
   } catch {
     commandSnapshot = null;
   }
+  const observationFreshness = {
+    refreshedAt: new Date().toISOString(),
+    forceFreshRequested: !!options.forceFresh,
+    latestSessionDate: latestDate || null,
+    latestMarketTimestamp: latestMarketTimestamp || null,
+    latestDecisionTimestamp: String(commandSnapshot?.generatedAt || '').trim() || null,
+    latestContextTimestamp: `${nowEt.date} ${nowEt.time}`,
+    inputSources: [
+      {
+        source: 'sessions_5m_candles',
+        refreshed: sessionRefreshMeta.cacheHit !== true,
+        cacheHit: sessionRefreshMeta.cacheHit === true,
+        cacheAgeMs: Number.isFinite(Number(sessionRefreshMeta.cacheAgeMs))
+          ? Number(sessionRefreshMeta.cacheAgeMs)
+          : null,
+        fetchedAt: String(sessionRefreshMeta.fetchedAt || '').trim() || null,
+        sessionCount: Number.isFinite(Number(sessionRefreshMeta.sessionCount))
+          ? Number(sessionRefreshMeta.sessionCount)
+          : null,
+        candleCount: Number.isFinite(Number(sessionRefreshMeta.candleCount))
+          ? Number(sessionRefreshMeta.candleCount)
+          : null,
+      },
+      {
+        source: 'command_snapshot',
+        refreshed: !!commandSnapshot,
+        generatedAt: String(commandSnapshot?.generatedAt || '').trim() || null,
+      },
+      {
+        source: 'decision_context',
+        refreshed: !!commandSnapshot?.decision,
+        generatedAt: String(commandSnapshot?.generatedAt || '').trim() || null,
+      },
+      {
+        source: 'today_context',
+        refreshed: true,
+        generatedAt: `${nowEt.date} ${nowEt.time}`,
+      },
+    ],
+    staticInputsByDesign: [
+      'session_phase_window_definitions',
+      'approved_shadow_action_windows',
+      'candidate_state_transition_rules',
+    ],
+    advisoryOnly: true,
+  };
   const regimeDetection = await buildRegimeDetectionCached({
     forceFresh: !!options.forceFresh,
     includeEvidence: true,
@@ -10345,6 +10532,7 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
       observationOnly: true,
       strategyLayers,
       commandCenter,
+      observationFreshness,
       regimeDetection,
       context: {
         latestDate,

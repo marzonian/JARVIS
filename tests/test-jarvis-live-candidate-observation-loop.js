@@ -98,6 +98,38 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function buildFreshness(row = {}, nowEt = '') {
+  const nowText = String(nowEt || '').trim();
+  const latestMarketTimestamp = String(
+    row.latestMarketTimestamp
+    || row?.latestSession?.trade?.entry_time
+    || nowText
+  ).trim() || null;
+  const latestDecisionTimestamp = String(row.latestDecisionTimestamp || new Date().toISOString()).trim() || null;
+  const latestContextTimestamp = String(row.latestContextTimestamp || nowText).trim() || null;
+  const staleInputWarning = row.staleInputWarning === true;
+  const staleInputReasonCodes = Array.isArray(row.staleInputReasonCodes)
+    ? row.staleInputReasonCodes
+    : (staleInputWarning ? ['session_cache_hit_under_force_fresh'] : []);
+  return {
+    lastInputRefreshAt: new Date().toISOString(),
+    refreshedInputSources: staleInputWarning
+      ? ['command_snapshot', 'decision_context', 'today_context']
+      : ['sessions_5m_candles', 'command_snapshot', 'decision_context', 'today_context'],
+    staleInputWarning,
+    staleInputReasonCodes,
+    lastObservedMarketTimestamp: latestMarketTimestamp,
+    lastObservedDecisionTimestamp: latestDecisionTimestamp,
+    lastObservedContextTimestamp: latestContextTimestamp,
+    inputFingerprint: [
+      latestMarketTimestamp || 'market:unknown',
+      latestDecisionTimestamp || 'decision:unknown',
+      latestContextTimestamp || 'context:unknown',
+      `signal:${String(row.signal || '').trim().toLowerCase() || 'none'}`,
+    ].join('|'),
+  };
+}
+
 function createPoller(db, sequence, nowRef, statsRef) {
   let callIndex = 0;
   return async () => {
@@ -116,6 +148,7 @@ function createPoller(db, sequence, nowRef, statsRef) {
     return {
       monitor: payload.liveCandidateStateMonitor,
       history: payload.liveCandidateTransitionHistory,
+      freshness: buildFreshness(row, nowRef.value),
       summaryLine: payload.liveCandidateStateMonitor?.summaryLine || null,
       advisoryOnly: true,
     };
@@ -157,6 +190,20 @@ async function run() {
       probability: 0.41,
       expectedValueDollars: -20,
       latestSession: { no_trade_reason: 'no_confirmation' },
+      staleInputWarning: false,
+    }, {
+      signal: 'WAIT',
+      probability: 0.41,
+      expectedValueDollars: -20,
+      latestSession: { no_trade_reason: 'no_confirmation' },
+      staleInputWarning: false,
+    }, {
+      signal: 'WAIT',
+      probability: 0.41,
+      expectedValueDollars: -20,
+      latestSession: { no_trade_reason: 'no_confirmation' },
+      staleInputWarning: true,
+      staleInputReasonCodes: ['session_cache_hit_under_force_fresh'],
     }], nowRef, stats);
     const loop = createLiveCandidateObservationLoop({
       enabled: true,
@@ -193,6 +240,18 @@ async function run() {
     const statusAfterSecond = loop.getStatus();
     assert(statusAfterSecond.suppressedWritesThisSession > 0, 'status should report suppressed writes');
     assert(statusAfterSecond.pollsThisSession >= 2, 'status should report polls');
+    assert(statusAfterSecond.lastStateClassification === 'real_state_unchanged', 'unchanged state should classify as real_state_unchanged when inputs are refreshed');
+    assert(statusAfterSecond.staleInputWarning === false, 'unchanged refreshed state should not emit stale warning');
+    assert(Array.isArray(statusAfterSecond.refreshedInputSources) && statusAfterSecond.refreshedInputSources.length >= 1, 'loop status should include refreshedInputSources');
+    assert(typeof statusAfterSecond.lastInputRefreshAt === 'string' && statusAfterSecond.lastInputRefreshAt.length > 0, 'loop status should expose lastInputRefreshAt');
+
+    nowRef.value = '2026-04-16 10:12';
+    const third = await loop.runTick({ triggerSource: 'test_manual_3_stale' });
+    assert(third.status === 'ok', 'third manual loop tick should run');
+    const statusAfterThird = loop.getStatus();
+    assert(statusAfterThird.lastStateClassification === 'stale_input_warning', 'stale inputs should classify as stale_input_warning');
+    assert(statusAfterThird.staleInputWarning === true, 'stale status should surface staleInputWarning true');
+    assert(Array.isArray(statusAfterThird.staleInputReasonCodes) && statusAfterThird.staleInputReasonCodes.includes('session_cache_hit_under_force_fresh'), 'stale status should surface stale reason codes');
 
     loop.stop({ reason: 'test_restart' });
     const restartLoop = createLiveCandidateObservationLoop({
