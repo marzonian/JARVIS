@@ -64,10 +64,18 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(Array.isArray(snapshot.liveCandidateStateMonitor.monitoredCandidates), `${label} liveCandidateStateMonitor.monitoredCandidates missing`, { snapshot });
   assert(typeof snapshot.liveCandidateStateMonitor.actionableTransitionDetected === 'boolean', `${label} liveCandidateStateMonitor.actionableTransitionDetected missing`, { snapshot });
   assert(typeof snapshot.liveCandidateStateMonitor.actionableTransitionReason === 'string' && snapshot.liveCandidateStateMonitor.actionableTransitionReason.length > 0, `${label} liveCandidateStateMonitor.actionableTransitionReason missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateStateMonitor.responseReadOnly === 'boolean', `${label} liveCandidateStateMonitor.responseReadOnly missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateStateMonitor.responseWriteMode === 'string' && snapshot.liveCandidateStateMonitor.responseWriteMode.length > 0, `${label} liveCandidateStateMonitor.responseWriteMode missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateStateMonitor.responseTriggeredAnyWrites === 'boolean', `${label} liveCandidateStateMonitor.responseTriggeredAnyWrites missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateStateMonitor.responseTriggeredDurableWrites === 'boolean', `${label} liveCandidateStateMonitor.responseTriggeredDurableWrites missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateStateMonitor.responseWriteSummaryLine === 'string' && snapshot.liveCandidateStateMonitor.responseWriteSummaryLine.length > 0, `${label} liveCandidateStateMonitor.responseWriteSummaryLine missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateStateMonitor.historyProvenanceClassification === 'string' && snapshot.liveCandidateStateMonitor.historyProvenanceClassification.length > 0, `${label} liveCandidateStateMonitor.historyProvenanceClassification missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateStateMonitor.historyProvenanceSummaryLine === 'string' && snapshot.liveCandidateStateMonitor.historyProvenanceSummaryLine.length > 0, `${label} liveCandidateStateMonitor.historyProvenanceSummaryLine missing`, { snapshot });
   assert(typeof snapshot.liveCandidateStateMonitor.summaryLine === 'string' && snapshot.liveCandidateStateMonitor.summaryLine.length > 0, `${label} liveCandidateStateMonitor.summaryLine missing`, { snapshot });
   assert(snapshot.liveCandidateTransitionHistory && typeof snapshot.liveCandidateTransitionHistory === 'object', `${label} liveCandidateTransitionHistory missing`, { snapshot });
   assert(Array.isArray(snapshot.liveCandidateTransitionHistory.recentTransitions), `${label} liveCandidateTransitionHistory.recentTransitions missing`, { snapshot });
   assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'latestTransition'), `${label} liveCandidateTransitionHistory.latestTransition missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateTransitionHistory.historyProvenanceClassification === 'string' && snapshot.liveCandidateTransitionHistory.historyProvenanceClassification.length > 0, `${label} liveCandidateTransitionHistory.historyProvenanceClassification missing`, { snapshot });
   assert(typeof snapshot.liveCandidateTransitionHistory.summaryLine === 'string' && snapshot.liveCandidateTransitionHistory.summaryLine.length > 0, `${label} liveCandidateTransitionHistory.summaryLine missing`, { snapshot });
   assert(snapshot.liveCandidateObservationLoopStatus && typeof snapshot.liveCandidateObservationLoopStatus === 'object', `${label} liveCandidateObservationLoopStatus missing`, { snapshot });
   assert(typeof snapshot.liveCandidateObservationLoopStatus.enabled === 'boolean', `${label} liveCandidateObservationLoopStatus.enabled missing`, { snapshot });
@@ -82,8 +90,14 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateObservationLoopStatus, 'lastObservedDecisionTimestamp'), `${label} liveCandidateObservationLoopStatus.lastObservedDecisionTimestamp missing`, { snapshot });
   assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateObservationLoopStatus, 'lastObservedContextTimestamp'), `${label} liveCandidateObservationLoopStatus.lastObservedContextTimestamp missing`, { snapshot });
   assert(typeof snapshot.liveCandidateObservationLoopStatus.lastStateClassification === 'string' && snapshot.liveCandidateObservationLoopStatus.lastStateClassification.length > 0, `${label} liveCandidateObservationLoopStatus.lastStateClassification missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateObservationLoopStatus.lastResponseReadOnly === 'boolean', `${label} liveCandidateObservationLoopStatus.lastResponseReadOnly missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateObservationLoopStatus, 'lastObservationWriteSource'), `${label} liveCandidateObservationLoopStatus.lastObservationWriteSource missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateObservationLoopStatus, 'lastHistoryProvenanceClassification'), `${label} liveCandidateObservationLoopStatus.lastHistoryProvenanceClassification missing`, { snapshot });
   assert(typeof snapshot.liveCandidateObservationLoopStatus.summaryLine === 'string' && snapshot.liveCandidateObservationLoopStatus.summaryLine.length > 0, `${label} liveCandidateObservationLoopStatus.summaryLine missing`, { snapshot });
   assert(typeof snapshot.liveCandidateObservationLoopStatusLine === 'string' && snapshot.liveCandidateObservationLoopStatusLine.length > 0, `${label} liveCandidateObservationLoopStatusLine missing`, { snapshot });
+  assert(snapshot.liveCandidateObservationRenderMode && typeof snapshot.liveCandidateObservationRenderMode === 'object', `${label} liveCandidateObservationRenderMode missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateObservationRenderMode.responseReadOnly === 'boolean', `${label} liveCandidateObservationRenderMode.responseReadOnly missing`, { snapshot });
+  assert(typeof snapshot.liveCandidateObservationRenderModeLine === 'string' && snapshot.liveCandidateObservationRenderModeLine.length > 0, `${label} liveCandidateObservationRenderModeLine missing`, { snapshot });
   assert(snapshot.liveOpportunityCandidates.topCandidateOverall && typeof snapshot.liveOpportunityCandidates.topCandidateOverall === 'object', `${label} liveOpportunityCandidates.topCandidateOverall missing`, { snapshot });
   assert(snapshot.liveOpportunityCandidates.topCandidateActionableNow === null || typeof snapshot.liveOpportunityCandidates.topCandidateActionableNow === 'object', `${label} liveOpportunityCandidates.topCandidateActionableNow should be object|null`, { snapshot });
   assert(typeof snapshot.liveOpportunityCandidates.hasActionableCandidateNow === 'boolean', `${label} liveOpportunityCandidates.hasActionableCandidateNow missing`, { snapshot });
@@ -114,6 +128,8 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(snapshot.decisionBoardMirror.liveCandidateObservationLoopStatus && typeof snapshot.decisionBoardMirror.liveCandidateObservationLoopStatus === 'object', `${label} decisionBoardMirror.liveCandidateObservationLoopStatus missing`, { snapshot });
   assert(typeof snapshot.todayRecommendationMirror.liveCandidateObservationLoopStatusLine === 'string' && snapshot.todayRecommendationMirror.liveCandidateObservationLoopStatusLine.length > 0, `${label} todayRecommendationMirror.liveCandidateObservationLoopStatusLine missing`, { snapshot });
   assert(typeof snapshot.decisionBoardMirror.liveCandidateObservationLoopStatusLine === 'string' && snapshot.decisionBoardMirror.liveCandidateObservationLoopStatusLine.length > 0, `${label} decisionBoardMirror.liveCandidateObservationLoopStatusLine missing`, { snapshot });
+  assert(snapshot.todayRecommendationMirror.liveCandidateObservationRenderMode && typeof snapshot.todayRecommendationMirror.liveCandidateObservationRenderMode === 'object', `${label} todayRecommendationMirror.liveCandidateObservationRenderMode missing`, { snapshot });
+  assert(snapshot.decisionBoardMirror.liveCandidateObservationRenderMode && typeof snapshot.decisionBoardMirror.liveCandidateObservationRenderMode === 'object', `${label} decisionBoardMirror.liveCandidateObservationRenderMode missing`, { snapshot });
 
   for (const row of snapshot.strategyStack) {
     assert(typeof row.available === 'boolean', `${label} strategy stack row missing available flag`, { row });
@@ -263,6 +279,8 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.liveCandidateTransitionHistory && typeof center.liveCandidateTransitionHistory === 'object', 'command-center liveCandidateTransitionHistory root field missing', { center });
     assert(center.liveCandidateObservationLoopStatus && typeof center.liveCandidateObservationLoopStatus === 'object', 'command-center liveCandidateObservationLoopStatus root field missing', { center });
     assert(typeof center.liveCandidateObservationLoopStatusLine === 'string' && center.liveCandidateObservationLoopStatusLine.length > 0, 'command-center liveCandidateObservationLoopStatusLine root field missing', { center });
+    assert(center.liveCandidateObservationRenderMode && typeof center.liveCandidateObservationRenderMode === 'object', 'command-center liveCandidateObservationRenderMode root field missing', { center });
+    assert(typeof center.liveCandidateObservationRenderMode.responseReadOnly === 'boolean', 'command-center liveCandidateObservationRenderMode.responseReadOnly missing', { center });
     assert(center.strategyCandidateOpportunityBridge && typeof center.strategyCandidateOpportunityBridge === 'object', 'command-center strategyCandidateOpportunityBridge root field missing', { center });
     assert(center.shadowMockTradeDecision && typeof center.shadowMockTradeDecision === 'object', 'command-center shadowMockTradeDecision root field missing', { center });
     assert(center.shadowMockTradeLedger && typeof center.shadowMockTradeLedger === 'object', 'command-center shadowMockTradeLedger root field missing', { center });
@@ -299,6 +317,14 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.commandCenter.decisionBoard.liveCandidateObservationLoopStatus && typeof center.commandCenter.decisionBoard.liveCandidateObservationLoopStatus === 'object', 'decisionBoard liveCandidateObservationLoopStatus mirror missing', { center });
     assert(typeof center.commandCenter.todayRecommendation.liveCandidateObservationLoopStatusLine === 'string' && center.commandCenter.todayRecommendation.liveCandidateObservationLoopStatusLine.length > 0, 'todayRecommendation liveCandidateObservationLoopStatusLine mirror missing', { center });
     assert(typeof center.commandCenter.decisionBoard.liveCandidateObservationLoopStatusLine === 'string' && center.commandCenter.decisionBoard.liveCandidateObservationLoopStatusLine.length > 0, 'decisionBoard liveCandidateObservationLoopStatusLine mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.liveCandidateObservationRenderMode && typeof center.commandCenter.todayRecommendation.liveCandidateObservationRenderMode === 'object', 'todayRecommendation liveCandidateObservationRenderMode mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.liveCandidateObservationRenderMode && typeof center.commandCenter.decisionBoard.liveCandidateObservationRenderMode === 'object', 'decisionBoard liveCandidateObservationRenderMode mirror missing', { center });
+    assert(center.liveCandidateStateMonitor.responseReadOnly === true, 'command-center default read should be read-only for durable candidate history', { center });
+    assert(center.liveCandidateStateMonitor.observationWriteEnabled === false, 'command-center default read should not enable observation writes', { center });
+    assert(center.liveCandidateObservationRenderMode.responseReadOnly === true, 'command-center render mode should report read-only default', { center });
+    const centerDiagnostic = await getJson(server.baseUrl, '/api/jarvis/command-center?force=1&discovery=1&observationWrite=1');
+    assert(centerDiagnostic.liveCandidateStateMonitor && centerDiagnostic.liveCandidateStateMonitor.responseReadOnly === false, 'command-center diagnostic mode should enable write path explicitly', { centerDiagnostic });
+    assert(String(centerDiagnostic.liveCandidateStateMonitor.observationWriteSource || '') === 'endpoint_diagnostic', 'command-center diagnostic mode should surface endpoint_diagnostic source', { centerDiagnostic });
     assert(center.commandCenter.todayRecommendation.strategyCandidateOpportunityBridge && typeof center.commandCenter.todayRecommendation.strategyCandidateOpportunityBridge === 'object', 'todayRecommendation strategyCandidateOpportunityBridge mirror missing', { center });
     assert(center.commandCenter.decisionBoard.strategyCandidateOpportunityBridge && typeof center.commandCenter.decisionBoard.strategyCandidateOpportunityBridge === 'object', 'decisionBoard strategyCandidateOpportunityBridge mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.shadowMockTradeDecision && typeof center.commandCenter.todayRecommendation.shadowMockTradeDecision === 'object', 'todayRecommendation shadowMockTradeDecision mirror missing', { center });
@@ -335,9 +361,17 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(perf.recommendationPerformance.liveCandidateTransitionHistory && typeof perf.recommendationPerformance.liveCandidateTransitionHistory === 'object', 'recommendationPerformance.liveCandidateTransitionHistory missing', { perf });
     assert(perf.recommendationPerformance.liveCandidateObservationLoopStatus && typeof perf.recommendationPerformance.liveCandidateObservationLoopStatus === 'object', 'recommendationPerformance.liveCandidateObservationLoopStatus missing', { perf });
     assert(typeof perf.recommendationPerformance.liveCandidateObservationLoopStatusLine === 'string' && perf.recommendationPerformance.liveCandidateObservationLoopStatusLine.length > 0, 'recommendationPerformance.liveCandidateObservationLoopStatusLine missing', { perf });
+    assert(perf.liveCandidateObservationRenderMode && typeof perf.liveCandidateObservationRenderMode === 'object', 'recommendation/performance liveCandidateObservationRenderMode missing', { perf });
+    assert(typeof perf.liveCandidateObservationRenderMode.responseReadOnly === 'boolean', 'recommendation/performance liveCandidateObservationRenderMode.responseReadOnly missing', { perf });
+    assert(perf.recommendationPerformance.liveCandidateObservationRenderMode && typeof perf.recommendationPerformance.liveCandidateObservationRenderMode === 'object', 'recommendationPerformance.liveCandidateObservationRenderMode missing', { perf });
     assert(perf.recommendationPerformance.strategyCandidateOpportunityBridge && typeof perf.recommendationPerformance.strategyCandidateOpportunityBridge === 'object', 'recommendationPerformance.strategyCandidateOpportunityBridge missing', { perf });
     assert(perf.recommendationPerformance.shadowMockTradeDecision && typeof perf.recommendationPerformance.shadowMockTradeDecision === 'object', 'recommendationPerformance.shadowMockTradeDecision missing', { perf });
     assert(perf.recommendationPerformance.shadowMockTradeLedger && typeof perf.recommendationPerformance.shadowMockTradeLedger === 'object', 'recommendationPerformance.shadowMockTradeLedger missing', { perf });
+    assert(perf.liveCandidateStateMonitor && perf.liveCandidateStateMonitor.responseReadOnly === true, 'recommendation/performance default read should be read-only', { perf });
+    assert(perf.liveCandidateObservationRenderMode.responseReadOnly === true, 'recommendation/performance render mode should report read-only default', { perf });
+    const perfDiagnostic = await getJson(server.baseUrl, '/api/jarvis/recommendation/performance?force=1&observationWrite=1');
+    assert(perfDiagnostic.liveCandidateStateMonitor && perfDiagnostic.liveCandidateStateMonitor.responseReadOnly === false, 'recommendation/performance diagnostic mode should enable write path explicitly', { perfDiagnostic });
+    assert(String(perfDiagnostic.liveCandidateStateMonitor?.observationWriteSource || '') === 'endpoint_diagnostic', 'recommendation/performance diagnostic mode should surface endpoint_diagnostic source', { perfDiagnostic });
     pass('recommendation/performance strategy-layer snapshot contract');
 
     const stackRows = Array.isArray(center.strategyLayerSnapshot?.strategyStack)

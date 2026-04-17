@@ -5,6 +5,7 @@ const Database = require('better-sqlite3');
 const {
   buildStrategyLayerSnapshot,
   buildCommandCenterPanels,
+  LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
 } = require('../server/jarvis-core/strategy-layers');
 const {
   createLiveCandidateObservationLoop,
@@ -60,6 +61,7 @@ function buildInput({ signal, probability, expectedValueDollars, nowEt, latestSe
     liveCandidateStateMonitorState: { candidateStates: Object.create(null), observationHistoryByCandidate: Object.create(null), transitionRows: [] },
     db,
     persistLiveCandidateState: true,
+    observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
     decision: {
       signal,
       signalLabel: signal,
@@ -229,6 +231,8 @@ async function run() {
     assert(transAfterFirst === 0, 'first loop tick should not create transitions');
     const statusAfterFirst = loop.getStatus();
     assert(statusAfterFirst.writesThisSession > 0, 'status should report writes after first tick');
+    assert(statusAfterFirst.lastResponseReadOnly === false, 'loop writes should not be read-only');
+    assert(statusAfterFirst.lastObservationWriteSource === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO, 'loop writes should surface loop_auto source');
 
     nowRef.value = '2026-04-16 10:11';
     const second = await loop.runTick({ triggerSource: 'test_manual_2' });
@@ -252,6 +256,7 @@ async function run() {
     assert(statusAfterThird.lastStateClassification === 'stale_input_warning', 'stale inputs should classify as stale_input_warning');
     assert(statusAfterThird.staleInputWarning === true, 'stale status should surface staleInputWarning true');
     assert(Array.isArray(statusAfterThird.staleInputReasonCodes) && statusAfterThird.staleInputReasonCodes.includes('session_cache_hit_under_force_fresh'), 'stale status should surface stale reason codes');
+    assert(typeof statusAfterThird.lastHistoryProvenanceClassification === 'string' && statusAfterThird.lastHistoryProvenanceClassification.length > 0, 'loop status should expose history provenance classification');
 
     loop.stop({ reason: 'test_restart' });
     const restartLoop = createLiveCandidateObservationLoop({

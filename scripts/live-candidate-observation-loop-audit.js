@@ -35,8 +35,8 @@ function pullStatus(payload = {}) {
     port: process.env.JARVIS_AUDIT_PORT || 3194,
     env: {
       LIVE_CANDIDATE_OBSERVATION_LOOP_ENABLED: 'true',
-      LIVE_CANDIDATE_OBSERVATION_ACTIVE_INTERVAL_MS: '1000',
-      LIVE_CANDIDATE_OBSERVATION_MONITOR_INTERVAL_MS: '1500',
+      LIVE_CANDIDATE_OBSERVATION_ACTIVE_INTERVAL_MS: '2500',
+      LIVE_CANDIDATE_OBSERVATION_MONITOR_INTERVAL_MS: '3000',
       LIVE_CANDIDATE_OBSERVATION_IDLE_INTERVAL_MS: '4000',
       LIVE_CANDIDATE_OBSERVATION_ACTIVE_WINDOW: '00:00-23:59',
       LIVE_CANDIDATE_OBSERVATION_MONITOR_WINDOW: '00:00-23:59',
@@ -61,10 +61,19 @@ function pullStatus(payload = {}) {
     const secondMonitor = second?.liveCandidateStateMonitor && typeof second.liveCandidateStateMonitor === 'object'
       ? second.liveCandidateStateMonitor
       : {};
+    const third = await getJson(server.baseUrl, '/api/jarvis/command-center?force=1&discovery=1');
+    const thirdMonitor = third?.liveCandidateStateMonitor && typeof third.liveCandidateStateMonitor === 'object'
+      ? third.liveCandidateStateMonitor
+      : {};
+    const diagnostic = await getJson(server.baseUrl, '/api/jarvis/command-center?force=1&discovery=1&observationWrite=1');
+    const diagnosticMonitor = diagnostic?.liveCandidateStateMonitor && typeof diagnostic.liveCandidateStateMonitor === 'object'
+      ? diagnostic.liveCandidateStateMonitor
+      : {};
     const deltaPolls = Number(secondStatus.pollsThisSession || 0) - Number(firstStatus.pollsThisSession || 0);
     const deltaEvaluated = Number(secondStatus.observationsEvaluatedThisSession || 0) - Number(firstStatus.observationsEvaluatedThisSession || 0);
     const deltaWrites = Number(secondStatus.writesThisSession || 0) - Number(firstStatus.writesThisSession || 0);
     const deltaSuppressed = Number(secondStatus.suppressedWritesThisSession || 0) - Number(firstStatus.suppressedWritesThisSession || 0);
+    const immediateReadOnlyDelta = Number(thirdMonitor.durableObservationCount || 0) - Number(secondMonitor.durableObservationCount || 0);
 
     console.log(JSON.stringify({
       status: 'ok',
@@ -93,6 +102,9 @@ function pullStatus(payload = {}) {
         },
         monitor: {
           storageMode: firstMonitor.storageMode || null,
+          responseReadOnly: firstMonitor.responseReadOnly === true,
+          observationWriteSource: firstMonitor.observationWriteSource || null,
+          historyProvenanceClassification: firstMonitor.historyProvenanceClassification || null,
           durableObservationCount: firstMonitor.durableObservationCount ?? null,
           durableTransitionCount: firstMonitor.durableTransitionCount ?? null,
         },
@@ -121,21 +133,44 @@ function pullStatus(payload = {}) {
         },
         monitor: {
           storageMode: secondMonitor.storageMode || null,
+          responseReadOnly: secondMonitor.responseReadOnly === true,
+          observationWriteSource: secondMonitor.observationWriteSource || null,
+          historyProvenanceClassification: secondMonitor.historyProvenanceClassification || null,
           durableObservationCount: secondMonitor.durableObservationCount ?? null,
           durableTransitionCount: secondMonitor.durableTransitionCount ?? null,
         },
+      },
+      thirdImmediateRead: {
+        monitor: {
+          responseReadOnly: thirdMonitor.responseReadOnly === true,
+          observationWriteSource: thirdMonitor.observationWriteSource || null,
+          observationWritesThisSnapshot: Number(thirdMonitor.observationWritesThisSnapshot || 0),
+          durableObservationCount: thirdMonitor.durableObservationCount ?? null,
+          durableTransitionCount: thirdMonitor.durableTransitionCount ?? null,
+        },
+      },
+      diagnosticWriteMode: {
+        responseReadOnly: diagnosticMonitor.responseReadOnly === true,
+        observationWriteSource: diagnosticMonitor.observationWriteSource || null,
+        observationWritesThisSnapshot: Number(diagnosticMonitor.observationWritesThisSnapshot || 0),
+        durableObservationCount: diagnosticMonitor.durableObservationCount ?? null,
+        durableTransitionCount: diagnosticMonitor.durableTransitionCount ?? null,
       },
       delta: {
         pollsThisSession: deltaPolls,
         observationsEvaluatedThisSession: deltaEvaluated,
         writesThisSession: deltaWrites,
         suppressedWritesThisSession: deltaSuppressed,
+        immediateReadOnlyDurableObservationDelta: immediateReadOnlyDelta,
       },
       proof: {
         loopAdvancedWithoutContinuousEndpointPolling: deltaPolls > 0 && deltaEvaluated > 0,
+        endpointReadOnlyDefault: secondMonitor.responseReadOnly === true && Number(secondMonitor.observationWritesThisSnapshot || 0) === 0,
+        endpointReadNoInflationOnImmediateRepeat: immediateReadOnlyDelta === 0,
+        endpointDiagnosticWriteExplicitOnly: diagnosticMonitor.responseReadOnly === false && String(diagnosticMonitor.observationWriteSource || '') === 'endpoint_diagnostic',
         staleVsUnchangedSurfaced: typeof secondStatus.lastStateClassification === 'string' && secondStatus.lastStateClassification.length > 0,
       },
-      summaryLine: `Loop delta polls ${deltaPolls}, evaluated ${deltaEvaluated}, writes ${deltaWrites}, suppressed ${deltaSuppressed}.`,
+      summaryLine: `Loop delta polls ${deltaPolls}, evaluated ${deltaEvaluated}, writes ${deltaWrites}, suppressed ${deltaSuppressed}; immediate read-only delta ${immediateReadOnlyDelta}.`,
       advisoryOnly: true,
     }, null, 2));
   } catch (err) {

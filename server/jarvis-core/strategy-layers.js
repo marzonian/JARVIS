@@ -78,6 +78,10 @@ const LIVE_CANDIDATE_DURABLE_OBSERVATION_LIMIT_PER_CANDIDATE = 120;
 const LIVE_CANDIDATE_DURABLE_OBSERVATION_LIMIT_GLOBAL = 5000;
 const LIVE_CANDIDATE_DURABLE_TRANSITION_LIMIT_GLOBAL = 2000;
 const LIVE_CANDIDATE_DB_STATEMENT_CACHE = new WeakMap();
+const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY = 'read_only';
+const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO = 'loop_auto';
+const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC = 'endpoint_diagnostic';
+const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LEGACY_UNKNOWN = 'legacy_unknown';
 
 function clampNumber(value, min, max) {
   const n = Number(value);
@@ -1561,6 +1565,74 @@ function normalizeObservationValue(value = null) {
   return round2(Number(value));
 }
 
+function normalizeLiveCandidateObservationWriteSource(value = '') {
+  const source = String(value || '').trim().toLowerCase();
+  if (source === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO) {
+    return LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO;
+  }
+  if (source === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC) {
+    return LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC;
+  }
+  if (source === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LEGACY_UNKNOWN) {
+    return LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LEGACY_UNKNOWN;
+  }
+  return LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY;
+}
+
+function buildLiveCandidateHistoryProvenance(sourceCounts = {}) {
+  const counts = sourceCounts && typeof sourceCounts === 'object'
+    ? sourceCounts
+    : {};
+  const normalizedEntries = Object.entries(counts)
+    .map(([rawKey, rawValue]) => {
+      const key = normalizeLiveCandidateObservationWriteSource(rawKey);
+      const value = Number(rawValue);
+      return [key, Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0];
+    })
+    .filter(([, value]) => value > 0);
+  if (!normalizedEntries.length) {
+    return {
+      classification: 'no_history',
+      sources: [],
+      sourceCounts: {},
+      summaryLine: 'No durable observation history yet.',
+    };
+  }
+  const mergedCounts = normalizedEntries.reduce((acc, [key, value]) => {
+    acc[key] = Number(acc[key] || 0) + value;
+    return acc;
+  }, {});
+  const sources = Object.keys(mergedCounts);
+  let classification = 'mixed';
+  if (sources.length === 1 && sources[0] === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO) {
+    classification = 'loop_only';
+  } else if (sources.length === 1 && sources[0] === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC) {
+    classification = 'endpoint_diagnostic_only';
+  } else if (sources.length === 1 && sources[0] === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LEGACY_UNKNOWN) {
+    classification = 'legacy_unattributed';
+  } else if (sources.length === 1 && sources[0] === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY) {
+    classification = 'read_only_only';
+  } else if (sources.includes(LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO)
+    && sources.includes(LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC)) {
+    classification = 'mixed_loop_and_endpoint';
+  }
+  const summaryLine = classification === 'loop_only'
+    ? 'History provenance: loop-only writes.'
+    : classification === 'endpoint_diagnostic_only'
+      ? 'History provenance: endpoint diagnostic writes only.'
+      : classification === 'legacy_unattributed'
+        ? 'History provenance: legacy rows without write-source attribution.'
+      : classification === 'mixed_loop_and_endpoint'
+        ? 'History provenance: mixed loop and endpoint diagnostic writes.'
+        : 'History provenance: mixed write sources.';
+  return {
+    classification,
+    sources,
+    sourceCounts: mergedCounts,
+    summaryLine,
+  };
+}
+
 function normalizeLiveCandidateObservation(candidate = {}, options = {}) {
   const nowEt = String(options.nowEt || '').trim() || new Date().toISOString();
   const insideApprovedActionWindow = options.insideApprovedActionWindow === true;
@@ -1636,11 +1708,13 @@ function ensureLiveCandidateStateHistoryTables(db) {
       candidate_expected_value REAL,
       inside_approved_action_window INTEGER NOT NULL DEFAULT 0,
       actionable_now INTEGER NOT NULL DEFAULT 0,
+      observation_write_source TEXT NOT NULL DEFAULT '${LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO}',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_live_candidate_obs_date_key ON ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}(session_date, candidate_key, observed_at DESC, id DESC);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_live_candidate_obs_observed_at ON ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}(observed_at DESC, id DESC);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_live_candidate_obs_write_source ON ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}(observation_write_source, observed_at DESC, id DESC);`);
   db.exec(`
     CREATE TABLE IF NOT EXISTS ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1655,11 +1729,32 @@ function ensureLiveCandidateStateHistoryTables(db) {
       current_actionable INTEGER NOT NULL DEFAULT 0,
       transition_type TEXT NOT NULL,
       transition_summary_line TEXT,
+      transition_write_source TEXT NOT NULL DEFAULT '${LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO}',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_live_candidate_transition_date_key ON ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}(session_date, candidate_key, transition_at DESC, id DESC);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_live_candidate_transition_time ON ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}(transition_at DESC, id DESC);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_live_candidate_transition_write_source ON ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}(transition_write_source, transition_at DESC, id DESC);`);
+
+  try {
+    const obsCols = db.prepare(`PRAGMA table_info('${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}')`).all();
+    const obsColNames = new Set(obsCols.map((col) => String(col?.name || '').trim().toLowerCase()));
+    if (!obsColNames.has('observation_write_source')) {
+      db.exec(
+        `ALTER TABLE ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE} ADD COLUMN observation_write_source TEXT NOT NULL DEFAULT '${LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO}'`
+      );
+    }
+  } catch {}
+  try {
+    const transitionCols = db.prepare(`PRAGMA table_info('${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}')`).all();
+    const transitionColNames = new Set(transitionCols.map((col) => String(col?.name || '').trim().toLowerCase()));
+    if (!transitionColNames.has('transition_write_source')) {
+      db.exec(
+        `ALTER TABLE ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE} ADD COLUMN transition_write_source TEXT NOT NULL DEFAULT '${LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO}'`
+      );
+    }
+  } catch {}
   return true;
 }
 
@@ -1669,22 +1764,51 @@ function getLiveCandidateStateDbStatements(db = null) {
     return LIVE_CANDIDATE_DB_STATEMENT_CACHE.get(db);
   }
   if (!ensureLiveCandidateStateHistoryTables(db)) return null;
+  const observationCols = db.prepare(`PRAGMA table_info('${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}')`).all();
+  const transitionCols = db.prepare(`PRAGMA table_info('${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}')`).all();
+  const observationColNames = new Set(observationCols.map((col) => String(col?.name || '').trim().toLowerCase()));
+  const transitionColNames = new Set(transitionCols.map((col) => String(col?.name || '').trim().toLowerCase()));
+  const hasObservationWriteSource = observationColNames.has('observation_write_source');
+  const hasTransitionWriteSource = transitionColNames.has('transition_write_source');
+  const observationWriteSourceSelect = hasObservationWriteSource
+    ? 'observation_write_source'
+    : `'${LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LEGACY_UNKNOWN}' AS observation_write_source`;
+  const transitionWriteSourceSelect = hasTransitionWriteSource
+    ? 'transition_write_source'
+    : `'${LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LEGACY_UNKNOWN}' AS transition_write_source`;
+  const insertObservationColumns = hasObservationWriteSource
+    ? `observed_at, session_date, candidate_key, strategy_key, candidate_source, candidate_status,
+        structure_quality_score, structure_quality_label, candidate_win_prob, candidate_expected_value,
+        inside_approved_action_window, actionable_now, observation_write_source`
+    : `observed_at, session_date, candidate_key, strategy_key, candidate_source, candidate_status,
+        structure_quality_score, structure_quality_label, candidate_win_prob, candidate_expected_value,
+        inside_approved_action_window, actionable_now`;
+  const insertObservationValues = hasObservationWriteSource
+    ? '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?'
+    : '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?';
+  const insertTransitionColumns = hasTransitionWriteSource
+    ? `transition_at, session_date, candidate_key, previous_status, current_status,
+        previous_structure_quality_score, current_structure_quality_score,
+        previous_actionable, current_actionable, transition_type, transition_summary_line, transition_write_source`
+    : `transition_at, session_date, candidate_key, previous_status, current_status,
+        previous_structure_quality_score, current_structure_quality_score,
+        previous_actionable, current_actionable, transition_type, transition_summary_line`;
+  const insertTransitionValues = hasTransitionWriteSource
+    ? '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?'
+    : '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?';
   const statements = {
     readLatestObservationByCandidate: db.prepare(`
       SELECT observed_at, session_date, candidate_key, strategy_key, candidate_source, candidate_status,
              structure_quality_score, structure_quality_label, candidate_win_prob, candidate_expected_value,
-             inside_approved_action_window, actionable_now
+             inside_approved_action_window, actionable_now, ${observationWriteSourceSelect}
       FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
       WHERE session_date = ? AND candidate_key = ?
       ORDER BY observed_at DESC, id DESC
       LIMIT 1
     `),
     insertObservation: db.prepare(`
-      INSERT INTO ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE} (
-        observed_at, session_date, candidate_key, strategy_key, candidate_source, candidate_status,
-        structure_quality_score, structure_quality_label, candidate_win_prob, candidate_expected_value,
-        inside_approved_action_window, actionable_now
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE} (${insertObservationColumns})
+      VALUES (${insertObservationValues})
     `),
     pruneObservationsByCandidate: db.prepare(`
       DELETE FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
@@ -1707,18 +1831,15 @@ function getLiveCandidateStateDbStatements(db = null) {
     readLatestTransitionByCandidate: db.prepare(`
       SELECT transition_at, session_date, candidate_key, previous_status, current_status,
              previous_structure_quality_score, current_structure_quality_score,
-             previous_actionable, current_actionable, transition_type, transition_summary_line
+             previous_actionable, current_actionable, transition_type, transition_summary_line, ${transitionWriteSourceSelect}
       FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
       WHERE session_date = ? AND candidate_key = ?
       ORDER BY transition_at DESC, id DESC
       LIMIT 1
     `),
     insertTransition: db.prepare(`
-      INSERT INTO ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE} (
-        transition_at, session_date, candidate_key, previous_status, current_status,
-        previous_structure_quality_score, current_structure_quality_score,
-        previous_actionable, current_actionable, transition_type, transition_summary_line
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE} (${insertTransitionColumns})
+      VALUES (${insertTransitionValues})
     `),
     pruneTransitionsGlobal: db.prepare(`
       DELETE FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
@@ -1731,7 +1852,7 @@ function getLiveCandidateStateDbStatements(db = null) {
     readRecentTransitionsByDate: db.prepare(`
       SELECT transition_at, session_date, candidate_key, previous_status, current_status,
              previous_structure_quality_score, current_structure_quality_score,
-             previous_actionable, current_actionable, transition_type, transition_summary_line
+             previous_actionable, current_actionable, transition_type, transition_summary_line, ${transitionWriteSourceSelect}
       FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
       WHERE session_date = ?
       ORDER BY transition_at DESC, id DESC
@@ -1740,7 +1861,7 @@ function getLiveCandidateStateDbStatements(db = null) {
     readRecentTransitionsGlobal: db.prepare(`
       SELECT transition_at, session_date, candidate_key, previous_status, current_status,
              previous_structure_quality_score, current_structure_quality_score,
-             previous_actionable, current_actionable, transition_type, transition_summary_line
+             previous_actionable, current_actionable, transition_type, transition_summary_line, ${transitionWriteSourceSelect}
       FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
       ORDER BY transition_at DESC, id DESC
       LIMIT ?
@@ -1748,7 +1869,7 @@ function getLiveCandidateStateDbStatements(db = null) {
     readRecentObservationsByDate: db.prepare(`
       SELECT observed_at, session_date, candidate_key, strategy_key, candidate_source, candidate_status,
              structure_quality_score, structure_quality_label, candidate_win_prob, candidate_expected_value,
-             inside_approved_action_window, actionable_now
+             inside_approved_action_window, actionable_now, ${observationWriteSourceSelect}
       FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
       WHERE session_date = ?
       ORDER BY observed_at DESC, id DESC
@@ -1764,6 +1885,32 @@ function getLiveCandidateStateDbStatements(db = null) {
       FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
       WHERE session_date = ?
     `),
+    countObservationSourcesByDate: db.prepare(hasObservationWriteSource
+      ? `
+      SELECT observation_write_source AS source, COUNT(*) AS c
+      FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+      WHERE session_date = ?
+      GROUP BY observation_write_source
+    `
+      : `
+      SELECT '${LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LEGACY_UNKNOWN}' AS source, COUNT(*) AS c
+      FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+      WHERE session_date = ?
+    `),
+    countTransitionSourcesByDate: db.prepare(hasTransitionWriteSource
+      ? `
+      SELECT transition_write_source AS source, COUNT(*) AS c
+      FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
+      WHERE session_date = ?
+      GROUP BY transition_write_source
+    `
+      : `
+      SELECT '${LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LEGACY_UNKNOWN}' AS source, COUNT(*) AS c
+      FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
+      WHERE session_date = ?
+    `),
+    hasObservationWriteSource,
+    hasTransitionWriteSource,
   };
   LIVE_CANDIDATE_DB_STATEMENT_CACHE.set(db, statements);
   return statements;
@@ -1784,6 +1931,7 @@ function normalizeDurableObservationRow(row = null) {
     candidateExpectedValue: normalizeObservationValue(row.candidate_expected_value),
     insideApprovedActionWindow: Number(row.inside_approved_action_window) === 1,
     actionableNow: Number(row.actionable_now) === 1,
+    observationWriteSource: normalizeLiveCandidateObservationWriteSource(row.observation_write_source),
   };
 }
 
@@ -1801,6 +1949,7 @@ function normalizeDurableTransitionRow(row = null) {
     currentActionable: Number(row.current_actionable) === 1,
     transitionType: String(row.transition_type || '').trim().toLowerCase() || null,
     transitionSummaryLine: String(row.transition_summary_line || '').trim() || null,
+    transitionWriteSource: normalizeLiveCandidateObservationWriteSource(row.transition_write_source),
   };
 }
 
@@ -1867,12 +2016,20 @@ function buildLiveCandidateStateMonitor(input = {}) {
   const insideApprovedActionWindow = isApprovedShadowActionWindow(phase);
   const persistenceDb = input?.db && typeof input.db.prepare === 'function' ? input.db : null;
   const persistenceStatements = persistenceDb ? getLiveCandidateStateDbStatements(persistenceDb) : null;
-  const persistenceEnabled = persistenceStatements && input?.persistLiveCandidateState !== false;
+  const persistenceAvailable = Boolean(persistenceStatements);
+  const allowObservationWrites = input?.persistLiveCandidateState === true;
+  const persistenceWriteEnabled = persistenceAvailable && allowObservationWrites;
+  const inMemoryWriteEnabled = !persistenceAvailable && allowObservationWrites;
+  const observationWriteSource = allowObservationWrites
+    ? normalizeLiveCandidateObservationWriteSource(input?.observationWriteSource)
+    : LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY;
+  const responseReadOnly = !allowObservationWrites;
   const snapshotTransitions = [];
   const stateByCandidateKey = new Map();
 
   let observationWritesThisSnapshot = 0;
   let observationSuppressedThisSnapshot = 0;
+  let readOnlySkippedWritesThisSnapshot = 0;
   let transitionWritesThisSnapshot = 0;
   let priorObservationReadCount = 0;
 
@@ -1887,7 +2044,7 @@ function buildLiveCandidateStateMonitor(input = {}) {
 
     let priorObservation = null;
     let previousStateSource = 'none';
-    if (persistenceEnabled) {
+    if (persistenceAvailable) {
       const durablePriorRow = persistenceStatements.readLatestObservationByCandidate.get(sessionDate || '', key);
       priorObservation = normalizeDurableObservationRow(durablePriorRow);
       if (priorObservation) {
@@ -1962,9 +2119,9 @@ function buildLiveCandidateStateMonitor(input = {}) {
     };
 
     const unchanged = hasPreviousState && observationStateEquals(priorObservation, observation);
-    if (persistenceEnabled) {
+    if (persistenceWriteEnabled) {
       if (!unchanged) {
-        persistenceStatements.insertObservation.run(
+        const observationParams = [
           observation.timestamp || nowEt,
           observation.sessionDate || sessionDate || '',
           observation.candidateKey || key,
@@ -1976,8 +2133,12 @@ function buildLiveCandidateStateMonitor(input = {}) {
           observation.candidateWinProb,
           observation.candidateExpectedValue,
           observation.insideApprovedActionWindow ? 1 : 0,
-          observation.actionableNow ? 1 : 0
-        );
+          observation.actionableNow ? 1 : 0,
+        ];
+        if (persistenceStatements.hasObservationWriteSource) {
+          observationParams.push(observationWriteSource);
+        }
+        persistenceStatements.insertObservation.run(...observationParams);
         observationWritesThisSnapshot += 1;
         persistenceStatements.pruneObservationsByCandidate.run(
           observation.sessionDate || sessionDate || '',
@@ -1995,7 +2156,7 @@ function buildLiveCandidateStateMonitor(input = {}) {
           persistenceStatements.readLatestTransitionByCandidate.get(sessionDate || '', key)
         );
         if (!isSameTransitionState(previousTransitionRow, transitionRow)) {
-          persistenceStatements.insertTransition.run(
+          const transitionParams = [
             transitionRow.timestamp || nowEt,
             transitionRow.sessionDate || sessionDate || '',
             key,
@@ -2006,13 +2167,17 @@ function buildLiveCandidateStateMonitor(input = {}) {
             transitionRow.previousActionable ? 1 : 0,
             transitionRow.currentActionable ? 1 : 0,
             transitionRow.transitionType || 'status_changed',
-            transitionRow.transitionSummaryLine || null
-          );
+            transitionRow.transitionSummaryLine || null,
+          ];
+          if (persistenceStatements.hasTransitionWriteSource) {
+            transitionParams.push(observationWriteSource);
+          }
+          persistenceStatements.insertTransition.run(...transitionParams);
           transitionWritesThisSnapshot += 1;
         }
         persistenceStatements.pruneTransitionsGlobal.run(LIVE_CANDIDATE_DURABLE_TRANSITION_LIMIT_GLOBAL);
       }
-    } else {
+    } else if (inMemoryWriteEnabled) {
       if (!Array.isArray(monitorState.observationHistoryByCandidate[key])) {
         monitorState.observationHistoryByCandidate[key] = [];
       }
@@ -2034,6 +2199,10 @@ function buildLiveCandidateStateMonitor(input = {}) {
       if (monitorState.transitionRows.length > LIVE_CANDIDATE_TRANSITION_HISTORY_LIMIT) {
         monitorState.transitionRows = monitorState.transitionRows.slice(-LIVE_CANDIDATE_TRANSITION_HISTORY_LIMIT);
       }
+    } else if (responseReadOnly && unchanged) {
+      observationSuppressedThisSnapshot += 1;
+    } else {
+      readOnlySkippedWritesThisSnapshot += 1;
     }
 
     if (hasPreviousState && transitionType !== 'unchanged' && transitionType !== 'first_observation') {
@@ -2092,7 +2261,9 @@ function buildLiveCandidateStateMonitor(input = {}) {
   let durableObservationCount = 0;
   let durableTransitionCount = 0;
   let recentObservationSample = [];
-  if (persistenceEnabled) {
+  let observationSourceCounts = {};
+  let transitionSourceCounts = {};
+  if (persistenceAvailable) {
     durableObservationCount = Number(
       persistenceStatements.countObservationsByDate.get(sessionDate || '')?.c || 0
     );
@@ -2104,11 +2275,43 @@ function buildLiveCandidateStateMonitor(input = {}) {
       .all(sessionDate || '', 12)
       .map((row) => normalizeDurableObservationRow(row))
       .filter(Boolean);
+    observationSourceCounts = (persistenceStatements.countObservationSourcesByDate.all(sessionDate || '') || [])
+      .reduce((acc, row) => {
+        const key = normalizeLiveCandidateObservationWriteSource(row?.source);
+        const value = Number(row?.c || 0);
+        acc[key] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+        return acc;
+      }, {});
+    transitionSourceCounts = (persistenceStatements.countTransitionSourcesByDate.all(sessionDate || '') || [])
+      .reduce((acc, row) => {
+        const key = normalizeLiveCandidateObservationWriteSource(row?.source);
+        const value = Number(row?.c || 0);
+        acc[key] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+        return acc;
+      }, {});
   } else {
     recentObservationSample = buildInMemoryObservationSample(monitorState, 12);
     durableObservationCount = recentObservationSample.length;
     durableTransitionCount = Array.isArray(monitorState.transitionRows) ? monitorState.transitionRows.length : 0;
+    observationSourceCounts = {
+      [LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO]: durableObservationCount,
+    };
+    transitionSourceCounts = {
+      [LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO]: durableTransitionCount,
+    };
   }
+  const historyProvenance = buildLiveCandidateHistoryProvenance(observationSourceCounts);
+  const responseWriteMode = responseReadOnly
+    ? LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY
+    : observationWriteSource;
+  const responseTriggeredDurableWrites = persistenceAvailable
+    && ((observationWritesThisSnapshot + transitionWritesThisSnapshot) > 0);
+  const responseTriggeredAnyWrites = (observationWritesThisSnapshot + transitionWritesThisSnapshot) > 0;
+  const responseWriteSummaryLine = responseReadOnly
+    ? (readOnlySkippedWritesThisSnapshot > 0
+      ? `Read-only response skipped ${readOnlySkippedWritesThisSnapshot} candidate write(s).`
+      : 'Read-only response; no candidate writes attempted.')
+    : `${responseWriteMode} wrote ${observationWritesThisSnapshot} observation(s) and ${transitionWritesThisSnapshot} transition(s).`;
 
   const transitionCandidate = monitoredCandidates.find((row) => row.transitionType === 'crossed_into_actionable') || null;
   const actionableTransitionDetected = Boolean(transitionCandidate && insideApprovedActionWindow);
@@ -2149,14 +2352,29 @@ function buildLiveCandidateStateMonitor(input = {}) {
     actionableTransitionTimestamp,
     candidateKey: actionableTransitionCandidateKey,
     insideApprovedActionWindow,
-    storageMode: persistenceEnabled ? 'durable_sqlite' : 'in_memory',
+    storageMode: persistenceAvailable ? 'durable_sqlite' : 'in_memory',
+    responseReadOnly,
+    responseWriteMode,
+    observationWriteEnabled: persistenceWriteEnabled,
+    observationWriteSource,
+    responseTriggeredAnyWrites,
+    responseTriggeredDurableWrites,
+    responseWriteSummaryLine,
     sessionDate: sessionDate || null,
     observationWritesThisSnapshot,
     observationSuppressedThisSnapshot,
+    readOnlySkippedWritesThisSnapshot,
     transitionWritesThisSnapshot,
     priorObservationReadCount,
     durableObservationCount,
     durableTransitionCount,
+    observationSourceCounts: historyProvenance.sourceCounts,
+    transitionSourceCounts,
+    historyProvenanceClassification: historyProvenance.classification,
+    historyProvenanceSources: historyProvenance.sources,
+    historyProvenanceSummaryLine: historyProvenance.summaryLine,
+    historyFromLoopOnly: historyProvenance.classification === 'loop_only',
+    historyMixedProvenance: historyProvenance.classification === 'mixed',
     recentObservationSample,
     emptyStateReason,
     summaryLine: transitionSummaryLine,
@@ -2182,6 +2400,7 @@ function buildLiveCandidateTransitionHistory(input = {}) {
   let recentObservations = buildInMemoryObservationSample(monitorState, 12);
   let totalObservationRows = recentObservations.length;
   let totalTransitionRows = recentTransitions.length;
+  let transitionSourceCounts = {};
 
   if (persistenceStatements) {
     storageMode = 'durable_sqlite';
@@ -2196,7 +2415,19 @@ function buildLiveCandidateTransitionHistory(input = {}) {
       .filter(Boolean);
     totalObservationRows = Number(persistenceStatements.countObservationsByDate.get(sessionDate || '')?.c || 0);
     totalTransitionRows = Number(persistenceStatements.countTransitionsByDate.get(sessionDate || '')?.c || 0);
+    transitionSourceCounts = (persistenceStatements.countTransitionSourcesByDate.all(sessionDate || '') || [])
+      .reduce((acc, row) => {
+        const key = normalizeLiveCandidateObservationWriteSource(row?.source);
+        const value = Number(row?.c || 0);
+        acc[key] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+        return acc;
+      }, {});
+  } else {
+    transitionSourceCounts = {
+      [LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO]: totalTransitionRows,
+    };
   }
+  const historyProvenance = buildLiveCandidateHistoryProvenance(transitionSourceCounts);
 
   const latestTransition = recentTransitions.length ? recentTransitions[0] : null;
   const hasActionableTransition = recentTransitions.some((row) => String(row?.transitionType || '') === 'crossed_into_actionable');
@@ -2219,6 +2450,10 @@ function buildLiveCandidateTransitionHistory(input = {}) {
     totalObservationRows,
     totalTransitionRows,
     emptyStateReason,
+    transitionSourceCounts: historyProvenance.sourceCounts,
+    historyProvenanceClassification: historyProvenance.classification,
+    historyProvenanceSources: historyProvenance.sources,
+    historyProvenanceSummaryLine: historyProvenance.summaryLine,
     observationTable: LIVE_CANDIDATE_STATE_OBSERVATION_TABLE,
     transitionTable: LIVE_CANDIDATE_STATE_TRANSITION_TABLE,
     summaryLine,
@@ -4038,12 +4273,14 @@ function buildCommandCenterPanels(input = {}) {
     ? input.db
     : null;
   const persistLiveCandidateState = input?.persistLiveCandidateState !== false;
+  const observationWriteSource = normalizeLiveCandidateObservationWriteSource(input?.observationWriteSource);
   const liveCandidateStateMonitor = buildLiveCandidateStateMonitor({
     liveOpportunityCandidates,
     todayContext,
     monitorState: liveCandidateMonitorState,
     db: liveCandidatePersistenceDb,
     persistLiveCandidateState,
+    observationWriteSource,
   });
   const liveCandidateTransitionHistory = buildLiveCandidateTransitionHistory({
     monitorState: liveCandidateMonitorState,
@@ -4490,6 +4727,9 @@ function buildCommandCenterPanels(input = {}) {
 module.exports = {
   ORIGINAL_PLAN_SPEC,
   DEFAULT_VARIANT_SPECS,
+  LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY,
+  LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+  LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
   runPlanBacktest,
   buildVariantReports,
   buildDiscoveryLayer,

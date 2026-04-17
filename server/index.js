@@ -74,6 +74,9 @@ const {
 const {
   ORIGINAL_PLAN_SPEC,
   DEFAULT_VARIANT_SPECS,
+  LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY,
+  LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+  LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
   runPlanBacktest,
   buildVariantReports,
   buildStrategyLayerSnapshot,
@@ -1445,6 +1448,40 @@ function parseEtWindowRange(value, fallbackStart, fallbackEnd) {
   };
 }
 
+function parseLiveCandidateObservationWriteMode(input = {}) {
+  const rawMode = String(
+    input.liveCandidateObservationWriteMode
+    || input.observationWriteMode
+    || input.observationWriteSource
+    || ''
+  ).trim().toLowerCase();
+  const diagnosticFlag = (
+    input.observationWrite === '1'
+    || input.observationWrite === 'true'
+    || input.observationWrite === true
+    || input.liveCandidateObservationWrite === '1'
+    || input.liveCandidateObservationWrite === 'true'
+    || input.liveCandidateObservationWrite === true
+  );
+  const wantsDiagnostic = diagnosticFlag
+    || rawMode === 'diagnostic'
+    || rawMode === 'endpoint_diagnostic'
+    || rawMode === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC;
+  const writeSource = wantsDiagnostic
+    ? LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC
+    : LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY;
+  return {
+    persistLiveCandidateState: wantsDiagnostic,
+    observationWriteSource: writeSource,
+    responseReadOnly: !wantsDiagnostic,
+    diagnosticWriteEnabled: wantsDiagnostic,
+    summaryLine: wantsDiagnostic
+      ? 'Endpoint diagnostic mode: durable candidate observation writes enabled.'
+      : 'Endpoint render mode: read-only candidate observation history.',
+    advisoryOnly: true,
+  };
+}
+
 function getLiveCandidateObservationLoopStatus() {
   if (liveCandidateObservationLoopController && typeof liveCandidateObservationLoopController.getStatus === 'function') {
     try {
@@ -1480,6 +1517,10 @@ function getLiveCandidateObservationLoopStatus() {
     lastObservedContextTimestamp: null,
     lastStateClassification: 'no_state_evaluated',
     lastStateClassificationReason: 'loop_not_started',
+    lastResponseReadOnly: null,
+    lastObservationWriteSource: null,
+    lastHistoryProvenanceClassification: null,
+    lastHistoryProvenanceSummaryLine: null,
     lastResult: null,
     summaryLine: LIVE_CANDIDATE_OBSERVATION_LOOP_ENABLED
       ? 'Live candidate observation loop is ready; first poll pending.'
@@ -1549,6 +1590,8 @@ async function runLiveCandidateObservationPoll(input = {}) {
     includePerDate: false,
     nowEtOverride,
     observationOnly: true,
+    persistLiveCandidateState: true,
+    observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
     trackingWindowSessions: 120,
     trackingIncludeContext: false,
     previewNewsEvent: null,
@@ -10482,6 +10525,28 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
       });
     }
   } catch {}
+  const persistLiveCandidateState = options.persistLiveCandidateState === true;
+  const requestedObservationWriteSource = String(options.observationWriteSource || '').trim().toLowerCase();
+  const observationWriteSource = persistLiveCandidateState
+    ? (
+      requestedObservationWriteSource === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC
+        ? LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC
+        : LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO
+    )
+    : LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY;
+  const liveCandidateObservationRenderMode = {
+    responseReadOnly: !persistLiveCandidateState,
+    diagnosticWriteEnabled: persistLiveCandidateState
+      && observationWriteSource === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+    persistLiveCandidateState,
+    observationWriteSource,
+    summaryLine: persistLiveCandidateState
+      ? (observationWriteSource === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC
+        ? 'Endpoint diagnostic mode: durable candidate observation writes enabled.'
+        : 'Loop mode: durable candidate observation writes enabled.')
+      : 'Endpoint render mode: read-only candidate observation history.',
+    advisoryOnly: true,
+  };
   const commandCenter = buildCommandCenterPanels({
     strategyLayers,
     decision: commandSnapshot?.decision || null,
@@ -10512,7 +10577,8 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
     strategyExperiments: strategyExperimentsSummary,
     recentTooAggressiveCheckpoint,
     db: runtimeDb,
-    persistLiveCandidateState: true,
+    persistLiveCandidateState,
+    observationWriteSource,
   });
   if (commandCenter && typeof commandCenter === 'object') {
     commandCenter.regimeDetection = regimeDetection || null;
@@ -10523,6 +10589,25 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
     commandCenter.regimeInsight = canonicalRegimeReason
       ? `${canonicalRegimeLabel} regime (${canonicalRegimeConfidence} confidence): ${canonicalRegimeReason}`
       : `${canonicalRegimeLabel} regime (${canonicalRegimeConfidence} confidence).`;
+    commandCenter.liveCandidateObservationRenderMode = cloneData(
+      liveCandidateObservationRenderMode,
+      liveCandidateObservationRenderMode
+    );
+    commandCenter.liveCandidateObservationRenderModeLine = liveCandidateObservationRenderMode.summaryLine;
+    if (commandCenter.todayRecommendation && typeof commandCenter.todayRecommendation === 'object') {
+      commandCenter.todayRecommendation.liveCandidateObservationRenderMode = cloneData(
+        liveCandidateObservationRenderMode,
+        liveCandidateObservationRenderMode
+      );
+      commandCenter.todayRecommendation.liveCandidateObservationRenderModeLine = liveCandidateObservationRenderMode.summaryLine;
+    }
+    if (commandCenter.decisionBoard && typeof commandCenter.decisionBoard === 'object') {
+      commandCenter.decisionBoard.liveCandidateObservationRenderMode = cloneData(
+        liveCandidateObservationRenderMode,
+        liveCandidateObservationRenderMode
+      );
+      commandCenter.decisionBoard.liveCandidateObservationRenderModeLine = liveCandidateObservationRenderMode.summaryLine;
+    }
     attachLiveCandidateObservationLoopStatus(commandCenter);
   }
 
@@ -10532,6 +10617,7 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
       observationOnly: true,
       strategyLayers,
       commandCenter,
+      liveCandidateObservationRenderMode,
       observationFreshness,
       regimeDetection,
       context: {
@@ -16557,6 +16643,7 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
     mechanicsResearchSummary,
     recommendationPerformance,
     commandCenter,
+    liveCandidateObservationRenderMode,
     regimeDetection,
     context: {
       latestDate,
@@ -16570,6 +16657,15 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
 async function buildStrategyLayerSnapshotCached(options = {}) {
   const marketDate = dateInTimezone('America/New_York');
   const observationOnly = options.observationOnly === true;
+  const persistLiveCandidateState = options.persistLiveCandidateState === true;
+  const requestedObservationWriteSource = String(options.observationWriteSource || '').trim().toLowerCase();
+  const resolvedObservationWriteSource = persistLiveCandidateState
+    ? (
+      requestedObservationWriteSource === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC
+        ? LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC
+        : LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO
+    )
+    : LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY;
   const includeDiscovery = options.includeDiscovery !== false;
   const includePerDate = options.includePerDate === true;
   const nowEtOverride = String(options.nowEtOverride || '').trim();
@@ -16614,6 +16710,8 @@ async function buildStrategyLayerSnapshotCached(options = {}) {
     `disc_family:${strategyDiscoveryFamily || 'all'}`,
     `track_window:${trackingWindow}`,
     trackingIncludeContext ? 'track_context:1' : 'track_context:0',
+    persistLiveCandidateState ? 'candidate_obs_write:1' : 'candidate_obs_write:0',
+    `candidate_obs_source:${resolvedObservationWriteSource}`,
   ].join(':');
   const now = Date.now();
   const forceFresh = options.forceFresh === true;
@@ -35232,6 +35330,21 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     || liveCandidateObservationLoopStatus?.summaryLine
     || ''
   );
+  const liveCandidateObservationRenderModeSource = (
+    commandCenter?.liveCandidateObservationRenderMode && typeof commandCenter.liveCandidateObservationRenderMode === 'object'
+      ? commandCenter.liveCandidateObservationRenderMode
+      : (payload?.liveCandidateObservationRenderMode && typeof payload.liveCandidateObservationRenderMode === 'object'
+        ? payload.liveCandidateObservationRenderMode
+        : null)
+  );
+  const liveCandidateObservationRenderMode = liveCandidateObservationRenderModeSource
+    ? cloneData(liveCandidateObservationRenderModeSource, liveCandidateObservationRenderModeSource)
+    : null;
+  const liveCandidateObservationRenderModeLine = asNullableText(
+    commandCenter?.liveCandidateObservationRenderModeLine
+    || liveCandidateObservationRenderMode?.summaryLine
+    || ''
+  );
   const strategyCandidateOpportunityBridgeSource = (
     commandCenter?.strategyCandidateOpportunityBridge && typeof commandCenter.strategyCandidateOpportunityBridge === 'object'
       ? commandCenter.strategyCandidateOpportunityBridge
@@ -35291,6 +35404,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     liveCandidateTransitionHistory,
     liveCandidateObservationLoopStatus,
     liveCandidateObservationLoopStatusLine,
+    liveCandidateObservationRenderMode,
+    liveCandidateObservationRenderModeLine,
     strategyCandidateOpportunityBridge,
     shadowMockTradeDecision,
     shadowMockTradeLedger,
@@ -35320,6 +35435,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       liveCandidateTransitionHistory: cloneData(liveCandidateTransitionHistory, liveCandidateTransitionHistory),
       liveCandidateObservationLoopStatus: cloneData(liveCandidateObservationLoopStatus, liveCandidateObservationLoopStatus),
       liveCandidateObservationLoopStatusLine,
+      liveCandidateObservationRenderMode: cloneData(liveCandidateObservationRenderMode, liveCandidateObservationRenderMode),
+      liveCandidateObservationRenderModeLine,
       strategyCandidateOpportunityBridge: cloneData(
         strategyCandidateOpportunityBridge,
         strategyCandidateOpportunityBridge
@@ -35354,6 +35471,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       liveCandidateTransitionHistory: cloneData(liveCandidateTransitionHistory, liveCandidateTransitionHistory),
       liveCandidateObservationLoopStatus: cloneData(liveCandidateObservationLoopStatus, liveCandidateObservationLoopStatus),
       liveCandidateObservationLoopStatusLine,
+      liveCandidateObservationRenderMode: cloneData(liveCandidateObservationRenderMode, liveCandidateObservationRenderMode),
+      liveCandidateObservationRenderModeLine,
       strategyCandidateOpportunityBridge: cloneData(
         strategyCandidateOpportunityBridge,
         strategyCandidateOpportunityBridge
@@ -35412,6 +35531,11 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
     strategyLayerSnapshot.liveCandidateObservationLoopStatus
   );
   commandCenter.liveCandidateObservationLoopStatusLine = strategyLayerSnapshot.liveCandidateObservationLoopStatusLine || null;
+  commandCenter.liveCandidateObservationRenderMode = cloneData(
+    strategyLayerSnapshot.liveCandidateObservationRenderMode,
+    strategyLayerSnapshot.liveCandidateObservationRenderMode
+  );
+  commandCenter.liveCandidateObservationRenderModeLine = strategyLayerSnapshot.liveCandidateObservationRenderModeLine || null;
   commandCenter.strategyCandidateOpportunityBridge = cloneData(
     strategyLayerSnapshot.strategyCandidateOpportunityBridge,
     strategyLayerSnapshot.strategyCandidateOpportunityBridge
@@ -35443,6 +35567,7 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
     const source = String(req.query.source || 'all').trim().toLowerCase();
     const sourceFilter = (source === 'live' || source === 'backfill') ? source : 'all';
     const reconstructionPhase = String(req.query.reconstructionPhase || '').trim().toLowerCase();
+    const liveCandidateObservationWriteMode = parseLiveCandidateObservationWriteMode(req.query || {});
     const nowEtOverride = String(req.query.nowEt || '').trim();
     const nowEtMatch = nowEtOverride.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
     const nowEt = nowEtMatch ? { date: nowEtMatch[1], time: nowEtMatch[2] } : nowInTimezone('America/New_York');
@@ -35469,6 +35594,8 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
         performanceWindow: windowSessions,
         performanceSource: sourceFilter,
         performancePhase: reconstructionPhase || undefined,
+        persistLiveCandidateState: liveCandidateObservationWriteMode.persistLiveCandidateState,
+        observationWriteSource: liveCandidateObservationWriteMode.observationWriteSource,
       });
       strategyLayerSnapshot = buildStrategyLayerSnapshotContract(liveSnapshot);
       if (liveSnapshot?.commandCenter?.executionStanceCard
@@ -35487,6 +35614,10 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       recommendationPerformance.liveDecisionAdjustment = liveDecisionCard.executionAdjustment || null;
     }
     if (strategyLayerSnapshot && typeof strategyLayerSnapshot === 'object') {
+      recommendationPerformance.liveCandidateObservationRenderMode = cloneData(
+        liveCandidateObservationWriteMode,
+        liveCandidateObservationWriteMode
+      );
       recommendationPerformance.strategyLayerSnapshot = cloneData(strategyLayerSnapshot, strategyLayerSnapshot);
       recommendationPerformance.originalPlan = cloneData(strategyLayerSnapshot.originalPlan, strategyLayerSnapshot.originalPlan);
       recommendationPerformance.bestVariant = cloneData(strategyLayerSnapshot.bestVariant, strategyLayerSnapshot.bestVariant);
@@ -35587,6 +35718,7 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       todayRecommendation: strategyLayerSnapshot?.todayRecommendationMirror || null,
       decisionBoard: strategyLayerSnapshot?.decisionBoardMirror || null,
       generatedAt: performance?.generatedAt || new Date().toISOString(),
+      liveCandidateObservationRenderMode: liveCandidateObservationWriteMode,
       rowCountUsed: Number(recommendationPerformance?.rowCountUsed || performance?.rowCountUsed || 0),
       provenanceSummary: recommendationPerformance?.provenanceSummary || performance?.provenanceSummary || null,
       oldestRecordDate: recommendationPerformance?.oldestRecordDate || performance?.oldestRecordDate || null,
@@ -35982,6 +36114,7 @@ app.get('/api/jarvis/strategy/layers', async (req, res) => {
       Math.min(MAX_TRACKING_WINDOW_SESSIONS, Number(req.query.windowSessions || req.query.trackingWindowSessions || DEFAULT_TRACKING_WINDOW_SESSIONS))
     );
     const trackingIncludeContext = !(req.query.includeContext === '0' || req.query.includeContext === 'false');
+    const liveCandidateObservationWriteMode = parseLiveCandidateObservationWriteMode(req.query || {});
     const payload = await buildStrategyLayerSnapshotCached({
       forceFresh,
       includeDiscovery,
@@ -35998,6 +36131,8 @@ app.get('/api/jarvis/strategy/layers', async (req, res) => {
       strategyDiscoveryFamily,
       trackingWindowSessions,
       trackingIncludeContext,
+      persistLiveCandidateState: liveCandidateObservationWriteMode.persistLiveCandidateState,
+      observationWriteSource: liveCandidateObservationWriteMode.observationWriteSource,
     });
     if (!payload) {
       return res.json({
@@ -36041,6 +36176,7 @@ app.get('/api/jarvis/strategy/layers', async (req, res) => {
         payload.recommendationPerformance?.recommendationPerformance
         || payload.recommendationPerformance?.summary
         || null,
+      liveCandidateObservationRenderMode: liveCandidateObservationWriteMode,
       context: payload.context,
       generatedAt: payload.generatedAt,
     });
@@ -36078,6 +36214,7 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       Math.min(MAX_TRACKING_WINDOW_SESSIONS, Number(req.query.windowSessions || req.query.trackingWindowSessions || DEFAULT_TRACKING_WINDOW_SESSIONS))
     );
     const trackingIncludeContext = !(req.query.includeContext === '0' || req.query.includeContext === 'false');
+    const liveCandidateObservationWriteMode = parseLiveCandidateObservationWriteMode(req.query || {});
     const nowEtOverride = String(req.query.nowEt || '').trim();
     const previewNewsTime = String(req.query.previewNewsTime || '').trim();
     const previewNewsImpact = String(req.query.previewNewsImpact || '').trim() || 'high';
@@ -36112,6 +36249,8 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       trackingIncludeContext,
       nowEtOverride: nowEtOverride || undefined,
       previewNewsEvent,
+      persistLiveCandidateState: liveCandidateObservationWriteMode.persistLiveCandidateState,
+      observationWriteSource: liveCandidateObservationWriteMode.observationWriteSource,
     });
     if (!payload) {
       return res.json({
@@ -36191,6 +36330,7 @@ app.get('/api/jarvis/command-center', async (req, res) => {
         payload.recommendationPerformance?.recommendationPerformance
         || payload.recommendationPerformance?.summary
         || null,
+      liveCandidateObservationRenderMode: liveCandidateObservationWriteMode,
       context: payload.context,
       generatedAt: payload.generatedAt,
     });

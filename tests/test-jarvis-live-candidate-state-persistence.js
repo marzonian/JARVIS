@@ -5,6 +5,8 @@ const Database = require('better-sqlite3');
 const {
   buildStrategyLayerSnapshot,
   buildCommandCenterPanels,
+  LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+  LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
 } = require('../server/jarvis-core/strategy-layers');
 
 const OBS_TABLE = 'jarvis_live_candidate_state_observations';
@@ -50,12 +52,23 @@ function buildStrategyLayers() {
   });
 }
 
-function buildInput({ signal = 'WAIT', probability = 0.4, expectedValueDollars = -20, nowEt = '2026-04-16 10:10', latestSession = {}, db = null, monitorState = null } = {}) {
+function buildInput({
+  signal = 'WAIT',
+  probability = 0.4,
+  expectedValueDollars = -20,
+  nowEt = '2026-04-16 10:10',
+  latestSession = {},
+  db = null,
+  monitorState = null,
+  persistLiveCandidateState = true,
+  observationWriteSource = LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+} = {}) {
   return {
     strategyLayers: buildStrategyLayers(),
     liveCandidateStateMonitorState: monitorState,
     db,
-    persistLiveCandidateState: true,
+    persistLiveCandidateState,
+    observationWriteSource,
     decision: {
       signal,
       signalLabel: signal,
@@ -94,8 +107,30 @@ function countRowsForCandidate(db, table, candidateKey) {
   return Number(db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE candidate_key = ?`).get(String(candidateKey || ''))?.c || 0);
 }
 
+function countRowsBySource(db, table, sourceColumn, source) {
+  return Number(
+    db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE ${sourceColumn} = ?`).get(String(source || '').trim())?.c || 0
+  );
+}
+
 function run() {
   const db = new Database(':memory:');
+
+  const readOnly = buildCommandCenterPanels(buildInput({
+    signal: 'WAIT',
+    probability: 0.4,
+    expectedValueDollars: -20,
+    nowEt: '2026-04-16 10:09',
+    latestSession: { no_trade_reason: 'no_confirmation' },
+    db,
+    monitorState: { candidateStates: Object.create(null), observationHistoryByCandidate: Object.create(null), transitionRows: [] },
+    persistLiveCandidateState: false,
+  }));
+  assert(readOnly.liveCandidateStateMonitor.responseReadOnly === true, 'read-only snapshot should mark responseReadOnly');
+  assert(readOnly.liveCandidateStateMonitor.observationWriteEnabled === false, 'read-only snapshot should disable observation writes');
+  assert(readOnly.liveCandidateStateMonitor.responseTriggeredDurableWrites === false, 'read-only snapshot should not trigger durable writes');
+  assert(countRows(db, OBS_TABLE) === 0, 'read-only snapshot should not persist observations');
+  assert(countRows(db, TRANS_TABLE) === 0, 'read-only snapshot should not persist transitions');
 
   const first = buildCommandCenterPanels(buildInput({
     signal: 'WAIT',
@@ -105,9 +140,12 @@ function run() {
     latestSession: { no_trade_reason: 'no_confirmation' },
     db,
     monitorState: { candidateStates: Object.create(null), observationHistoryByCandidate: Object.create(null), transitionRows: [] },
+    observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
   }));
 
   assert(first.liveCandidateStateMonitor.storageMode === 'durable_sqlite', 'first snapshot should use durable sqlite storage');
+  assert(first.liveCandidateStateMonitor.responseReadOnly === false, 'diagnostic write snapshot should be write-enabled');
+  assert(first.liveCandidateStateMonitor.observationWriteSource === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC, 'diagnostic write snapshot should report write source');
   assert(first.liveCandidateStateMonitor.actionableTransitionDetected === false, 'first snapshot should not detect actionable transition');
   assert(first.liveCandidateStateMonitor.emptyStateReason === 'no_prior_observations_yet', 'first snapshot should mark no_prior_observations_yet on monitor');
   assert(first.liveCandidateTransitionHistory.emptyStateReason === 'prior_observations_no_transitions', 'first snapshot history should mark prior_observations_no_transitions after baseline capture');
@@ -115,6 +153,10 @@ function run() {
   const trAfterFirst = countRows(db, TRANS_TABLE);
   assert(obsAfterFirst > 0, 'first snapshot should persist observations');
   assert(trAfterFirst === 0, 'first snapshot should not persist transitions');
+  assert(
+    countRowsBySource(db, OBS_TABLE, 'observation_write_source', LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC) > 0,
+    'diagnostic writes should persist observation_write_source=endpoint_diagnostic'
+  );
 
   const second = buildCommandCenterPanels(buildInput({
     signal: 'WAIT',
@@ -200,6 +242,10 @@ function run() {
   assert(latestTransition && latestTransition.transitionType === 'dropped_out_of_actionable', 'drop back to poor structure should persist dropped_out_of_actionable transition');
   assert(fifth.liveCandidateStateMonitor.actionableTransitionDetected === false, 'drop snapshot should not set actionable transition true');
   assert(countRows(db, TRANS_TABLE) > trAfterFourth, 'drop snapshot should add another durable transition row');
+  assert(
+    countRowsBySource(db, TRANS_TABLE, 'transition_write_source', LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC) > 0,
+    'diagnostic writes should persist transition_write_source=endpoint_diagnostic'
+  );
 
   db.close();
   console.log('Jarvis live candidate state persistence test passed.');

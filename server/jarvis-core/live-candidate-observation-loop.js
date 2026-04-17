@@ -176,6 +176,10 @@ function createLiveCandidateObservationLoop(options = {}) {
     lastStateClassification: 'no_state_evaluated',
     lastStateClassificationReason: 'loop_not_started',
     lastInputFingerprint: null,
+    lastResponseReadOnly: null,
+    lastObservationWriteSource: null,
+    lastHistoryProvenanceClassification: null,
+    lastHistoryProvenanceSummaryLine: null,
     sessionDate: null,
     nextPollAt: null,
     lastResult: null,
@@ -239,6 +243,10 @@ function createLiveCandidateObservationLoop(options = {}) {
       lastStateClassification: String(state.lastStateClassification || '').trim() || 'no_state_evaluated',
       lastStateClassificationReason: String(state.lastStateClassificationReason || '').trim() || null,
       lastInputFingerprint: String(state.lastInputFingerprint || '').trim() || null,
+      lastResponseReadOnly: state.lastResponseReadOnly === true,
+      lastObservationWriteSource: String(state.lastObservationWriteSource || '').trim() || null,
+      lastHistoryProvenanceClassification: String(state.lastHistoryProvenanceClassification || '').trim() || null,
+      lastHistoryProvenanceSummaryLine: String(state.lastHistoryProvenanceSummaryLine || '').trim() || null,
       lastResult: copyObject(state.lastResult, null),
       summaryLine: state.lastSummaryLine || buildSummaryLine(),
       advisoryOnly: true,
@@ -304,6 +312,10 @@ function createLiveCandidateObservationLoop(options = {}) {
       const observationsEvaluated = Array.isArray(monitor?.recentObservationSample)
         ? monitor.recentObservationSample.length
         : clampInt(monitor?.priorObservationReadCount, 0, 0, Number.MAX_SAFE_INTEGER);
+      state.lastResponseReadOnly = monitor?.responseReadOnly === true;
+      state.lastObservationWriteSource = String(monitor?.observationWriteSource || '').trim().toLowerCase() || null;
+      state.lastHistoryProvenanceClassification = String(monitor?.historyProvenanceClassification || '').trim().toLowerCase() || null;
+      state.lastHistoryProvenanceSummaryLine = String(monitor?.historyProvenanceSummaryLine || '').trim() || null;
       const freshness = pollResult?.freshness && typeof pollResult.freshness === 'object'
         ? pollResult.freshness
         : null;
