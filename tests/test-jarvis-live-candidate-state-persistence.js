@@ -113,6 +113,12 @@ function countRowsBySource(db, table, sourceColumn, source) {
   );
 }
 
+function countRowsBySession(db, table, sessionDate) {
+  return Number(
+    db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE session_date = ?`).get(String(sessionDate || '').trim())?.c || 0
+  );
+}
+
 function run() {
   const db = new Database(':memory:');
 
@@ -258,6 +264,75 @@ function run() {
   );
 
   db.close();
+
+  {
+    const fallbackDb = new Database(':memory:');
+    const activeMonitorState = { candidateStates: Object.create(null), observationHistoryByCandidate: Object.create(null), transitionRows: [] };
+    buildCommandCenterPanels(buildInput({
+      signal: 'WAIT',
+      probability: 0.41,
+      expectedValueDollars: -12,
+      nowEt: '2026-04-17 10:10',
+      latestSession: { no_trade_reason: 'no_confirmation' },
+      db: fallbackDb,
+      monitorState: activeMonitorState,
+      observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    }));
+    buildCommandCenterPanels(buildInput({
+      signal: 'TRADE',
+      probability: 0.83,
+      expectedValueDollars: 95,
+      nowEt: '2026-04-17 10:11',
+      latestSession: {
+        trade: {
+          direction: 'long',
+          entry_time: '2026-04-17 10:11',
+          entry_price: 22144,
+          sl_price: 22098,
+          tp_price: 22208,
+        },
+      },
+      db: fallbackDb,
+      monitorState: activeMonitorState,
+      observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    }));
+
+    const obsForPrevSession = countRowsBySession(fallbackDb, OBS_TABLE, '2026-04-17');
+    const trForPrevSession = countRowsBySession(fallbackDb, TRANS_TABLE, '2026-04-17');
+    assert(obsForPrevSession > 0, 'fallback fixture should persist observations on previous session date');
+    assert(trForPrevSession > 0, 'fallback fixture should persist transitions on previous session date');
+
+    const restartedRead = buildCommandCenterPanels(buildInput({
+      signal: 'WAIT',
+      probability: 0.39,
+      expectedValueDollars: -18,
+      nowEt: '2026-04-18 10:01',
+      latestSession: { no_trade_reason: 'outside_window' },
+      db: fallbackDb,
+      monitorState: { candidateStates: Object.create(null), observationHistoryByCandidate: Object.create(null), transitionRows: [] },
+      persistLiveCandidateState: false,
+      observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    }));
+
+    assert(restartedRead.liveCandidateStateMonitor.responseReadOnly === true, 'restart read should remain read-only');
+    assert(restartedRead.liveCandidateStateMonitor.historyDebugRequestedSessionDate === '2026-04-18', 'requested session should reflect current runtime date');
+    assert(restartedRead.liveCandidateStateMonitor.historyDebugEffectiveSessionDate === '2026-04-17', 'effective session should fallback to latest populated session date');
+    assert(restartedRead.liveCandidateStateMonitor.historyDebugRowScope === 'latest_available_session_date', 'monitor row scope should report latest_available_session_date fallback');
+    assert(restartedRead.liveCandidateStateMonitor.historyDebugRowScopeFallbackUsed === true, 'monitor row-scope fallback should be explicit');
+    assert(
+      restartedRead.liveCandidateStateMonitor.historyDebugRowScopeFallbackReason === 'requested_session_empty_using_latest_available_session_date',
+      'monitor fallback reason should explain requested session empty fallback'
+    );
+    assert(restartedRead.liveCandidateStateMonitor.historyEvaluationMode === 'loop_only', 'loop-only interpretation should remain primary on populated loop rows');
+    assert(restartedRead.liveCandidateStateMonitor.durableObservationCount === obsForPrevSession, 'monitor durableObservationCount should match fallback effective session rows');
+    assert(restartedRead.liveCandidateStateMonitor.durableTransitionCount === trForPrevSession, 'monitor durableTransitionCount should match fallback effective session rows');
+    assert(restartedRead.liveCandidateTransitionHistory.historyDebugRequestedSessionDate === '2026-04-18', 'transition history requested session should reflect current runtime date');
+    assert(restartedRead.liveCandidateTransitionHistory.historyDebugEffectiveSessionDate === '2026-04-17', 'transition history effective session should fallback to latest populated session date');
+    assert(restartedRead.liveCandidateTransitionHistory.historyDebugRowScopeFallbackUsed === true, 'transition history row-scope fallback should be explicit');
+    assert(restartedRead.liveCandidateTransitionHistory.totalObservationRows === obsForPrevSession, 'transition history observation count should match fallback effective session rows');
+    assert(restartedRead.liveCandidateTransitionHistory.totalTransitionRows === trForPrevSession, 'transition history transition count should match fallback effective session rows');
+    fallbackDb.close();
+  }
 
   {
     const mixedDb = new Database(':memory:');

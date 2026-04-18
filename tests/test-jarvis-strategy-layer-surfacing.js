@@ -86,6 +86,14 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyEvaluationFallbackMode'), `${label} liveCandidateStateMonitor.historyEvaluationFallbackMode missing`, { snapshot });
   assert(Array.isArray(snapshot.liveCandidateStateMonitor.historyEvaluationReferenceModes), `${label} liveCandidateStateMonitor.historyEvaluationReferenceModes missing`, { snapshot });
   assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyEvaluationLatestTransition'), `${label} liveCandidateStateMonitor.historyEvaluationLatestTransition missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyDebugDbPath'), `${label} liveCandidateStateMonitor.historyDebugDbPath missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyDebugRequestedSessionDate'), `${label} liveCandidateStateMonitor.historyDebugRequestedSessionDate missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyDebugEffectiveSessionDate'), `${label} liveCandidateStateMonitor.historyDebugEffectiveSessionDate missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyDebugRowScope'), `${label} liveCandidateStateMonitor.historyDebugRowScope missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyDebugRowScopeFallbackUsed'), `${label} liveCandidateStateMonitor.historyDebugRowScopeFallbackUsed missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyDebugRowScopeFallbackReason'), `${label} liveCandidateStateMonitor.historyDebugRowScopeFallbackReason missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyDebugLatestObservationAt'), `${label} liveCandidateStateMonitor.historyDebugLatestObservationAt missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyDebugLatestTransitionAt'), `${label} liveCandidateStateMonitor.historyDebugLatestTransitionAt missing`, { snapshot });
   assert(['loop_only', 'all_history', 'diagnostic_only'].includes(String(snapshot.liveCandidateStateMonitor.historyEvaluationMode || '')), `${label} liveCandidateStateMonitor.historyEvaluationMode invalid`, { snapshot });
   if (String(snapshot.liveCandidateStateMonitor.historyEvaluationMode || '') !== 'loop_only') {
     assert(snapshot.liveCandidateStateMonitor.historyEvaluationFallbackUsed === true, `${label} liveCandidateStateMonitor must mark fallback when mode is not loop_only`, { snapshot });
@@ -111,6 +119,14 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyEvaluationFallbackMode'), `${label} liveCandidateTransitionHistory.historyEvaluationFallbackMode missing`, { snapshot });
   assert(Array.isArray(snapshot.liveCandidateTransitionHistory.historyEvaluationReferenceModes), `${label} liveCandidateTransitionHistory.historyEvaluationReferenceModes missing`, { snapshot });
   assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyEvaluationLatestTransition'), `${label} liveCandidateTransitionHistory.historyEvaluationLatestTransition missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyDebugDbPath'), `${label} liveCandidateTransitionHistory.historyDebugDbPath missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyDebugRequestedSessionDate'), `${label} liveCandidateTransitionHistory.historyDebugRequestedSessionDate missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyDebugEffectiveSessionDate'), `${label} liveCandidateTransitionHistory.historyDebugEffectiveSessionDate missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyDebugRowScope'), `${label} liveCandidateTransitionHistory.historyDebugRowScope missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyDebugRowScopeFallbackUsed'), `${label} liveCandidateTransitionHistory.historyDebugRowScopeFallbackUsed missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyDebugRowScopeFallbackReason'), `${label} liveCandidateTransitionHistory.historyDebugRowScopeFallbackReason missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyDebugLatestObservationAt'), `${label} liveCandidateTransitionHistory.historyDebugLatestObservationAt missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyDebugLatestTransitionAt'), `${label} liveCandidateTransitionHistory.historyDebugLatestTransitionAt missing`, { snapshot });
   assert(['loop_only', 'all_history', 'diagnostic_only'].includes(String(snapshot.liveCandidateTransitionHistory.historyEvaluationMode || '')), `${label} liveCandidateTransitionHistory.historyEvaluationMode invalid`, { snapshot });
   if (String(snapshot.liveCandidateTransitionHistory.historyEvaluationMode || '') !== 'loop_only') {
     assert(snapshot.liveCandidateTransitionHistory.historyEvaluationFallbackUsed === true, `${label} liveCandidateTransitionHistory must mark fallback when mode is not loop_only`, { snapshot });

@@ -2163,11 +2163,125 @@ function getLiveCandidateStateDbStatements(db = null) {
       FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
       WHERE session_date = ?
     `),
+    readLatestObservationSessionDate: db.prepare(`
+      SELECT session_date
+      FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+      ORDER BY session_date DESC, observed_at DESC, id DESC
+      LIMIT 1
+    `),
+    readLatestTransitionSessionDate: db.prepare(`
+      SELECT session_date
+      FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
+      ORDER BY session_date DESC, transition_at DESC, id DESC
+      LIMIT 1
+    `),
+    readLatestObservationTimestampGlobal: db.prepare(`
+      SELECT observed_at
+      FROM ${LIVE_CANDIDATE_STATE_OBSERVATION_TABLE}
+      ORDER BY observed_at DESC, id DESC
+      LIMIT 1
+    `),
+    readLatestTransitionTimestampGlobal: db.prepare(`
+      SELECT transition_at
+      FROM ${LIVE_CANDIDATE_STATE_TRANSITION_TABLE}
+      ORDER BY transition_at DESC, id DESC
+      LIMIT 1
+    `),
     hasObservationWriteSource,
     hasTransitionWriteSource,
   };
   LIVE_CANDIDATE_DB_STATEMENT_CACHE.set(db, statements);
   return statements;
+}
+
+function resolveLiveCandidateHistoryRowScope(options = {}) {
+  const statements = options?.persistenceStatements && typeof options.persistenceStatements === 'object'
+    ? options.persistenceStatements
+    : null;
+  const requestedSessionDate = String(options?.sessionDate || '').trim();
+  const dbPath = String(options?.dbPath || '').trim() || null;
+  if (!statements || !requestedSessionDate) {
+    return {
+      requestedSessionDate: requestedSessionDate || null,
+      effectiveSessionDate: requestedSessionDate || null,
+      rowScopeMode: 'requested_session_date',
+      rowScopeFallbackUsed: false,
+      rowScopeFallbackReason: null,
+      observationCount: 0,
+      transitionCount: 0,
+      observationSourceCounts: {},
+      transitionSourceCounts: {},
+      latestObservationAt: null,
+      latestTransitionAt: null,
+      dbPath,
+    };
+  }
+
+  const requestedObservationCount = Number(statements.countObservationsByDate.get(requestedSessionDate)?.c || 0);
+  const requestedTransitionCount = Number(statements.countTransitionsByDate.get(requestedSessionDate)?.c || 0);
+
+  let effectiveSessionDate = requestedSessionDate;
+  let rowScopeMode = 'requested_session_date';
+  let rowScopeFallbackUsed = false;
+  let rowScopeFallbackReason = null;
+
+  if ((requestedObservationCount + requestedTransitionCount) <= 0) {
+    const latestObservationSessionDate = String(
+      statements.readLatestObservationSessionDate.get()?.session_date || ''
+    ).trim();
+    const latestTransitionSessionDate = String(
+      statements.readLatestTransitionSessionDate.get()?.session_date || ''
+    ).trim();
+    const latestAvailableSessionDate = [latestObservationSessionDate, latestTransitionSessionDate]
+      .filter(Boolean)
+      .sort()
+      .reverse()[0] || '';
+    if (latestAvailableSessionDate && latestAvailableSessionDate !== requestedSessionDate) {
+      effectiveSessionDate = latestAvailableSessionDate;
+      rowScopeMode = 'latest_available_session_date';
+      rowScopeFallbackUsed = true;
+      rowScopeFallbackReason = 'requested_session_empty_using_latest_available_session_date';
+    }
+  }
+
+  const observationCount = Number(statements.countObservationsByDate.get(effectiveSessionDate)?.c || 0);
+  const transitionCount = Number(statements.countTransitionsByDate.get(effectiveSessionDate)?.c || 0);
+  const observationSourceCounts = (statements.countObservationSourcesByDate.all(effectiveSessionDate) || [])
+    .reduce((acc, row) => {
+      const key = normalizeLiveCandidateObservationWriteSource(row?.source);
+      const value = Number(row?.c || 0);
+      acc[key] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+      return acc;
+    }, {});
+  const transitionSourceCounts = (statements.countTransitionSourcesByDate.all(effectiveSessionDate) || [])
+    .reduce((acc, row) => {
+      const key = normalizeLiveCandidateObservationWriteSource(row?.source);
+      const value = Number(row?.c || 0);
+      acc[key] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+      return acc;
+    }, {});
+
+  const latestObservationAt = String(
+    statements.readLatestObservationTimestampGlobal.get()?.observed_at || ''
+  ).trim() || null;
+  const latestTransitionAt = String(
+    statements.readLatestTransitionTimestampGlobal.get()?.transition_at || ''
+  ).trim() || null;
+
+  return {
+    requestedSessionDate,
+    effectiveSessionDate: effectiveSessionDate || null,
+    rowScopeMode,
+    rowScopeFallbackUsed,
+    rowScopeFallbackReason,
+    observationCount,
+    transitionCount,
+    observationSourceCounts,
+    transitionSourceCounts,
+    latestObservationAt,
+    latestTransitionAt,
+    dbPath,
+  };
 }
 
 function normalizeDurableObservationRow(row = null) {
@@ -2528,39 +2642,49 @@ function buildLiveCandidateStateMonitor(input = {}) {
   let recentTransitionRowsForViews = [];
   let observationSourceCounts = {};
   let transitionSourceCounts = {};
+  let historyDebugRequestedSessionDate = sessionDate || null;
+  let historyDebugEffectiveSessionDate = sessionDate || null;
+  let historyDebugRowScope = 'requested_session_date';
+  let historyDebugRowScopeFallbackUsed = false;
+  let historyDebugRowScopeFallbackReason = null;
+  let historyDebugDbPath = null;
+  let historyDebugLatestObservationAt = null;
+  let historyDebugLatestTransitionAt = null;
   if (persistenceAvailable) {
-    durableObservationCount = Number(
-      persistenceStatements.countObservationsByDate.get(sessionDate || '')?.c || 0
-    );
-    durableTransitionCount = Number(
-      persistenceStatements.countTransitionsByDate.get(sessionDate || '')?.c || 0
-    );
+    const rowScope = resolveLiveCandidateHistoryRowScope({
+      persistenceStatements,
+      sessionDate: sessionDate || '',
+      dbPath: String(persistenceDb?.name || '').trim() || null,
+    });
+    const historySessionDate = String(rowScope?.effectiveSessionDate || '').trim() || (sessionDate || '');
+    historyDebugRequestedSessionDate = rowScope?.requestedSessionDate || sessionDate || null;
+    historyDebugEffectiveSessionDate = rowScope?.effectiveSessionDate || historySessionDate || null;
+    historyDebugRowScope = rowScope?.rowScopeMode || 'requested_session_date';
+    historyDebugRowScopeFallbackUsed = rowScope?.rowScopeFallbackUsed === true;
+    historyDebugRowScopeFallbackReason = rowScope?.rowScopeFallbackReason || null;
+    historyDebugDbPath = rowScope?.dbPath || null;
+    historyDebugLatestObservationAt = rowScope?.latestObservationAt || null;
+    historyDebugLatestTransitionAt = rowScope?.latestTransitionAt || null;
+    durableObservationCount = Number(rowScope?.observationCount || 0);
+    durableTransitionCount = Number(rowScope?.transitionCount || 0);
     recentObservationRowsForViews = persistenceStatements
       .readRecentObservationsByDate
-      .all(sessionDate || '', LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
+      .all(historySessionDate, LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
       .map((row) => normalizeDurableObservationRow(row))
       .filter(Boolean);
     recentObservationSample = recentObservationRowsForViews.slice(0, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
     recentTransitionRowsForViews = persistenceStatements
       .readRecentTransitionsByDate
-      .all(sessionDate || '', LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
+      .all(historySessionDate, LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
       .map((row) => normalizeDurableTransitionRow(row))
       .filter(Boolean);
     recentTransitionSample = recentTransitionRowsForViews.slice(0, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
-    observationSourceCounts = (persistenceStatements.countObservationSourcesByDate.all(sessionDate || '') || [])
-      .reduce((acc, row) => {
-        const key = normalizeLiveCandidateObservationWriteSource(row?.source);
-        const value = Number(row?.c || 0);
-        acc[key] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
-        return acc;
-      }, {});
-    transitionSourceCounts = (persistenceStatements.countTransitionSourcesByDate.all(sessionDate || '') || [])
-      .reduce((acc, row) => {
-        const key = normalizeLiveCandidateObservationWriteSource(row?.source);
-        const value = Number(row?.c || 0);
-        acc[key] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
-        return acc;
-      }, {});
+    observationSourceCounts = rowScope?.observationSourceCounts && typeof rowScope.observationSourceCounts === 'object'
+      ? rowScope.observationSourceCounts
+      : {};
+    transitionSourceCounts = rowScope?.transitionSourceCounts && typeof rowScope.transitionSourceCounts === 'object'
+      ? rowScope.transitionSourceCounts
+      : {};
   } else {
     recentObservationRowsForViews = buildInMemoryObservationSample(
       monitorState,
@@ -2709,6 +2833,14 @@ function buildLiveCandidateStateMonitor(input = {}) {
     recentTransitionSample,
     emptyStateReason,
     summaryLine: transitionSummaryLine,
+    historyDebugDbPath,
+    historyDebugRequestedSessionDate,
+    historyDebugEffectiveSessionDate,
+    historyDebugRowScope,
+    historyDebugRowScopeFallbackUsed,
+    historyDebugRowScopeFallbackReason,
+    historyDebugLatestObservationAt,
+    historyDebugLatestTransitionAt,
     advisoryOnly: true,
   };
 }
@@ -2741,11 +2873,33 @@ function buildLiveCandidateTransitionHistory(input = {}) {
   let totalTransitionRows = recentTransitions.length;
   let observationSourceCounts = {};
   let transitionSourceCounts = {};
+  let historyDebugRequestedSessionDate = sessionDate || null;
+  let historyDebugEffectiveSessionDate = sessionDate || null;
+  let historyDebugRowScope = 'requested_session_date';
+  let historyDebugRowScopeFallbackUsed = false;
+  let historyDebugRowScopeFallbackReason = null;
+  let historyDebugDbPath = null;
+  let historyDebugLatestObservationAt = null;
+  let historyDebugLatestTransitionAt = null;
 
   if (persistenceStatements) {
     storageMode = 'durable_sqlite';
+    const rowScope = resolveLiveCandidateHistoryRowScope({
+      persistenceStatements,
+      sessionDate: sessionDate || '',
+      dbPath: String(db?.name || '').trim() || null,
+    });
+    const historySessionDate = String(rowScope?.effectiveSessionDate || '').trim() || (sessionDate || '');
+    historyDebugRequestedSessionDate = rowScope?.requestedSessionDate || sessionDate || null;
+    historyDebugEffectiveSessionDate = rowScope?.effectiveSessionDate || historySessionDate || null;
+    historyDebugRowScope = rowScope?.rowScopeMode || 'requested_session_date';
+    historyDebugRowScopeFallbackUsed = rowScope?.rowScopeFallbackUsed === true;
+    historyDebugRowScopeFallbackReason = rowScope?.rowScopeFallbackReason || null;
+    historyDebugDbPath = rowScope?.dbPath || null;
+    historyDebugLatestObservationAt = rowScope?.latestObservationAt || null;
+    historyDebugLatestTransitionAt = rowScope?.latestTransitionAt || null;
     const transitionRows = persistenceStatements.readRecentTransitionsByDate.all(
-      sessionDate || '',
+      historySessionDate,
       LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT
     );
     recentTransitionRowsForViews = transitionRows
@@ -2754,26 +2908,18 @@ function buildLiveCandidateTransitionHistory(input = {}) {
     recentTransitions = recentTransitionRowsForViews.slice(0, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
     recentObservationRowsForViews = persistenceStatements
       .readRecentObservationsByDate
-      .all(sessionDate || '', LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
+      .all(historySessionDate, LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT)
       .map((row) => normalizeDurableObservationRow(row))
       .filter(Boolean);
     recentObservations = recentObservationRowsForViews.slice(0, LIVE_CANDIDATE_RECENT_HISTORY_LIMIT);
-    totalObservationRows = Number(persistenceStatements.countObservationsByDate.get(sessionDate || '')?.c || 0);
-    totalTransitionRows = Number(persistenceStatements.countTransitionsByDate.get(sessionDate || '')?.c || 0);
-    observationSourceCounts = (persistenceStatements.countObservationSourcesByDate.all(sessionDate || '') || [])
-      .reduce((acc, row) => {
-        const key = normalizeLiveCandidateObservationWriteSource(row?.source);
-        const value = Number(row?.c || 0);
-        acc[key] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
-        return acc;
-      }, {});
-    transitionSourceCounts = (persistenceStatements.countTransitionSourcesByDate.all(sessionDate || '') || [])
-      .reduce((acc, row) => {
-        const key = normalizeLiveCandidateObservationWriteSource(row?.source);
-        const value = Number(row?.c || 0);
-        acc[key] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
-        return acc;
-      }, {});
+    totalObservationRows = Number(rowScope?.observationCount || 0);
+    totalTransitionRows = Number(rowScope?.transitionCount || 0);
+    observationSourceCounts = rowScope?.observationSourceCounts && typeof rowScope.observationSourceCounts === 'object'
+      ? rowScope.observationSourceCounts
+      : {};
+    transitionSourceCounts = rowScope?.transitionSourceCounts && typeof rowScope.transitionSourceCounts === 'object'
+      ? rowScope.transitionSourceCounts
+      : {};
   } else {
     observationSourceCounts = {
       [LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO]: totalObservationRows,
@@ -2861,6 +3007,14 @@ function buildLiveCandidateTransitionHistory(input = {}) {
     transitionHistoryProvenanceClassification: transitionProvenance.classification,
     transitionHistoryProvenanceSources: transitionProvenance.sources,
     transitionHistoryProvenanceSummaryLine: transitionProvenance.summaryLine,
+    historyDebugDbPath,
+    historyDebugRequestedSessionDate,
+    historyDebugEffectiveSessionDate,
+    historyDebugRowScope,
+    historyDebugRowScopeFallbackUsed,
+    historyDebugRowScopeFallbackReason,
+    historyDebugLatestObservationAt,
+    historyDebugLatestTransitionAt,
     observationTable: LIVE_CANDIDATE_STATE_OBSERVATION_TABLE,
     transitionTable: LIVE_CANDIDATE_STATE_TRANSITION_TABLE,
     summaryLine,
