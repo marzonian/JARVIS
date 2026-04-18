@@ -111,6 +111,11 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
 }
 
 (async () => {
+  const useForce = process.env.AUDIT_FORCE === '1';
+  const commandCenterQuery = useForce ? '/api/jarvis/command-center?force=1&discovery=1' : '/api/jarvis/command-center?discovery=1';
+  const commandCenterWriteQuery = useForce
+    ? '/api/jarvis/command-center?force=1&discovery=1&observationWrite=1'
+    : '/api/jarvis/command-center?discovery=1&observationWrite=1';
   const useExisting = !!process.env.BASE_URL;
   const server = await startAuditServer({
     useExisting,
@@ -133,22 +138,28 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
   });
 
   try {
-    const first = await getJson(server.baseUrl, '/api/jarvis/command-center?force=1&discovery=1');
+    const first = await getJson(server.baseUrl, commandCenterQuery);
     const firstStatus = pullStatus(first);
     const firstMonitor = first?.liveCandidateStateMonitor && typeof first.liveCandidateStateMonitor === 'object'
       ? first.liveCandidateStateMonitor
       : {};
+    const firstJudgment = first?.liveCandidateHistoryJudgment && typeof first.liveCandidateHistoryJudgment === 'object'
+      ? first.liveCandidateHistoryJudgment
+      : {};
     await sleep(3600);
-    const second = await getJson(server.baseUrl, '/api/jarvis/command-center?force=1&discovery=1');
+    const second = await getJson(server.baseUrl, commandCenterQuery);
     const secondStatus = pullStatus(second);
     const secondMonitor = second?.liveCandidateStateMonitor && typeof second.liveCandidateStateMonitor === 'object'
       ? second.liveCandidateStateMonitor
       : {};
-    const third = await getJson(server.baseUrl, '/api/jarvis/command-center?force=1&discovery=1');
+    const secondJudgment = second?.liveCandidateHistoryJudgment && typeof second.liveCandidateHistoryJudgment === 'object'
+      ? second.liveCandidateHistoryJudgment
+      : {};
+    const third = await getJson(server.baseUrl, commandCenterQuery);
     const thirdMonitor = third?.liveCandidateStateMonitor && typeof third.liveCandidateStateMonitor === 'object'
       ? third.liveCandidateStateMonitor
       : {};
-    const diagnostic = await getJson(server.baseUrl, '/api/jarvis/command-center?force=1&discovery=1&observationWrite=1');
+    const diagnostic = await getJson(server.baseUrl, commandCenterWriteQuery);
     const diagnosticMonitor = diagnostic?.liveCandidateStateMonitor && typeof diagnostic.liveCandidateStateMonitor === 'object'
       ? diagnostic.liveCandidateStateMonitor
       : {};
@@ -226,6 +237,20 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           durableObservationCount: firstMonitor.durableObservationCount ?? null,
           durableTransitionCount: firstMonitor.durableTransitionCount ?? null,
         },
+        judgment: {
+          modeUsed: firstJudgment.modeUsed || null,
+          judgment: firstJudgment.judgment || null,
+          confidenceLabel: firstJudgment.confidenceLabel || null,
+          historySampleSize: Number(firstJudgment.historySampleSize || 0),
+          transitionSampleSize: Number(firstJudgment.transitionSampleSize || 0),
+          supportiveCount: Number(firstJudgment.supportiveCount || 0),
+          unsupportiveCount: Number(firstJudgment.unsupportiveCount || 0),
+          neutralCount: Number(firstJudgment.neutralCount || 0),
+          recentTransitionBias: firstJudgment.recentTransitionBias || null,
+          sparseHistory: firstJudgment.sparseHistory === true,
+          sparseReason: firstJudgment.sparseReason || null,
+          summaryLine: firstJudgment.summaryLine || null,
+        },
       },
       second: {
         loop: {
@@ -277,6 +302,20 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
             : [],
           durableObservationCount: secondMonitor.durableObservationCount ?? null,
           durableTransitionCount: secondMonitor.durableTransitionCount ?? null,
+        },
+        judgment: {
+          modeUsed: secondJudgment.modeUsed || null,
+          judgment: secondJudgment.judgment || null,
+          confidenceLabel: secondJudgment.confidenceLabel || null,
+          historySampleSize: Number(secondJudgment.historySampleSize || 0),
+          transitionSampleSize: Number(secondJudgment.transitionSampleSize || 0),
+          supportiveCount: Number(secondJudgment.supportiveCount || 0),
+          unsupportiveCount: Number(secondJudgment.unsupportiveCount || 0),
+          neutralCount: Number(secondJudgment.neutralCount || 0),
+          recentTransitionBias: secondJudgment.recentTransitionBias || null,
+          sparseHistory: secondJudgment.sparseHistory === true,
+          sparseReason: secondJudgment.sparseReason || null,
+          summaryLine: secondJudgment.summaryLine || null,
         },
       },
       thirdImmediateRead: {
@@ -336,6 +375,16 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           ? secondMonitor.diagnosticOnlyRecentObservations.every((row) => String(row?.observationWriteSource || '') !== 'loop_auto')
           : true,
         historyTrustabilityExplicit: typeof secondMonitor.historyEvaluationMode === 'string' && secondMonitor.historyEvaluationMode.length > 0,
+        historyJudgmentSurfaced: secondJudgment && typeof secondJudgment === 'object'
+          && typeof secondJudgment.summaryLine === 'string'
+          && secondJudgment.summaryLine.length > 0,
+        historyJudgmentLoopOnly: String(secondJudgment.modeUsed || '') === 'loop_only',
+        historyJudgmentSparseExplicit:
+          typeof secondJudgment.sparseHistory === 'boolean'
+          && (
+            secondJudgment.sparseHistory !== true
+            || (typeof secondJudgment.sparseReason === 'string' && secondJudgment.sparseReason.length > 0)
+          ),
         fallbackExplicitWhenTriggered:
           syntheticFallbackMonitor.historyEvaluationFallbackUsed === true
           && String(syntheticFallbackMonitor.historyEvaluationMode || '') !== 'loop_only'

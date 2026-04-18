@@ -35314,6 +35314,16 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
   const liveCandidateTransitionHistory = liveCandidateTransitionHistorySource
     ? cloneData(liveCandidateTransitionHistorySource, liveCandidateTransitionHistorySource)
     : null;
+  const liveCandidateHistoryJudgmentSource = (
+    commandCenter?.liveCandidateHistoryJudgment && typeof commandCenter.liveCandidateHistoryJudgment === 'object'
+      ? commandCenter.liveCandidateHistoryJudgment
+      : (strategyLayers?.liveCandidateHistoryJudgment && typeof strategyLayers.liveCandidateHistoryJudgment === 'object'
+        ? strategyLayers.liveCandidateHistoryJudgment
+        : null)
+  );
+  const liveCandidateHistoryJudgment = liveCandidateHistoryJudgmentSource
+    ? cloneData(liveCandidateHistoryJudgmentSource, liveCandidateHistoryJudgmentSource)
+    : null;
   const liveCandidateObservationLoopStatusSource = (
     commandCenter?.liveCandidateObservationLoopStatus && typeof commandCenter.liveCandidateObservationLoopStatus === 'object'
       ? commandCenter.liveCandidateObservationLoopStatus
@@ -35402,6 +35412,7 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     liveOpportunityCandidates,
     liveCandidateStateMonitor,
     liveCandidateTransitionHistory,
+    liveCandidateHistoryJudgment,
     liveCandidateObservationLoopStatus,
     liveCandidateObservationLoopStatusLine,
     liveCandidateObservationRenderMode,
@@ -35433,6 +35444,7 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
       liveCandidateStateMonitor: cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor),
       liveCandidateTransitionHistory: cloneData(liveCandidateTransitionHistory, liveCandidateTransitionHistory),
+      liveCandidateHistoryJudgment: cloneData(liveCandidateHistoryJudgment, liveCandidateHistoryJudgment),
       liveCandidateObservationLoopStatus: cloneData(liveCandidateObservationLoopStatus, liveCandidateObservationLoopStatus),
       liveCandidateObservationLoopStatusLine,
       liveCandidateObservationRenderMode: cloneData(liveCandidateObservationRenderMode, liveCandidateObservationRenderMode),
@@ -35469,6 +35481,7 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
       liveCandidateStateMonitor: cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor),
       liveCandidateTransitionHistory: cloneData(liveCandidateTransitionHistory, liveCandidateTransitionHistory),
+      liveCandidateHistoryJudgment: cloneData(liveCandidateHistoryJudgment, liveCandidateHistoryJudgment),
       liveCandidateObservationLoopStatus: cloneData(liveCandidateObservationLoopStatus, liveCandidateObservationLoopStatus),
       liveCandidateObservationLoopStatusLine,
       liveCandidateObservationRenderMode: cloneData(liveCandidateObservationRenderMode, liveCandidateObservationRenderMode),
@@ -35525,6 +35538,10 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
   commandCenter.liveCandidateTransitionHistory = cloneData(
     strategyLayerSnapshot.liveCandidateTransitionHistory,
     strategyLayerSnapshot.liveCandidateTransitionHistory
+  );
+  commandCenter.liveCandidateHistoryJudgment = cloneData(
+    strategyLayerSnapshot.liveCandidateHistoryJudgment,
+    strategyLayerSnapshot.liveCandidateHistoryJudgment
   );
   commandCenter.liveCandidateObservationLoopStatus = cloneData(
     strategyLayerSnapshot.liveCandidateObservationLoopStatus,
@@ -35654,6 +35671,10 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
         strategyLayerSnapshot.liveCandidateTransitionHistory,
         strategyLayerSnapshot.liveCandidateTransitionHistory
       );
+      recommendationPerformance.liveCandidateHistoryJudgment = cloneData(
+        strategyLayerSnapshot.liveCandidateHistoryJudgment,
+        strategyLayerSnapshot.liveCandidateHistoryJudgment
+      );
       recommendationPerformance.liveCandidateObservationLoopStatus = cloneData(
         strategyLayerSnapshot.liveCandidateObservationLoopStatus,
         strategyLayerSnapshot.liveCandidateObservationLoopStatus
@@ -35710,6 +35731,7 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       liveOpportunityCandidates: strategyLayerSnapshot?.liveOpportunityCandidates || null,
       liveCandidateStateMonitor: strategyLayerSnapshot?.liveCandidateStateMonitor || null,
       liveCandidateTransitionHistory: strategyLayerSnapshot?.liveCandidateTransitionHistory || null,
+      liveCandidateHistoryJudgment: strategyLayerSnapshot?.liveCandidateHistoryJudgment || null,
       liveCandidateObservationLoopStatus: strategyLayerSnapshot?.liveCandidateObservationLoopStatus || null,
       liveCandidateObservationLoopStatusLine: strategyLayerSnapshot?.liveCandidateObservationLoopStatusLine || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
@@ -36290,6 +36312,7 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       liveOpportunityCandidates: strategyLayerSnapshot?.liveOpportunityCandidates || null,
       liveCandidateStateMonitor: strategyLayerSnapshot?.liveCandidateStateMonitor || null,
       liveCandidateTransitionHistory: strategyLayerSnapshot?.liveCandidateTransitionHistory || null,
+      liveCandidateHistoryJudgment: strategyLayerSnapshot?.liveCandidateHistoryJudgment || null,
       liveCandidateObservationLoopStatus: strategyLayerSnapshot?.liveCandidateObservationLoopStatus || null,
       liveCandidateObservationLoopStatusLine: strategyLayerSnapshot?.liveCandidateObservationLoopStatusLine || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,

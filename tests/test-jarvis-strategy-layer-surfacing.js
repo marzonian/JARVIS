@@ -133,6 +133,21 @@ function assertStrategySnapshotShape(label, snapshot) {
   }
   assert(typeof snapshot.liveCandidateTransitionHistory.historyEvaluationSummaryLine === 'string' && snapshot.liveCandidateTransitionHistory.historyEvaluationSummaryLine.length > 0, `${label} liveCandidateTransitionHistory.historyEvaluationSummaryLine missing`, { snapshot });
   assert(typeof snapshot.liveCandidateTransitionHistory.summaryLine === 'string' && snapshot.liveCandidateTransitionHistory.summaryLine.length > 0, `${label} liveCandidateTransitionHistory.summaryLine missing`, { snapshot });
+  assert(snapshot.liveCandidateHistoryJudgment && typeof snapshot.liveCandidateHistoryJudgment === 'object', `${label} liveCandidateHistoryJudgment missing`, { snapshot });
+  assert(String(snapshot.liveCandidateHistoryJudgment.modeUsed || '') === 'loop_only', `${label} liveCandidateHistoryJudgment.modeUsed should be loop_only`, { snapshot });
+  assert(['supportive', 'mixed', 'weak', 'sparse'].includes(String(snapshot.liveCandidateHistoryJudgment.judgment || '')), `${label} liveCandidateHistoryJudgment.judgment invalid`, { snapshot });
+  assert(['low', 'medium', 'high'].includes(String(snapshot.liveCandidateHistoryJudgment.confidenceLabel || '')), `${label} liveCandidateHistoryJudgment.confidenceLabel invalid`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateHistoryJudgment, 'historySampleSize'), `${label} liveCandidateHistoryJudgment.historySampleSize missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateHistoryJudgment, 'transitionSampleSize'), `${label} liveCandidateHistoryJudgment.transitionSampleSize missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateHistoryJudgment, 'supportiveCount'), `${label} liveCandidateHistoryJudgment.supportiveCount missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateHistoryJudgment, 'unsupportiveCount'), `${label} liveCandidateHistoryJudgment.unsupportiveCount missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateHistoryJudgment, 'neutralCount'), `${label} liveCandidateHistoryJudgment.neutralCount missing`, { snapshot });
+  assert(['improving', 'deteriorating', 'neutral', 'insufficient_history'].includes(String(snapshot.liveCandidateHistoryJudgment.recentTransitionBias || '')), `${label} liveCandidateHistoryJudgment.recentTransitionBias invalid`, { snapshot });
+  assert(typeof snapshot.liveCandidateHistoryJudgment.sparseHistory === 'boolean', `${label} liveCandidateHistoryJudgment.sparseHistory missing`, { snapshot });
+  if (snapshot.liveCandidateHistoryJudgment.sparseHistory === true) {
+    assert(typeof snapshot.liveCandidateHistoryJudgment.sparseReason === 'string' && snapshot.liveCandidateHistoryJudgment.sparseReason.length > 0, `${label} liveCandidateHistoryJudgment sparseReason missing`, { snapshot });
+  }
+  assert(typeof snapshot.liveCandidateHistoryJudgment.summaryLine === 'string' && snapshot.liveCandidateHistoryJudgment.summaryLine.length > 0, `${label} liveCandidateHistoryJudgment.summaryLine missing`, { snapshot });
   assert(snapshot.liveCandidateObservationLoopStatus && typeof snapshot.liveCandidateObservationLoopStatus === 'object', `${label} liveCandidateObservationLoopStatus missing`, { snapshot });
   assert(typeof snapshot.liveCandidateObservationLoopStatus.enabled === 'boolean', `${label} liveCandidateObservationLoopStatus.enabled missing`, { snapshot });
   assert(typeof snapshot.liveCandidateObservationLoopStatus.running === 'boolean', `${label} liveCandidateObservationLoopStatus.running missing`, { snapshot });
@@ -180,6 +195,8 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(snapshot.decisionBoardMirror.liveCandidateStateMonitor && typeof snapshot.decisionBoardMirror.liveCandidateStateMonitor === 'object', `${label} decisionBoardMirror.liveCandidateStateMonitor missing`, { snapshot });
   assert(snapshot.todayRecommendationMirror.liveCandidateTransitionHistory && typeof snapshot.todayRecommendationMirror.liveCandidateTransitionHistory === 'object', `${label} todayRecommendationMirror.liveCandidateTransitionHistory missing`, { snapshot });
   assert(snapshot.decisionBoardMirror.liveCandidateTransitionHistory && typeof snapshot.decisionBoardMirror.liveCandidateTransitionHistory === 'object', `${label} decisionBoardMirror.liveCandidateTransitionHistory missing`, { snapshot });
+  assert(snapshot.todayRecommendationMirror.liveCandidateHistoryJudgment && typeof snapshot.todayRecommendationMirror.liveCandidateHistoryJudgment === 'object', `${label} todayRecommendationMirror.liveCandidateHistoryJudgment missing`, { snapshot });
+  assert(snapshot.decisionBoardMirror.liveCandidateHistoryJudgment && typeof snapshot.decisionBoardMirror.liveCandidateHistoryJudgment === 'object', `${label} decisionBoardMirror.liveCandidateHistoryJudgment missing`, { snapshot });
   assert(snapshot.todayRecommendationMirror.liveCandidateObservationLoopStatus && typeof snapshot.todayRecommendationMirror.liveCandidateObservationLoopStatus === 'object', `${label} todayRecommendationMirror.liveCandidateObservationLoopStatus missing`, { snapshot });
   assert(snapshot.decisionBoardMirror.liveCandidateObservationLoopStatus && typeof snapshot.decisionBoardMirror.liveCandidateObservationLoopStatus === 'object', `${label} decisionBoardMirror.liveCandidateObservationLoopStatus missing`, { snapshot });
   assert(typeof snapshot.todayRecommendationMirror.liveCandidateObservationLoopStatusLine === 'string' && snapshot.todayRecommendationMirror.liveCandidateObservationLoopStatusLine.length > 0, `${label} todayRecommendationMirror.liveCandidateObservationLoopStatusLine missing`, { snapshot });
@@ -333,6 +350,7 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.liveOpportunityCandidates && typeof center.liveOpportunityCandidates === 'object', 'command-center liveOpportunityCandidates root field missing', { center });
     assert(center.liveCandidateStateMonitor && typeof center.liveCandidateStateMonitor === 'object', 'command-center liveCandidateStateMonitor root field missing', { center });
     assert(center.liveCandidateTransitionHistory && typeof center.liveCandidateTransitionHistory === 'object', 'command-center liveCandidateTransitionHistory root field missing', { center });
+    assert(center.liveCandidateHistoryJudgment && typeof center.liveCandidateHistoryJudgment === 'object', 'command-center liveCandidateHistoryJudgment root field missing', { center });
     assert(center.liveCandidateObservationLoopStatus && typeof center.liveCandidateObservationLoopStatus === 'object', 'command-center liveCandidateObservationLoopStatus root field missing', { center });
     assert(typeof center.liveCandidateObservationLoopStatusLine === 'string' && center.liveCandidateObservationLoopStatusLine.length > 0, 'command-center liveCandidateObservationLoopStatusLine root field missing', { center });
     assert(center.liveCandidateObservationRenderMode && typeof center.liveCandidateObservationRenderMode === 'object', 'command-center liveCandidateObservationRenderMode root field missing', { center });
@@ -369,6 +387,8 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(center.commandCenter.decisionBoard.liveCandidateStateMonitor && typeof center.commandCenter.decisionBoard.liveCandidateStateMonitor === 'object', 'decisionBoard liveCandidateStateMonitor mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.liveCandidateTransitionHistory && typeof center.commandCenter.todayRecommendation.liveCandidateTransitionHistory === 'object', 'todayRecommendation liveCandidateTransitionHistory mirror missing', { center });
     assert(center.commandCenter.decisionBoard.liveCandidateTransitionHistory && typeof center.commandCenter.decisionBoard.liveCandidateTransitionHistory === 'object', 'decisionBoard liveCandidateTransitionHistory mirror missing', { center });
+    assert(center.commandCenter.todayRecommendation.liveCandidateHistoryJudgment && typeof center.commandCenter.todayRecommendation.liveCandidateHistoryJudgment === 'object', 'todayRecommendation liveCandidateHistoryJudgment mirror missing', { center });
+    assert(center.commandCenter.decisionBoard.liveCandidateHistoryJudgment && typeof center.commandCenter.decisionBoard.liveCandidateHistoryJudgment === 'object', 'decisionBoard liveCandidateHistoryJudgment mirror missing', { center });
     assert(center.commandCenter.todayRecommendation.liveCandidateObservationLoopStatus && typeof center.commandCenter.todayRecommendation.liveCandidateObservationLoopStatus === 'object', 'todayRecommendation liveCandidateObservationLoopStatus mirror missing', { center });
     assert(center.commandCenter.decisionBoard.liveCandidateObservationLoopStatus && typeof center.commandCenter.decisionBoard.liveCandidateObservationLoopStatus === 'object', 'decisionBoard liveCandidateObservationLoopStatus mirror missing', { center });
     assert(typeof center.commandCenter.todayRecommendation.liveCandidateObservationLoopStatusLine === 'string' && center.commandCenter.todayRecommendation.liveCandidateObservationLoopStatusLine.length > 0, 'todayRecommendation liveCandidateObservationLoopStatusLine mirror missing', { center });
@@ -415,6 +435,7 @@ function assertStrategySnapshotShape(label, snapshot) {
     assert(perf.recommendationPerformance.liveOpportunityCandidates && typeof perf.recommendationPerformance.liveOpportunityCandidates === 'object', 'recommendationPerformance.liveOpportunityCandidates missing', { perf });
     assert(perf.recommendationPerformance.liveCandidateStateMonitor && typeof perf.recommendationPerformance.liveCandidateStateMonitor === 'object', 'recommendationPerformance.liveCandidateStateMonitor missing', { perf });
     assert(perf.recommendationPerformance.liveCandidateTransitionHistory && typeof perf.recommendationPerformance.liveCandidateTransitionHistory === 'object', 'recommendationPerformance.liveCandidateTransitionHistory missing', { perf });
+    assert(perf.recommendationPerformance.liveCandidateHistoryJudgment && typeof perf.recommendationPerformance.liveCandidateHistoryJudgment === 'object', 'recommendationPerformance.liveCandidateHistoryJudgment missing', { perf });
     assert(perf.recommendationPerformance.liveCandidateObservationLoopStatus && typeof perf.recommendationPerformance.liveCandidateObservationLoopStatus === 'object', 'recommendationPerformance.liveCandidateObservationLoopStatus missing', { perf });
     assert(typeof perf.recommendationPerformance.liveCandidateObservationLoopStatusLine === 'string' && perf.recommendationPerformance.liveCandidateObservationLoopStatusLine.length > 0, 'recommendationPerformance.liveCandidateObservationLoopStatusLine missing', { perf });
     assert(perf.liveCandidateObservationRenderMode && typeof perf.liveCandidateObservationRenderMode === 'object', 'recommendation/performance liveCandidateObservationRenderMode missing', { perf });

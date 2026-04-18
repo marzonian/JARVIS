@@ -119,6 +119,72 @@ function countRowsBySession(db, table, sessionDate) {
   );
 }
 
+function insertObservation(db, row = {}) {
+  db.prepare(`
+    INSERT INTO ${OBS_TABLE} (
+      observed_at,
+      session_date,
+      candidate_key,
+      strategy_key,
+      candidate_source,
+      candidate_status,
+      structure_quality_score,
+      structure_quality_label,
+      candidate_win_prob,
+      candidate_expected_value,
+      inside_approved_action_window,
+      actionable_now,
+      observation_write_source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    String(row.observed_at || '2026-04-17 10:00'),
+    String(row.session_date || '2026-04-17'),
+    String(row.candidate_key || 'strategy_stack:closer_tp_variant:test:long:entry_window'),
+    String(row.strategy_key || 'closer_tp_variant'),
+    String(row.candidate_source || 'strategy_stack'),
+    String(row.candidate_status || 'watch_trigger'),
+    Number(row.structure_quality_score ?? 60),
+    String(row.structure_quality_label || 'mixed'),
+    Number(row.candidate_win_prob ?? 55),
+    Number(row.candidate_expected_value ?? 5),
+    Number(row.inside_approved_action_window === true ? 1 : 0),
+    Number(row.actionable_now === true ? 1 : 0),
+    String(row.observation_write_source || LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO)
+  );
+}
+
+function insertTransition(db, row = {}) {
+  db.prepare(`
+    INSERT INTO ${TRANS_TABLE} (
+      transition_at,
+      session_date,
+      candidate_key,
+      previous_status,
+      current_status,
+      previous_structure_quality_score,
+      current_structure_quality_score,
+      previous_actionable,
+      current_actionable,
+      transition_type,
+      transition_summary_line,
+      transition_write_source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    String(row.transition_at || '2026-04-17 10:01'),
+    String(row.session_date || '2026-04-17'),
+    String(row.candidate_key || 'strategy_stack:closer_tp_variant:test:long:entry_window'),
+    String(row.previous_status || 'watch_trigger'),
+    String(row.current_status || 'secondary_watch'),
+    Number(row.previous_structure_quality_score ?? 55),
+    Number(row.current_structure_quality_score ?? 62),
+    Number(row.previous_actionable === true ? 1 : 0),
+    Number(row.current_actionable === true ? 1 : 0),
+    String(row.transition_type || 'structure_improved'),
+    String(row.transition_summary_line || 'structure improved'),
+    String(row.transition_write_source || LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO)
+  );
+}
+
 function run() {
   const db = new Database(':memory:');
 
@@ -426,6 +492,214 @@ function run() {
     assert(readOnlyMixed.liveCandidateStateMonitor.responseReadOnly === true, 'read-only mixed snapshot should stay read-only');
     assert(countRows(mixedDb, OBS_TABLE) === beforeReadOnlyObs, 'read-only mixed snapshot should not add observation rows');
     assert(countRows(mixedDb, TRANS_TABLE) === beforeReadOnlyTr, 'read-only mixed snapshot should not add transition rows');
+    mixedDb.close();
+  }
+
+  {
+    const makeReadSnapshot = ({ db, nowEt = '2026-04-18 10:05' }) => buildCommandCenterPanels(buildInput({
+      signal: 'WAIT',
+      probability: 0.41,
+      expectedValueDollars: -14,
+      nowEt,
+      latestSession: { no_trade_reason: 'outside_window' },
+      db,
+      monitorState: { candidateStates: Object.create(null), observationHistoryByCandidate: Object.create(null), transitionRows: [] },
+      persistLiveCandidateState: false,
+      observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+    }));
+
+    const sparseDb = new Database(':memory:');
+    buildCommandCenterPanels(buildInput({ db: sparseDb, persistLiveCandidateState: false }));
+    insertObservation(sparseDb, {
+      observed_at: '2026-04-17 10:00',
+      candidate_status: 'watch_trigger',
+      structure_quality_score: 58,
+      structure_quality_label: 'mixed',
+      candidate_expected_value: 2,
+      actionable_now: false,
+      observation_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    });
+    const sparseSnapshot = makeReadSnapshot({ db: sparseDb });
+    assert(sparseSnapshot.liveCandidateHistoryJudgment && typeof sparseSnapshot.liveCandidateHistoryJudgment === 'object', 'sparse case should surface liveCandidateHistoryJudgment');
+    assert(sparseSnapshot.liveCandidateHistoryJudgment.modeUsed === 'loop_only', 'sparse case should stay loop_only');
+    assert(sparseSnapshot.liveCandidateHistoryJudgment.sparseHistory === true, 'sparse case should mark sparseHistory true');
+    assert(['insufficient_loop_observations', 'insufficient_loop_transitions', 'insufficient_supportive_signal'].includes(String(sparseSnapshot.liveCandidateHistoryJudgment.sparseReason || '')), 'sparse case should expose explicit sparseReason');
+    sparseDb.close();
+
+    const diagOnlyDb = new Database(':memory:');
+    buildCommandCenterPanels(buildInput({ db: diagOnlyDb, persistLiveCandidateState: false }));
+    for (let i = 0; i < 8; i += 1) {
+      insertObservation(diagOnlyDb, {
+        observed_at: `2026-04-17 10:${String(i).padStart(2, '0')}`,
+        candidate_status: 'ready_now',
+        structure_quality_score: 74,
+        structure_quality_label: 'clean',
+        candidate_expected_value: 18,
+        actionable_now: true,
+        observation_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+      });
+    }
+    for (let i = 0; i < 3; i += 1) {
+      insertTransition(diagOnlyDb, {
+        transition_at: `2026-04-17 10:${String(20 + i).padStart(2, '0')}`,
+        transition_type: 'crossed_into_actionable',
+        previous_status: 'watch_trigger',
+        current_status: 'ready_now',
+        previous_actionable: false,
+        current_actionable: true,
+        transition_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+      });
+    }
+    const diagOnlySnapshot = makeReadSnapshot({ db: diagOnlyDb });
+    assert(diagOnlySnapshot.liveCandidateStateMonitor.diagnosticOnlyObservationCount > 0, 'diagnostic-only fixture should have diagnostic observations');
+    assert(diagOnlySnapshot.liveCandidateStateMonitor.loopOnlyObservationCount === 0, 'diagnostic-only fixture should have zero loop observations');
+    assert(diagOnlySnapshot.liveCandidateHistoryJudgment.modeUsed === 'loop_only', 'diagnostic-only fixture should keep judgment mode loop_only');
+    assert(diagOnlySnapshot.liveCandidateHistoryJudgment.sparseHistory === true, 'diagnostic-only fixture should remain sparse (no loop history)');
+    assert(diagOnlySnapshot.liveCandidateHistoryJudgment.sparseReason === 'no_loop_history', 'diagnostic-only fixture should surface no_loop_history');
+    diagOnlyDb.close();
+
+    const supportiveDb = new Database(':memory:');
+    buildCommandCenterPanels(buildInput({ db: supportiveDb, persistLiveCandidateState: false }));
+    for (let i = 0; i < 10; i += 1) {
+      insertObservation(supportiveDb, {
+        observed_at: `2026-04-17 10:${String(i).padStart(2, '0')}`,
+        candidate_status: 'ready_now',
+        structure_quality_score: 72,
+        structure_quality_label: 'clean',
+        candidate_expected_value: 16,
+        actionable_now: true,
+        observation_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+      });
+    }
+    insertTransition(supportiveDb, {
+      transition_at: '2026-04-17 10:30',
+      transition_type: 'crossed_into_actionable',
+      previous_status: 'watch_trigger',
+      current_status: 'ready_now',
+      previous_actionable: false,
+      current_actionable: true,
+      transition_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    });
+    insertTransition(supportiveDb, {
+      transition_at: '2026-04-17 10:31',
+      transition_type: 'structure_improved',
+      previous_status: 'secondary_watch',
+      current_status: 'secondary_watch',
+      previous_actionable: false,
+      current_actionable: false,
+      transition_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    });
+    insertTransition(supportiveDb, {
+      transition_at: '2026-04-17 10:32',
+      transition_type: 'status_changed',
+      previous_status: 'watch_trigger',
+      current_status: 'secondary_watch',
+      previous_actionable: false,
+      current_actionable: false,
+      transition_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    });
+    const supportiveSnapshot = makeReadSnapshot({ db: supportiveDb });
+    assert(supportiveSnapshot.liveCandidateHistoryJudgment.sparseHistory === false, 'supportive fixture should not be sparse');
+    assert(supportiveSnapshot.liveCandidateHistoryJudgment.judgment === 'supportive', 'supportive fixture should classify as supportive');
+    assert(supportiveSnapshot.liveCandidateHistoryJudgment.recentTransitionBias === 'improving', 'supportive fixture should classify transition bias as improving');
+    assert(supportiveSnapshot.liveCandidateHistoryJudgment.supportiveCount > supportiveSnapshot.liveCandidateHistoryJudgment.unsupportiveCount, 'supportive fixture should have supportive edge');
+    supportiveDb.close();
+
+    const weakDb = new Database(':memory:');
+    buildCommandCenterPanels(buildInput({ db: weakDb, persistLiveCandidateState: false }));
+    for (let i = 0; i < 10; i += 1) {
+      insertObservation(weakDb, {
+        observed_at: `2026-04-17 11:${String(i).padStart(2, '0')}`,
+        candidate_status: 'blocked',
+        structure_quality_score: 12,
+        structure_quality_label: 'poor',
+        candidate_expected_value: -35,
+        actionable_now: false,
+        observation_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+      });
+    }
+    insertTransition(weakDb, {
+      transition_at: '2026-04-17 11:30',
+      transition_type: 'dropped_out_of_actionable',
+      previous_status: 'ready_now',
+      current_status: 'watch_trigger',
+      previous_actionable: true,
+      current_actionable: false,
+      transition_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    });
+    insertTransition(weakDb, {
+      transition_at: '2026-04-17 11:31',
+      transition_type: 'structure_worsened',
+      previous_status: 'watch_trigger',
+      current_status: 'watch_trigger',
+      previous_actionable: false,
+      current_actionable: false,
+      transition_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    });
+    insertTransition(weakDb, {
+      transition_at: '2026-04-17 11:32',
+      transition_type: 'status_changed',
+      previous_status: 'watch_trigger',
+      current_status: 'blocked',
+      previous_actionable: false,
+      current_actionable: false,
+      transition_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+    });
+    const weakSnapshot = makeReadSnapshot({ db: weakDb });
+    assert(weakSnapshot.liveCandidateHistoryJudgment.sparseHistory === false, 'weak fixture should not be sparse');
+    assert(weakSnapshot.liveCandidateHistoryJudgment.judgment === 'weak', 'weak fixture should classify as weak');
+    assert(weakSnapshot.liveCandidateHistoryJudgment.recentTransitionBias === 'deteriorating', 'weak fixture should classify transition bias as deteriorating');
+    assert(weakSnapshot.liveCandidateHistoryJudgment.unsupportiveCount > weakSnapshot.liveCandidateHistoryJudgment.supportiveCount, 'weak fixture should have unsupportive edge');
+    weakDb.close();
+
+    const mixedDb = new Database(':memory:');
+    buildCommandCenterPanels(buildInput({ db: mixedDb, persistLiveCandidateState: false }));
+    for (let i = 0; i < 4; i += 1) {
+      insertObservation(mixedDb, {
+        observed_at: `2026-04-17 12:${String(i).padStart(2, '0')}`,
+        candidate_status: 'ready_now',
+        structure_quality_score: 68,
+        structure_quality_label: 'clean',
+        candidate_expected_value: 8,
+        actionable_now: true,
+        observation_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+      });
+    }
+    for (let i = 0; i < 4; i += 1) {
+      insertObservation(mixedDb, {
+        observed_at: `2026-04-17 12:${String(10 + i).padStart(2, '0')}`,
+        candidate_status: 'blocked',
+        structure_quality_score: 24,
+        structure_quality_label: 'poor',
+        candidate_expected_value: -24,
+        actionable_now: false,
+        observation_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+      });
+    }
+    for (let i = 0; i < 2; i += 1) {
+      insertTransition(mixedDb, {
+        transition_at: `2026-04-17 12:${String(30 + i).padStart(2, '0')}`,
+        transition_type: 'structure_improved',
+        previous_status: 'watch_trigger',
+        current_status: 'watch_trigger',
+        previous_actionable: false,
+        current_actionable: false,
+        transition_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+      });
+      insertTransition(mixedDb, {
+        transition_at: `2026-04-17 12:${String(40 + i).padStart(2, '0')}`,
+        transition_type: 'structure_worsened',
+        previous_status: 'watch_trigger',
+        current_status: 'watch_trigger',
+        previous_actionable: false,
+        current_actionable: false,
+        transition_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+      });
+    }
+    const mixedJudgmentSnapshot = makeReadSnapshot({ db: mixedDb });
+    assert(mixedJudgmentSnapshot.liveCandidateHistoryJudgment.sparseHistory === false, 'mixed fixture should not be sparse');
+    assert(mixedJudgmentSnapshot.liveCandidateHistoryJudgment.judgment === 'mixed', 'mixed fixture should classify as mixed');
+    assert(mixedJudgmentSnapshot.liveCandidateHistoryJudgment.recentTransitionBias === 'neutral', 'mixed fixture should classify transition bias as neutral');
     mixedDb.close();
   }
 

@@ -81,6 +81,10 @@ const LIVE_CANDIDATE_RECENT_HISTORY_LIMIT = 12;
 const LIVE_CANDIDATE_RECENT_HISTORY_FILTER_SCAN_LIMIT = 240;
 const LIVE_CANDIDATE_LOOP_ONLY_MIN_OBSERVATIONS_FOR_INTERPRETATION = 6;
 const LIVE_CANDIDATE_LOOP_ONLY_MIN_TRANSITIONS_FOR_INTERPRETATION = 1;
+const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_OBSERVATIONS = 6;
+const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_TRANSITIONS = 2;
+const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_DIRECTIONAL_ROWS = 3;
+const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_CONTEXT_ROWS = 3;
 const LIVE_CANDIDATE_DB_STATEMENT_CACHE = new WeakMap();
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY = 'read_only';
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO = 'loop_auto';
@@ -1884,6 +1888,175 @@ function resolveLiveCandidateHistoryInterpretation(options = {}) {
     minLoopTransitions,
     loopObservationCount,
     loopTransitionCount,
+  };
+}
+
+function classifyLoopObservationJudgmentSignal(observation = {}) {
+  const status = String(observation?.candidateStatus || '').trim().toLowerCase();
+  const structureLabel = String(observation?.structureQualityLabel || '').trim().toLowerCase();
+  const structureScore = Number(observation?.structureQualityScore);
+  const expectedValue = Number(observation?.candidateExpectedValue);
+  const actionableNow = observation?.actionableNow === true;
+
+  if (actionableNow) return 'supportive';
+  if (status === 'blocked' || status === 'await_next_session' || status === 'pre_open_watch') return 'unsupportive';
+  if (structureLabel === 'poor') return 'unsupportive';
+  if (Number.isFinite(expectedValue) && expectedValue < -15) return 'unsupportive';
+  if ((status === 'ready_now' || status === 'secondary_watch')
+    && structureLabel !== 'poor'
+    && (!Number.isFinite(structureScore) || structureScore >= 58)
+    && (!Number.isFinite(expectedValue) || expectedValue >= -5)) {
+    return 'supportive';
+  }
+  return 'neutral';
+}
+
+function classifyLoopTransitionJudgmentSignal(transition = {}) {
+  const transitionType = String(transition?.transitionType || '').trim().toLowerCase();
+  if (transitionType === 'crossed_into_actionable' || transitionType === 'structure_improved') return 'supportive';
+  if (transitionType === 'dropped_out_of_actionable' || transitionType === 'structure_worsened') return 'unsupportive';
+  if (transitionType !== 'status_changed') return 'neutral';
+  const currentStatus = String(transition?.currentStatus || '').trim().toLowerCase();
+  if (currentStatus === 'ready_now' || currentStatus === 'secondary_watch') return 'supportive';
+  if (currentStatus === 'blocked' || currentStatus === 'await_next_session' || currentStatus === 'pre_open_watch') return 'unsupportive';
+  return 'neutral';
+}
+
+function buildLiveCandidateHistoryJudgment(input = {}) {
+  const liveCandidateStateMonitor = input?.liveCandidateStateMonitor && typeof input.liveCandidateStateMonitor === 'object'
+    ? input.liveCandidateStateMonitor
+    : {};
+  const liveCandidateTransitionHistory = input?.liveCandidateTransitionHistory && typeof input.liveCandidateTransitionHistory === 'object'
+    ? input.liveCandidateTransitionHistory
+    : {};
+  const liveOpportunityCandidates = input?.liveOpportunityCandidates && typeof input.liveOpportunityCandidates === 'object'
+    ? input.liveOpportunityCandidates
+    : {};
+
+  const loopOnlyObservationsAll = Array.isArray(liveCandidateStateMonitor?.loopOnlyRecentObservations)
+    ? liveCandidateStateMonitor.loopOnlyRecentObservations
+    : [];
+  const loopOnlyTransitionsAll = Array.isArray(liveCandidateTransitionHistory?.loopOnlyRecentTransitions)
+    ? liveCandidateTransitionHistory.loopOnlyRecentTransitions
+    : [];
+
+  const topCandidateContext = liveOpportunityCandidates?.topCandidateActionableNow
+    && typeof liveOpportunityCandidates.topCandidateActionableNow === 'object'
+    ? liveOpportunityCandidates.topCandidateActionableNow
+    : (liveOpportunityCandidates?.topCandidateOverall && typeof liveOpportunityCandidates.topCandidateOverall === 'object'
+      ? liveOpportunityCandidates.topCandidateOverall
+      : null);
+  const contextCandidateKey = String(topCandidateContext?.candidateKey || '').trim();
+  const contextStrategyKey = String(topCandidateContext?.strategyKey || '').trim();
+  const contextRows = loopOnlyObservationsAll.filter((row) => {
+    const rowCandidateKey = String(row?.candidateKey || '').trim();
+    const rowStrategyKey = String(row?.strategyKey || '').trim();
+    if (contextCandidateKey && rowCandidateKey === contextCandidateKey) return true;
+    if (contextStrategyKey && rowStrategyKey === contextStrategyKey) return true;
+    return false;
+  });
+  const loopOnlyObservations = contextRows.length >= LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_CONTEXT_ROWS
+    ? contextRows
+    : loopOnlyObservationsAll;
+  const loopOnlyTransitions = loopOnlyTransitionsAll;
+
+  let supportiveCount = 0;
+  let unsupportiveCount = 0;
+  let neutralCount = 0;
+  loopOnlyObservations.forEach((row) => {
+    const signal = classifyLoopObservationJudgmentSignal(row);
+    if (signal === 'supportive') supportiveCount += 1;
+    else if (signal === 'unsupportive') unsupportiveCount += 1;
+    else neutralCount += 1;
+  });
+
+  let transitionSupportiveCount = 0;
+  let transitionUnsupportiveCount = 0;
+  let transitionNeutralCount = 0;
+  loopOnlyTransitions.forEach((row) => {
+    const signal = classifyLoopTransitionJudgmentSignal(row);
+    if (signal === 'supportive') transitionSupportiveCount += 1;
+    else if (signal === 'unsupportive') transitionUnsupportiveCount += 1;
+    else transitionNeutralCount += 1;
+  });
+
+  let recentTransitionBias = 'insufficient_history';
+  if (loopOnlyTransitions.length > 0) {
+    if (transitionSupportiveCount > transitionUnsupportiveCount) recentTransitionBias = 'improving';
+    else if (transitionUnsupportiveCount > transitionSupportiveCount) recentTransitionBias = 'deteriorating';
+    else recentTransitionBias = 'neutral';
+  }
+
+  const historySampleSize = loopOnlyObservations.length;
+  const transitionSampleSize = loopOnlyTransitions.length;
+  const directionalCount = supportiveCount + unsupportiveCount;
+  let sparseHistory = false;
+  let sparseReason = null;
+  if (historySampleSize <= 0 && transitionSampleSize <= 0) {
+    sparseHistory = true;
+    sparseReason = 'no_loop_history';
+  } else if (historySampleSize < LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_OBSERVATIONS) {
+    sparseHistory = true;
+    sparseReason = 'insufficient_loop_observations';
+  } else if (transitionSampleSize < LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_TRANSITIONS) {
+    sparseHistory = true;
+    sparseReason = 'insufficient_loop_transitions';
+  } else if (directionalCount < LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_DIRECTIONAL_ROWS) {
+    sparseHistory = true;
+    sparseReason = 'insufficient_supportive_signal';
+  }
+
+  const modeUsed = 'loop_only';
+  let judgment = 'sparse';
+  if (!sparseHistory) {
+    const supportiveEdge = supportiveCount - unsupportiveCount;
+    if (supportiveEdge >= 2 && recentTransitionBias !== 'deteriorating') judgment = 'supportive';
+    else if (unsupportiveCount > supportiveCount || recentTransitionBias === 'deteriorating') judgment = 'weak';
+    else judgment = 'mixed';
+  }
+
+  const clarity = directionalCount > 0
+    ? Math.abs(supportiveCount - unsupportiveCount) / directionalCount
+    : 0;
+  let confidenceLabel = 'low';
+  if (!sparseHistory) {
+    if (historySampleSize >= 24 && transitionSampleSize >= 8 && clarity >= 0.35) confidenceLabel = 'high';
+    else if (historySampleSize >= 10 && transitionSampleSize >= 3) confidenceLabel = 'medium';
+  }
+
+  let summaryLine = 'Loop history sparse; no strong read.';
+  if (!sparseHistory && judgment === 'supportive') {
+    summaryLine = `Loop history supportive, ${confidenceLabel} confidence.`;
+  } else if (!sparseHistory && judgment === 'weak' && recentTransitionBias === 'deteriorating') {
+    summaryLine = `Loop history weak and deteriorating, ${confidenceLabel} confidence.`;
+  } else if (!sparseHistory && judgment === 'weak') {
+    summaryLine = `Loop history weak, ${confidenceLabel} confidence.`;
+  } else if (!sparseHistory && judgment === 'mixed') {
+    summaryLine = `Loop history mixed, ${confidenceLabel} confidence.`;
+  } else if (sparseReason === 'no_loop_history') {
+    summaryLine = 'Loop history sparse; no loop-owned rows yet.';
+  } else if (sparseReason === 'insufficient_loop_observations') {
+    summaryLine = 'Loop history sparse; insufficient loop observations.';
+  } else if (sparseReason === 'insufficient_loop_transitions') {
+    summaryLine = 'Loop history sparse; insufficient loop transitions.';
+  } else if (sparseReason === 'insufficient_supportive_signal') {
+    summaryLine = 'Loop history sparse; insufficient directional signal.';
+  }
+
+  return {
+    modeUsed,
+    judgment,
+    confidenceLabel,
+    historySampleSize,
+    transitionSampleSize,
+    supportiveCount,
+    unsupportiveCount,
+    neutralCount,
+    recentTransitionBias,
+    sparseHistory,
+    sparseReason,
+    summaryLine,
+    advisoryOnly: true,
   };
 }
 
@@ -4853,6 +5026,11 @@ function buildCommandCenterPanels(input = {}) {
     db: liveCandidatePersistenceDb,
     sessionDate: liveCandidateStateMonitor?.sessionDate || null,
   });
+  const liveCandidateHistoryJudgment = buildLiveCandidateHistoryJudgment({
+    liveCandidateStateMonitor,
+    liveCandidateTransitionHistory,
+    liveOpportunityCandidates,
+  });
   const strategyCandidateOpportunityBridge = buildStrategyCandidateBridge({
     opportunityScoring,
     liveOpportunityCandidates,
@@ -5062,6 +5240,10 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateTransitionHistory,
     liveCandidateTransitionHistory
   );
+  todayRecommendation.liveCandidateHistoryJudgment = cloneData(
+    liveCandidateHistoryJudgment,
+    liveCandidateHistoryJudgment
+  );
   todayRecommendation.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -5103,6 +5285,10 @@ function buildCommandCenterPanels(input = {}) {
   decisionBoard.liveCandidateTransitionHistory = cloneData(
     liveCandidateTransitionHistory,
     liveCandidateTransitionHistory
+  );
+  decisionBoard.liveCandidateHistoryJudgment = cloneData(
+    liveCandidateHistoryJudgment,
+    liveCandidateHistoryJudgment
   );
   decisionBoard.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
@@ -5150,6 +5336,7 @@ function buildCommandCenterPanels(input = {}) {
     liveOpportunityCandidates: cloneData(liveOpportunityCandidates, liveOpportunityCandidates),
     liveCandidateStateMonitor: cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor),
     liveCandidateTransitionHistory: cloneData(liveCandidateTransitionHistory, liveCandidateTransitionHistory),
+    liveCandidateHistoryJudgment: cloneData(liveCandidateHistoryJudgment, liveCandidateHistoryJudgment),
     strategyCandidateOpportunityBridge: cloneData(
       strategyCandidateOpportunityBridge,
       strategyCandidateOpportunityBridge
