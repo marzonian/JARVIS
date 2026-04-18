@@ -150,8 +150,14 @@ function run() {
   assert(first.liveCandidateStateMonitor.emptyStateReason === 'no_prior_observations_yet', 'first snapshot should mark no_prior_observations_yet on monitor');
   assert(first.liveCandidateStateMonitor.loopOnlyObservationCount === 0, 'diagnostic-only seed should report zero loop-only observations');
   assert(first.liveCandidateStateMonitor.diagnosticOnlyObservationCount > 0, 'diagnostic-only seed should report diagnostic observations');
+  assert(first.liveCandidateStateMonitor.historyEvaluationMode === 'all_history', 'diagnostic-only seed should fallback monitor interpretation to all_history');
+  assert(first.liveCandidateStateMonitor.historyEvaluationFallbackUsed === true, 'diagnostic-only seed should mark monitor fallback used');
+  assert(String(first.liveCandidateStateMonitor.historyEvaluationFallbackReason || '').includes('loop_history_sparse'), 'diagnostic-only seed should surface monitor fallback reason');
   assert(first.liveCandidateTransitionHistory.loopOnlyTransitionCount === 0, 'diagnostic-only seed should report zero loop-only transitions');
   assert(first.liveCandidateTransitionHistory.diagnosticOnlyTransitionCount === 0, 'diagnostic-only seed should report zero diagnostic transitions before first transition event');
+  assert(first.liveCandidateTransitionHistory.historyEvaluationMode === 'all_history', 'diagnostic-only seed should fallback transition interpretation to all_history');
+  assert(first.liveCandidateTransitionHistory.historyEvaluationFallbackUsed === true, 'diagnostic-only seed should mark transition fallback used');
+  assert(String(first.liveCandidateTransitionHistory.historyEvaluationFallbackReason || '').includes('loop_history_sparse'), 'diagnostic-only seed should surface transition fallback reason');
   assert(first.liveCandidateTransitionHistory.emptyStateReason === 'prior_observations_no_transitions', 'first snapshot history should mark prior_observations_no_transitions after baseline capture');
   const obsAfterFirst = countRows(db, OBS_TABLE);
   const trAfterFirst = countRows(db, TRANS_TABLE);
@@ -300,8 +306,12 @@ function run() {
     assert(mixed.liveCandidateStateMonitor.historyProvenanceClassification === 'mixed_loop_and_endpoint', 'mixed run should classify monitor history as mixed_loop_and_endpoint');
     assert(mixed.liveCandidateStateMonitor.loopOnlyObservationCount > 0, 'mixed run should expose loop-only observation count');
     assert(mixed.liveCandidateStateMonitor.diagnosticOnlyObservationCount > 0, 'mixed run should expose diagnostic-only observation count');
+    assert(mixed.liveCandidateStateMonitor.historyEvaluationMode === 'loop_only', 'mixed run should default monitor interpretation to loop_only');
+    assert(mixed.liveCandidateStateMonitor.historyEvaluationFallbackUsed === false, 'mixed run should not fallback monitor interpretation when loop-only is sufficient');
     assert(mixed.liveCandidateTransitionHistory.loopOnlyTransitionCount > 0, 'mixed run should expose loop-only transition count');
     assert(mixed.liveCandidateTransitionHistory.diagnosticOnlyTransitionCount > 0, 'mixed run should expose diagnostic-only transition count');
+    assert(mixed.liveCandidateTransitionHistory.historyEvaluationMode === 'loop_only', 'mixed run should default transition interpretation to loop_only');
+    assert(mixed.liveCandidateTransitionHistory.historyEvaluationFallbackUsed === false, 'mixed run should not fallback transition interpretation when loop-only is sufficient');
     assert(
       String(mixed.liveCandidateTransitionHistory.loopOnlyLatestTransition?.transitionWriteSource || '') === LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
       'loop-only latest transition should come from loop_auto rows'

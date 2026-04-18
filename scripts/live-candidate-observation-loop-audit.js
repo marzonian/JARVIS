@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
 
+const Database = require('better-sqlite3');
 const { startAuditServer } = require('../tests/jarvis-audit-common');
+const {
+  buildStrategyLayerSnapshot,
+  buildCommandCenterPanels,
+  LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+} = require('../server/jarvis-core/strategy-layers');
 
 const TIMEOUT_MS = 180000;
 
@@ -25,6 +31,83 @@ function pullStatus(payload = {}) {
     && typeof payload.liveCandidateObservationLoopStatus === 'object'
     ? payload.liveCandidateObservationLoopStatus
     : {};
+}
+
+function candle(date, time, open, high, low, close, volume = 1000) {
+  return { timestamp: `${date} ${time}`, time, open, high, low, close, volume };
+}
+
+function buildSession(date) {
+  return [
+    candle(date, '09:30', 22100, 22120, 22095, 22110),
+    candle(date, '09:35', 22110, 22128, 22106, 22122),
+    candle(date, '09:40', 22122, 22134, 22112, 22116),
+    candle(date, '09:45', 22116, 22132, 22114, 22130),
+    candle(date, '09:50', 22130, 22145, 22124, 22140),
+    candle(date, '09:55', 22140, 22155, 22134, 22148),
+    candle(date, '10:00', 22148, 22163, 22143, 22158),
+    candle(date, '10:05', 22158, 22175, 22152, 22170),
+    candle(date, '10:10', 22170, 22184, 22164, 22180),
+    candle(date, '10:15', 22180, 22195, 22172, 22190),
+  ];
+}
+
+function buildStrategyLayers() {
+  const sessions = {
+    '2026-04-10': buildSession('2026-04-10'),
+    '2026-04-13': buildSession('2026-04-13'),
+    '2026-04-14': buildSession('2026-04-14'),
+    '2026-04-15': buildSession('2026-04-15'),
+    '2026-04-16': buildSession('2026-04-16'),
+  };
+  return buildStrategyLayerSnapshot(sessions, {
+    includeDiscovery: false,
+    context: {
+      nowEt: '2026-04-16 10:10',
+      sessionPhase: 'entry_window',
+      regime: 'ranging|extreme|wide',
+      trend: 'uptrend',
+      volatility: 'high',
+      orbRangeTicks: 160,
+    },
+  });
+}
+
+function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandidateState = true, observationWriteSource = LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC } = {}) {
+  return {
+    strategyLayers: buildStrategyLayers(),
+    liveCandidateStateMonitorState: { candidateStates: Object.create(null), observationHistoryByCandidate: Object.create(null), transitionRows: [] },
+    db,
+    persistLiveCandidateState,
+    observationWriteSource,
+    decision: {
+      signal: 'WAIT',
+      signalLabel: 'WAIT',
+      blockers: [],
+      topSetups: [{
+        setupId: 'orb_retest_long',
+        name: 'ORB Retest Long',
+        probability: 0.41,
+        expectedValueDollars: -20,
+        annualizedTrades: 120,
+      }],
+    },
+    latestSession: { no_trade_reason: 'no_confirmation' },
+    todayContext: {
+      nowEt,
+      sessionPhase: 'entry_window',
+      timeBucket: 'entry_window',
+      regime: 'ranging|extreme|wide',
+      trend: 'uptrend',
+      volatility: 'high',
+      orbRangeTicks: 160,
+    },
+    commandSnapshot: {
+      elite: {
+        winModel: { point: 56.1, confidencePct: 66 },
+      },
+    },
+  };
 }
 
 (async () => {
@@ -74,6 +157,26 @@ function pullStatus(payload = {}) {
     const deltaWrites = Number(secondStatus.writesThisSession || 0) - Number(firstStatus.writesThisSession || 0);
     const deltaSuppressed = Number(secondStatus.suppressedWritesThisSession || 0) - Number(firstStatus.suppressedWritesThisSession || 0);
     const immediateReadOnlyDelta = Number(thirdMonitor.durableObservationCount || 0) - Number(secondMonitor.durableObservationCount || 0);
+    const syntheticDb = new Database(':memory:');
+    const syntheticSeed = buildCommandCenterPanels(buildSyntheticInput({
+      db: syntheticDb,
+      nowEt: '2026-04-16 10:10',
+      persistLiveCandidateState: true,
+      observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+    }));
+    const syntheticFallback = buildCommandCenterPanels(buildSyntheticInput({
+      db: syntheticDb,
+      nowEt: '2026-04-16 10:11',
+      persistLiveCandidateState: false,
+      observationWriteSource: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
+    }));
+    const syntheticFallbackMonitor = syntheticFallback?.liveCandidateStateMonitor && typeof syntheticFallback.liveCandidateStateMonitor === 'object'
+      ? syntheticFallback.liveCandidateStateMonitor
+      : {};
+    const syntheticFallbackHistory = syntheticFallback?.liveCandidateTransitionHistory && typeof syntheticFallback.liveCandidateTransitionHistory === 'object'
+      ? syntheticFallback.liveCandidateTransitionHistory
+      : {};
+    syntheticDb.close();
 
     console.log(JSON.stringify({
       status: 'ok',
@@ -174,7 +277,25 @@ function pullStatus(payload = {}) {
         observationWriteSource: diagnosticMonitor.observationWriteSource || null,
         observationWritesThisSnapshot: Number(diagnosticMonitor.observationWritesThisSnapshot || 0),
         durableObservationCount: diagnosticMonitor.durableObservationCount ?? null,
-        durableTransitionCount: diagnosticMonitor.durableTransitionCount ?? null,
+          durableTransitionCount: diagnosticMonitor.durableTransitionCount ?? null,
+      },
+      syntheticFallbackFixture: {
+        seededWithDiagnosticOnlyRows: {
+          monitorMode: syntheticSeed?.liveCandidateStateMonitor?.historyEvaluationMode || null,
+          monitorFallbackUsed: syntheticSeed?.liveCandidateStateMonitor?.historyEvaluationFallbackUsed === true,
+          transitionMode: syntheticSeed?.liveCandidateTransitionHistory?.historyEvaluationMode || null,
+          transitionFallbackUsed: syntheticSeed?.liveCandidateTransitionHistory?.historyEvaluationFallbackUsed === true,
+        },
+        readOnlyInterpretation: {
+          monitorMode: syntheticFallbackMonitor.historyEvaluationMode || null,
+          monitorFallbackUsed: syntheticFallbackMonitor.historyEvaluationFallbackUsed === true,
+          monitorFallbackReason: syntheticFallbackMonitor.historyEvaluationFallbackReason || null,
+          monitorFallbackMode: syntheticFallbackMonitor.historyEvaluationFallbackMode || null,
+          transitionMode: syntheticFallbackHistory.historyEvaluationMode || null,
+          transitionFallbackUsed: syntheticFallbackHistory.historyEvaluationFallbackUsed === true,
+          transitionFallbackReason: syntheticFallbackHistory.historyEvaluationFallbackReason || null,
+          transitionFallbackMode: syntheticFallbackHistory.historyEvaluationFallbackMode || null,
+        },
       },
       delta: {
         pollsThisSession: deltaPolls,
@@ -188,6 +309,7 @@ function pullStatus(payload = {}) {
         endpointReadOnlyDefault: secondMonitor.responseReadOnly === true && Number(secondMonitor.observationWritesThisSnapshot || 0) === 0,
         endpointReadNoInflationOnImmediateRepeat: immediateReadOnlyDelta === 0,
         endpointDiagnosticWriteExplicitOnly: diagnosticMonitor.responseReadOnly === false && String(diagnosticMonitor.observationWriteSource || '') === 'endpoint_diagnostic',
+        defaultInterpretationModeLoopOnly: String(secondMonitor.historyEvaluationMode || '') === 'loop_only',
         loopOnlyAndMixedSurfaced: typeof secondMonitor.loopOnlyObservationCount === 'number'
           && typeof secondMonitor.diagnosticOnlyObservationCount === 'number'
           && typeof secondMonitor.durableObservationCount === 'number',
@@ -198,6 +320,13 @@ function pullStatus(payload = {}) {
           ? secondMonitor.diagnosticOnlyRecentObservations.every((row) => String(row?.observationWriteSource || '') !== 'loop_auto')
           : true,
         historyTrustabilityExplicit: typeof secondMonitor.historyEvaluationMode === 'string' && secondMonitor.historyEvaluationMode.length > 0,
+        fallbackExplicitWhenTriggered:
+          syntheticFallbackMonitor.historyEvaluationFallbackUsed === true
+          && String(syntheticFallbackMonitor.historyEvaluationMode || '') !== 'loop_only'
+          && String(syntheticFallbackMonitor.historyEvaluationFallbackReason || '').length > 0
+          && syntheticFallbackHistory.historyEvaluationFallbackUsed === true
+          && String(syntheticFallbackHistory.historyEvaluationMode || '') !== 'loop_only'
+          && String(syntheticFallbackHistory.historyEvaluationFallbackReason || '').length > 0,
         staleVsUnchangedSurfaced: typeof secondStatus.lastStateClassification === 'string' && secondStatus.lastStateClassification.length > 0,
       },
       summaryLine: `Loop delta polls ${deltaPolls}, evaluated ${deltaEvaluated}, writes ${deltaWrites}, suppressed ${deltaSuppressed}; immediate read-only delta ${immediateReadOnlyDelta}.`,

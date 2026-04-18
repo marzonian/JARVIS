@@ -81,6 +81,15 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(typeof snapshot.liveCandidateStateMonitor.diagnosticOnlyHistorySummaryLine === 'string' && snapshot.liveCandidateStateMonitor.diagnosticOnlyHistorySummaryLine.length > 0, `${label} liveCandidateStateMonitor.diagnosticOnlyHistorySummaryLine missing`, { snapshot });
   assert(snapshot.liveCandidateStateMonitor.historyViews && typeof snapshot.liveCandidateStateMonitor.historyViews === 'object', `${label} liveCandidateStateMonitor.historyViews missing`, { snapshot });
   assert(typeof snapshot.liveCandidateStateMonitor.historyEvaluationMode === 'string' && snapshot.liveCandidateStateMonitor.historyEvaluationMode.length > 0, `${label} liveCandidateStateMonitor.historyEvaluationMode missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyEvaluationFallbackUsed'), `${label} liveCandidateStateMonitor.historyEvaluationFallbackUsed missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyEvaluationFallbackReason'), `${label} liveCandidateStateMonitor.historyEvaluationFallbackReason missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyEvaluationFallbackMode'), `${label} liveCandidateStateMonitor.historyEvaluationFallbackMode missing`, { snapshot });
+  assert(Array.isArray(snapshot.liveCandidateStateMonitor.historyEvaluationReferenceModes), `${label} liveCandidateStateMonitor.historyEvaluationReferenceModes missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateStateMonitor, 'historyEvaluationLatestTransition'), `${label} liveCandidateStateMonitor.historyEvaluationLatestTransition missing`, { snapshot });
+  assert(['loop_only', 'all_history', 'diagnostic_only'].includes(String(snapshot.liveCandidateStateMonitor.historyEvaluationMode || '')), `${label} liveCandidateStateMonitor.historyEvaluationMode invalid`, { snapshot });
+  if (String(snapshot.liveCandidateStateMonitor.historyEvaluationMode || '') !== 'loop_only') {
+    assert(snapshot.liveCandidateStateMonitor.historyEvaluationFallbackUsed === true, `${label} liveCandidateStateMonitor must mark fallback when mode is not loop_only`, { snapshot });
+  }
   assert(typeof snapshot.liveCandidateStateMonitor.historyEvaluationSummaryLine === 'string' && snapshot.liveCandidateStateMonitor.historyEvaluationSummaryLine.length > 0, `${label} liveCandidateStateMonitor.historyEvaluationSummaryLine missing`, { snapshot });
   assert(typeof snapshot.liveCandidateStateMonitor.summaryLine === 'string' && snapshot.liveCandidateStateMonitor.summaryLine.length > 0, `${label} liveCandidateStateMonitor.summaryLine missing`, { snapshot });
   assert(snapshot.liveCandidateTransitionHistory && typeof snapshot.liveCandidateTransitionHistory === 'object', `${label} liveCandidateTransitionHistory missing`, { snapshot });
@@ -97,6 +106,15 @@ function assertStrategySnapshotShape(label, snapshot) {
   assert(typeof snapshot.liveCandidateTransitionHistory.diagnosticOnlyHistorySummaryLine === 'string' && snapshot.liveCandidateTransitionHistory.diagnosticOnlyHistorySummaryLine.length > 0, `${label} liveCandidateTransitionHistory.diagnosticOnlyHistorySummaryLine missing`, { snapshot });
   assert(snapshot.liveCandidateTransitionHistory.historyViews && typeof snapshot.liveCandidateTransitionHistory.historyViews === 'object', `${label} liveCandidateTransitionHistory.historyViews missing`, { snapshot });
   assert(typeof snapshot.liveCandidateTransitionHistory.historyEvaluationMode === 'string' && snapshot.liveCandidateTransitionHistory.historyEvaluationMode.length > 0, `${label} liveCandidateTransitionHistory.historyEvaluationMode missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyEvaluationFallbackUsed'), `${label} liveCandidateTransitionHistory.historyEvaluationFallbackUsed missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyEvaluationFallbackReason'), `${label} liveCandidateTransitionHistory.historyEvaluationFallbackReason missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyEvaluationFallbackMode'), `${label} liveCandidateTransitionHistory.historyEvaluationFallbackMode missing`, { snapshot });
+  assert(Array.isArray(snapshot.liveCandidateTransitionHistory.historyEvaluationReferenceModes), `${label} liveCandidateTransitionHistory.historyEvaluationReferenceModes missing`, { snapshot });
+  assert(Object.prototype.hasOwnProperty.call(snapshot.liveCandidateTransitionHistory, 'historyEvaluationLatestTransition'), `${label} liveCandidateTransitionHistory.historyEvaluationLatestTransition missing`, { snapshot });
+  assert(['loop_only', 'all_history', 'diagnostic_only'].includes(String(snapshot.liveCandidateTransitionHistory.historyEvaluationMode || '')), `${label} liveCandidateTransitionHistory.historyEvaluationMode invalid`, { snapshot });
+  if (String(snapshot.liveCandidateTransitionHistory.historyEvaluationMode || '') !== 'loop_only') {
+    assert(snapshot.liveCandidateTransitionHistory.historyEvaluationFallbackUsed === true, `${label} liveCandidateTransitionHistory must mark fallback when mode is not loop_only`, { snapshot });
+  }
   assert(typeof snapshot.liveCandidateTransitionHistory.historyEvaluationSummaryLine === 'string' && snapshot.liveCandidateTransitionHistory.historyEvaluationSummaryLine.length > 0, `${label} liveCandidateTransitionHistory.historyEvaluationSummaryLine missing`, { snapshot });
   assert(typeof snapshot.liveCandidateTransitionHistory.summaryLine === 'string' && snapshot.liveCandidateTransitionHistory.summaryLine.length > 0, `${label} liveCandidateTransitionHistory.summaryLine missing`, { snapshot });
   assert(snapshot.liveCandidateObservationLoopStatus && typeof snapshot.liveCandidateObservationLoopStatus === 'object', `${label} liveCandidateObservationLoopStatus missing`, { snapshot });
