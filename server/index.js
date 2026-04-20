@@ -35394,6 +35394,26 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
   const liveCandidateHistoryConfirmationGuideAudit = liveCandidateHistoryConfirmationGuideAuditSource
     ? cloneData(liveCandidateHistoryConfirmationGuideAuditSource, liveCandidateHistoryConfirmationGuideAuditSource)
     : null;
+  const liveCandidateTradeTriggerCardSource = (
+    commandCenter?.liveCandidateTradeTriggerCard && typeof commandCenter.liveCandidateTradeTriggerCard === 'object'
+      ? commandCenter.liveCandidateTradeTriggerCard
+      : (strategyLayers?.liveCandidateTradeTriggerCard && typeof strategyLayers.liveCandidateTradeTriggerCard === 'object'
+        ? strategyLayers.liveCandidateTradeTriggerCard
+        : null)
+  );
+  const liveCandidateTradeTriggerCard = liveCandidateTradeTriggerCardSource
+    ? cloneData(liveCandidateTradeTriggerCardSource, liveCandidateTradeTriggerCardSource)
+    : null;
+  const liveCandidateTradeTriggerCardAuditSource = (
+    commandCenter?.liveCandidateTradeTriggerCardAudit && typeof commandCenter.liveCandidateTradeTriggerCardAudit === 'object'
+      ? commandCenter.liveCandidateTradeTriggerCardAudit
+      : (strategyLayers?.liveCandidateTradeTriggerCardAudit && typeof strategyLayers.liveCandidateTradeTriggerCardAudit === 'object'
+        ? strategyLayers.liveCandidateTradeTriggerCardAudit
+        : null)
+  );
+  const liveCandidateTradeTriggerCardAudit = liveCandidateTradeTriggerCardAuditSource
+    ? cloneData(liveCandidateTradeTriggerCardAuditSource, liveCandidateTradeTriggerCardAuditSource)
+    : null;
   const liveCandidateObservationLoopStatusSource = (
     commandCenter?.liveCandidateObservationLoopStatus && typeof commandCenter.liveCandidateObservationLoopStatus === 'object'
       ? commandCenter.liveCandidateObservationLoopStatus
@@ -35490,6 +35510,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     liveCandidateHistoryActionInterpretationAudit,
     liveCandidateHistoryConfirmationGuide,
     liveCandidateHistoryConfirmationGuideAudit,
+    liveCandidateTradeTriggerCard,
+    liveCandidateTradeTriggerCardAudit,
     liveCandidateObservationLoopStatus,
     liveCandidateObservationLoopStatusLine,
     liveCandidateObservationRenderMode,
@@ -35549,6 +35571,14 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       liveCandidateHistoryConfirmationGuideAudit: cloneData(
         liveCandidateHistoryConfirmationGuideAudit,
         liveCandidateHistoryConfirmationGuideAudit
+      ),
+      liveCandidateTradeTriggerCard: cloneData(
+        liveCandidateTradeTriggerCard,
+        liveCandidateTradeTriggerCard
+      ),
+      liveCandidateTradeTriggerCardAudit: cloneData(
+        liveCandidateTradeTriggerCardAudit,
+        liveCandidateTradeTriggerCardAudit
       ),
       liveCandidateObservationLoopStatus: cloneData(liveCandidateObservationLoopStatus, liveCandidateObservationLoopStatus),
       liveCandidateObservationLoopStatusLine,
@@ -35614,6 +35644,14 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       liveCandidateHistoryConfirmationGuideAudit: cloneData(
         liveCandidateHistoryConfirmationGuideAudit,
         liveCandidateHistoryConfirmationGuideAudit
+      ),
+      liveCandidateTradeTriggerCard: cloneData(
+        liveCandidateTradeTriggerCard,
+        liveCandidateTradeTriggerCard
+      ),
+      liveCandidateTradeTriggerCardAudit: cloneData(
+        liveCandidateTradeTriggerCardAudit,
+        liveCandidateTradeTriggerCardAudit
       ),
       liveCandidateObservationLoopStatus: cloneData(liveCandidateObservationLoopStatus, liveCandidateObservationLoopStatus),
       liveCandidateObservationLoopStatusLine,
@@ -35703,6 +35741,14 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
   commandCenter.liveCandidateHistoryConfirmationGuideAudit = cloneData(
     strategyLayerSnapshot.liveCandidateHistoryConfirmationGuideAudit,
     strategyLayerSnapshot.liveCandidateHistoryConfirmationGuideAudit
+  );
+  commandCenter.liveCandidateTradeTriggerCard = cloneData(
+    strategyLayerSnapshot.liveCandidateTradeTriggerCard,
+    strategyLayerSnapshot.liveCandidateTradeTriggerCard
+  );
+  commandCenter.liveCandidateTradeTriggerCardAudit = cloneData(
+    strategyLayerSnapshot.liveCandidateTradeTriggerCardAudit,
+    strategyLayerSnapshot.liveCandidateTradeTriggerCardAudit
   );
   commandCenter.liveCandidateObservationLoopStatus = cloneData(
     strategyLayerSnapshot.liveCandidateObservationLoopStatus,
@@ -35864,6 +35910,14 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
         strategyLayerSnapshot.liveCandidateHistoryConfirmationGuideAudit,
         strategyLayerSnapshot.liveCandidateHistoryConfirmationGuideAudit
       );
+      recommendationPerformance.liveCandidateTradeTriggerCard = cloneData(
+        strategyLayerSnapshot.liveCandidateTradeTriggerCard,
+        strategyLayerSnapshot.liveCandidateTradeTriggerCard
+      );
+      recommendationPerformance.liveCandidateTradeTriggerCardAudit = cloneData(
+        strategyLayerSnapshot.liveCandidateTradeTriggerCardAudit,
+        strategyLayerSnapshot.liveCandidateTradeTriggerCardAudit
+      );
       recommendationPerformance.liveCandidateObservationLoopStatus = cloneData(
         strategyLayerSnapshot.liveCandidateObservationLoopStatus,
         strategyLayerSnapshot.liveCandidateObservationLoopStatus
@@ -35928,6 +35982,8 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       liveCandidateHistoryActionInterpretationAudit: strategyLayerSnapshot?.liveCandidateHistoryActionInterpretationAudit || null,
       liveCandidateHistoryConfirmationGuide: strategyLayerSnapshot?.liveCandidateHistoryConfirmationGuide || null,
       liveCandidateHistoryConfirmationGuideAudit: strategyLayerSnapshot?.liveCandidateHistoryConfirmationGuideAudit || null,
+      liveCandidateTradeTriggerCard: strategyLayerSnapshot?.liveCandidateTradeTriggerCard || null,
+      liveCandidateTradeTriggerCardAudit: strategyLayerSnapshot?.liveCandidateTradeTriggerCardAudit || null,
       liveCandidateObservationLoopStatus: strategyLayerSnapshot?.liveCandidateObservationLoopStatus || null,
       liveCandidateObservationLoopStatusLine: strategyLayerSnapshot?.liveCandidateObservationLoopStatusLine || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
@@ -36516,6 +36572,8 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       liveCandidateHistoryActionInterpretationAudit: strategyLayerSnapshot?.liveCandidateHistoryActionInterpretationAudit || null,
       liveCandidateHistoryConfirmationGuide: strategyLayerSnapshot?.liveCandidateHistoryConfirmationGuide || null,
       liveCandidateHistoryConfirmationGuideAudit: strategyLayerSnapshot?.liveCandidateHistoryConfirmationGuideAudit || null,
+      liveCandidateTradeTriggerCard: strategyLayerSnapshot?.liveCandidateTradeTriggerCard || null,
+      liveCandidateTradeTriggerCardAudit: strategyLayerSnapshot?.liveCandidateTradeTriggerCardAudit || null,
       liveCandidateObservationLoopStatus: strategyLayerSnapshot?.liveCandidateObservationLoopStatus || null,
       liveCandidateObservationLoopStatusLine: strategyLayerSnapshot?.liveCandidateObservationLoopStatusLine || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,

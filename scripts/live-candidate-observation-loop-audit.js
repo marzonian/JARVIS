@@ -172,6 +172,14 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
       && typeof first.liveCandidateHistoryConfirmationGuideAudit === 'object'
       ? first.liveCandidateHistoryConfirmationGuideAudit
       : {};
+    const firstTradeTriggerCard = first?.liveCandidateTradeTriggerCard
+      && typeof first.liveCandidateTradeTriggerCard === 'object'
+      ? first.liveCandidateTradeTriggerCard
+      : {};
+    const firstTradeTriggerCardAudit = first?.liveCandidateTradeTriggerCardAudit
+      && typeof first.liveCandidateTradeTriggerCardAudit === 'object'
+      ? first.liveCandidateTradeTriggerCardAudit
+      : {};
     await sleep(3600);
     const second = await getJson(server.baseUrl, commandCenterQuery);
     const secondStatus = pullStatus(second);
@@ -206,6 +214,20 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
     const secondConfirmationGuideAudit = second?.liveCandidateHistoryConfirmationGuideAudit
       && typeof second.liveCandidateHistoryConfirmationGuideAudit === 'object'
       ? second.liveCandidateHistoryConfirmationGuideAudit
+      : {};
+    const secondTradeTriggerCard = second?.liveCandidateTradeTriggerCard
+      && typeof second.liveCandidateTradeTriggerCard === 'object'
+      ? second.liveCandidateTradeTriggerCard
+      : {};
+    const secondTradeTriggerCardAudit = second?.liveCandidateTradeTriggerCardAudit
+      && typeof second.liveCandidateTradeTriggerCardAudit === 'object'
+      ? second.liveCandidateTradeTriggerCardAudit
+      : {};
+    const secondTodayRecommendation = second?.todayRecommendation && typeof second.todayRecommendation === 'object'
+      ? second.todayRecommendation
+      : {};
+    const secondDecisionBoard = second?.decisionBoard && typeof second.decisionBoard === 'object'
+      ? second.decisionBoard
       : {};
     const third = await getJson(server.baseUrl, commandCenterQuery);
     const thirdMonitor = third?.liveCandidateStateMonitor && typeof third.liveCandidateStateMonitor === 'object'
@@ -398,6 +420,35 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
             : [],
           summaryLine: firstConfirmationGuideAudit.summaryLine || null,
         },
+        tradeTriggerCard: {
+          modeUsed: firstTradeTriggerCard.modeUsed || null,
+          currentState: firstTradeTriggerCard.currentState || null,
+          confirmationState: firstTradeTriggerCard.confirmationState || null,
+          triggerCount: Number(firstTradeTriggerCard.triggerCount || 0),
+          failureCount: Number(firstTradeTriggerCard.failureCount || 0),
+          missingTriggers: Array.isArray(firstTradeTriggerCard.missingTriggers) ? firstTradeTriggerCard.missingTriggers : [],
+          activeFailures: Array.isArray(firstTradeTriggerCard.activeFailures) ? firstTradeTriggerCard.activeFailures : [],
+          nextUpgradeState: firstTradeTriggerCard.nextUpgradeState || null,
+          invalidationState: firstTradeTriggerCard.invalidationState || null,
+          riskBucket: firstTradeTriggerCard.riskBucket || null,
+          sizeGuidance: firstTradeTriggerCard.sizeGuidance || null,
+          operatorSummaryLine: firstTradeTriggerCard.operatorSummaryLine || null,
+        },
+        tradeTriggerCardAudit: {
+          ruleUsed: firstTradeTriggerCardAudit.ruleUsed || null,
+          inputsUsed: firstTradeTriggerCardAudit.inputsUsed && typeof firstTradeTriggerCardAudit.inputsUsed === 'object'
+            ? firstTradeTriggerCardAudit.inputsUsed
+            : {},
+          triggerBreakdown: firstTradeTriggerCardAudit.triggerBreakdown && typeof firstTradeTriggerCardAudit.triggerBreakdown === 'object'
+            ? firstTradeTriggerCardAudit.triggerBreakdown
+            : {},
+          failureBreakdown: firstTradeTriggerCardAudit.failureBreakdown && typeof firstTradeTriggerCardAudit.failureBreakdown === 'object'
+            ? firstTradeTriggerCardAudit.failureBreakdown
+            : {},
+          stateUpgradePath: firstTradeTriggerCardAudit.stateUpgradePath || null,
+          stateInvalidationPath: firstTradeTriggerCardAudit.stateInvalidationPath || null,
+          summaryLine: firstTradeTriggerCardAudit.summaryLine || null,
+        },
       },
       second: {
         loop: {
@@ -559,6 +610,41 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
             : [],
           summaryLine: secondConfirmationGuideAudit.summaryLine || null,
         },
+        tradeTriggerCard: {
+          modeUsed: secondTradeTriggerCard.modeUsed || null,
+          currentState: secondTradeTriggerCard.currentState || null,
+          confirmationState: secondTradeTriggerCard.confirmationState || null,
+          triggerCount: Number(secondTradeTriggerCard.triggerCount || 0),
+          failureCount: Number(secondTradeTriggerCard.failureCount || 0),
+          missingTriggers: Array.isArray(secondTradeTriggerCard.missingTriggers) ? secondTradeTriggerCard.missingTriggers : [],
+          activeFailures: Array.isArray(secondTradeTriggerCard.activeFailures) ? secondTradeTriggerCard.activeFailures : [],
+          nextUpgradeState: secondTradeTriggerCard.nextUpgradeState || null,
+          invalidationState: secondTradeTriggerCard.invalidationState || null,
+          riskBucket: secondTradeTriggerCard.riskBucket || null,
+          sizeGuidance: secondTradeTriggerCard.sizeGuidance || null,
+          operatorSummaryLine: secondTradeTriggerCard.operatorSummaryLine || null,
+        },
+        tradeTriggerCardAudit: {
+          ruleUsed: secondTradeTriggerCardAudit.ruleUsed || null,
+          inputsUsed: secondTradeTriggerCardAudit.inputsUsed && typeof secondTradeTriggerCardAudit.inputsUsed === 'object'
+            ? secondTradeTriggerCardAudit.inputsUsed
+            : {},
+          triggerBreakdown: secondTradeTriggerCardAudit.triggerBreakdown && typeof secondTradeTriggerCardAudit.triggerBreakdown === 'object'
+            ? secondTradeTriggerCardAudit.triggerBreakdown
+            : {},
+          failureBreakdown: secondTradeTriggerCardAudit.failureBreakdown && typeof secondTradeTriggerCardAudit.failureBreakdown === 'object'
+            ? secondTradeTriggerCardAudit.failureBreakdown
+            : {},
+          stateUpgradePath: secondTradeTriggerCardAudit.stateUpgradePath || null,
+          stateInvalidationPath: secondTradeTriggerCardAudit.stateInvalidationPath || null,
+          summaryLine: secondTradeTriggerCardAudit.summaryLine || null,
+        },
+        tradeTriggerMirrorParity: {
+          todayRecommendationCurrentState: secondTodayRecommendation?.liveCandidateTradeTriggerCard?.currentState || null,
+          decisionBoardCurrentState: secondDecisionBoard?.liveCandidateTradeTriggerCard?.currentState || null,
+          todayRecommendationOperatorSummaryLine: secondTodayRecommendation?.liveCandidateTradeTriggerCard?.operatorSummaryLine || null,
+          decisionBoardOperatorSummaryLine: secondDecisionBoard?.liveCandidateTradeTriggerCard?.operatorSummaryLine || null,
+        },
       },
       thirdImmediateRead: {
         monitor: {
@@ -684,6 +770,24 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
             && typeof secondConfirmationGuideAudit.ruleUsed === 'string'
             && secondConfirmationGuideAudit.ruleUsed.length > 0
           ),
+        historyTradeTriggerCardVisible:
+          Boolean(
+            secondTradeTriggerCard
+            && typeof secondTradeTriggerCard === 'object'
+            && typeof secondTradeTriggerCard.currentState === 'string'
+            && secondTradeTriggerCard.currentState.length > 0
+          ),
+        historyTradeTriggerCardAuditVisible:
+          Boolean(
+            secondTradeTriggerCardAudit
+            && typeof secondTradeTriggerCardAudit === 'object'
+            && typeof secondTradeTriggerCardAudit.ruleUsed === 'string'
+            && secondTradeTriggerCardAudit.ruleUsed.length > 0
+          ),
+        historyTradeTriggerMirrorParity:
+          String(secondTradeTriggerCard?.currentState || '') !== ''
+          && String(secondTradeTriggerCard?.currentState || '') === String(secondTodayRecommendation?.liveCandidateTradeTriggerCard?.currentState || '')
+          && String(secondTradeTriggerCard?.currentState || '') === String(secondDecisionBoard?.liveCandidateTradeTriggerCard?.currentState || ''),
         fallbackExplicitWhenTriggered:
           syntheticFallbackMonitor.historyEvaluationFallbackUsed === true
           && String(syntheticFallbackMonitor.historyEvaluationMode || '') !== 'loop_only'

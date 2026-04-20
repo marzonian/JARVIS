@@ -3154,6 +3154,340 @@ function buildLiveCandidateHistoryConfirmationGuideAudit(input = {}) {
   };
 }
 
+function buildLiveCandidateTradeTriggerCard(input = {}) {
+  const actionInterpretation = input?.liveCandidateHistoryActionInterpretation
+    && typeof input.liveCandidateHistoryActionInterpretation === 'object'
+    ? input.liveCandidateHistoryActionInterpretation
+    : {};
+  const confirmationGuide = input?.liveCandidateHistoryConfirmationGuide
+    && typeof input.liveCandidateHistoryConfirmationGuide === 'object'
+    ? input.liveCandidateHistoryConfirmationGuide
+    : {};
+  const liveCandidateHistoryJudgment = input?.liveCandidateHistoryJudgment
+    && typeof input.liveCandidateHistoryJudgment === 'object'
+    ? input.liveCandidateHistoryJudgment
+    : {};
+  const liveOpportunityCandidates = input?.liveOpportunityCandidates
+    && typeof input.liveOpportunityCandidates === 'object'
+    ? input.liveOpportunityCandidates
+    : {};
+  const liveCandidateStateMonitor = input?.liveCandidateStateMonitor
+    && typeof input.liveCandidateStateMonitor === 'object'
+    ? input.liveCandidateStateMonitor
+    : {};
+  const liveCandidateTransitionHistory = input?.liveCandidateTransitionHistory
+    && typeof input.liveCandidateTransitionHistory === 'object'
+    ? input.liveCandidateTransitionHistory
+    : {};
+  const shadowMockTradeDecision = input?.shadowMockTradeDecision
+    && typeof input.shadowMockTradeDecision === 'object'
+    ? input.shadowMockTradeDecision
+    : {};
+  const recommendationBasis = input?.recommendationBasis
+    && typeof input.recommendationBasis === 'object'
+    ? input.recommendationBasis
+    : {};
+
+  const topCandidateActionableNow = liveOpportunityCandidates?.topCandidateActionableNow
+    && typeof liveOpportunityCandidates.topCandidateActionableNow === 'object'
+    ? liveOpportunityCandidates.topCandidateActionableNow
+    : null;
+  const topCandidateOverall = liveOpportunityCandidates?.topCandidateOverall
+    && typeof liveOpportunityCandidates.topCandidateOverall === 'object'
+    ? liveOpportunityCandidates.topCandidateOverall
+    : null;
+  const activeCandidate = topCandidateActionableNow || topCandidateOverall || null;
+  const triggerRows = Array.isArray(confirmationGuide?.confirmationTriggers)
+    ? confirmationGuide.confirmationTriggers
+    : [];
+  const failureRows = Array.isArray(confirmationGuide?.confirmationFailures)
+    ? confirmationGuide.confirmationFailures
+    : [];
+  const metTriggers = triggerRows.filter((row) => row?.met === true).map((row) => ({
+    code: String(row?.code || '').trim() || null,
+    detail: String(row?.detail || '').trim() || null,
+    source: String(row?.source || '').trim() || null,
+    critical: row?.critical === true,
+  }));
+  const missingTriggers = triggerRows.filter((row) => row?.met !== true).map((row) => ({
+    code: String(row?.code || '').trim() || null,
+    detail: String(row?.detail || '').trim() || null,
+    source: String(row?.source || '').trim() || null,
+    critical: row?.critical === true,
+  }));
+  const activeFailures = failureRows.filter((row) => row?.active === true).map((row) => ({
+    code: String(row?.code || '').trim() || null,
+    detail: String(row?.detail || '').trim() || null,
+    source: String(row?.source || '').trim() || null,
+    critical: row?.critical === true,
+  }));
+  const activeFailureCodes = activeFailures.map((row) => String(row?.code || '').trim()).filter(Boolean);
+  const metTriggerCodes = metTriggers.map((row) => String(row?.code || '').trim()).filter(Boolean);
+  const missingTriggerCodes = missingTriggers.map((row) => String(row?.code || '').trim()).filter(Boolean);
+  const currentActionStance = String(actionInterpretation?.actionStance || 'neutral_wait').trim().toLowerCase() || 'neutral_wait';
+  const historyJudgment = String(liveCandidateHistoryJudgment?.judgment || 'sparse').trim().toLowerCase() || 'sparse';
+  const historyConfidenceLabel = String(liveCandidateHistoryJudgment?.confidenceLabel || 'low').trim().toLowerCase() || 'low';
+  const confirmationState = String(confirmationGuide?.confirmationState || 'waiting_for_confirmation').trim().toLowerCase() || 'waiting_for_confirmation';
+  const directionVsTransitionTension = liveCandidateHistoryJudgment?.directionVsTransitionTension === true;
+  const recentTransitionBias = String(liveCandidateHistoryJudgment?.recentTransitionBias || 'insufficient_history').trim().toLowerCase() || 'insufficient_history';
+  const candidateStatus = String(
+    activeCandidate?.candidateStatus
+    || liveCandidateStateMonitor?.currentStatus
+    || ''
+  ).trim().toLowerCase() || null;
+  const strategyKey = String(
+    activeCandidate?.strategyKey
+    || recommendationBasis?.recommendedStrategyKey
+    || shadowMockTradeDecision?.strategyKey
+    || ''
+  ).trim() || null;
+  const strategyLabel = String(
+    activeCandidate?.strategyName
+    || recommendationBasis?.recommendedStrategyName
+    || strategyKey
+    || 'Unknown strategy'
+  ).trim() || 'Unknown strategy';
+  const setupLabel = String(
+    activeCandidate?.triggerStructure?.topSetupName
+    || activeCandidate?.candidateType
+    || activeCandidate?.candidateSummaryLine
+    || 'Setup context unavailable'
+  ).trim() || 'Setup context unavailable';
+  const confirmationComplete = confirmationState === 'confirmed' || confirmationState === 'not_needed';
+  const hasConstructiveStructure = metTriggerCodes.includes('structure_constructive_now');
+  const hasConstructiveActionability = metTriggerCodes.includes('actionability_constructive_now');
+  const poorStructurePersists = activeFailureCodes.includes('poor_structure_persists');
+  const blockedPoorStructurePersists = activeFailureCodes.includes('blocked_poor_structure_persists');
+  const actionabilityRegressed = activeFailureCodes.includes('dropped_out_of_actionable_recent');
+  const transitionWorsening = activeFailureCodes.includes('transition_structure_worsened_recent');
+  const transitionBiasDeteriorating = activeFailureCodes.includes('transition_bias_deteriorating')
+    || recentTransitionBias === 'deteriorating';
+  const shadowIneligible = shadowMockTradeDecision?.eligible !== true
+    || String(shadowMockTradeDecision?.status || '').trim().toLowerCase() === 'ineligible'
+    || String(shadowMockTradeDecision?.reason || '').trim().toLowerCase().includes('blocked');
+
+  let nextUpgradeState = 'none';
+  if (currentActionStance === 'stabilization_watch') {
+    nextUpgradeState = 'early_reversal_watch';
+  } else if (currentActionStance === 'caution') {
+    nextUpgradeState = (!activeFailures.length && hasConstructiveStructure && hasConstructiveActionability)
+      ? 'supportive_followthrough'
+      : 'caution';
+  } else if (currentActionStance === 'avoid') {
+    nextUpgradeState = (hasConstructiveStructure && hasConstructiveActionability)
+      ? 'early_reversal_watch'
+      : 'caution';
+  } else if (currentActionStance === 'supportive_followthrough') {
+    nextUpgradeState = confirmationComplete ? 'supportive_followthrough' : 'supportive_followthrough';
+  } else if (currentActionStance === 'early_reversal_watch') {
+    nextUpgradeState = 'supportive_followthrough';
+  } else if (currentActionStance === 'neutral_wait') {
+    nextUpgradeState = 'early_reversal_watch';
+  }
+
+  let invalidationState = 'caution';
+  if (poorStructurePersists || blockedPoorStructurePersists || (directionVsTransitionTension && transitionWorsening)) {
+    invalidationState = 'avoid';
+  } else if (actionabilityRegressed || transitionBiasDeteriorating) {
+    invalidationState = 'caution';
+  } else if (currentActionStance === 'avoid') {
+    invalidationState = 'avoid';
+  }
+
+  let riskBucket = 'defensive';
+  if (currentActionStance === 'avoid' || shadowIneligible || confirmationState === 'failed_confirmation') {
+    riskBucket = 'no_trade';
+  } else if (
+    currentActionStance === 'supportive_followthrough'
+    && confirmationComplete
+    && directionVsTransitionTension !== true
+    && activeFailures.length <= 0
+  ) {
+    riskBucket = 'standard';
+  } else if (
+    currentActionStance === 'stabilization_watch'
+    || currentActionStance === 'caution'
+    || (historyJudgment === 'weak' && directionVsTransitionTension)
+  ) {
+    riskBucket = 'defensive';
+  } else if (currentActionStance === 'supportive_followthrough' && !confirmationComplete) {
+    riskBucket = 'defensive';
+  }
+
+  let sizeGuidance = 'none';
+  if (riskBucket === 'no_trade') {
+    sizeGuidance = 'none';
+  } else if (
+    currentActionStance === 'supportive_followthrough'
+    && confirmationComplete
+    && directionVsTransitionTension !== true
+    && activeFailures.length <= 0
+  ) {
+    sizeGuidance = 'full_size';
+  } else if (currentActionStance === 'supportive_followthrough') {
+    sizeGuidance = 'half_size';
+  } else if (riskBucket === 'defensive') {
+    sizeGuidance = 'quarter_size';
+  } else if (riskBucket === 'standard') {
+    sizeGuidance = 'full_size';
+  }
+
+  const confirmationNeeded = confirmationState !== 'confirmed' && confirmationState !== 'not_needed';
+  let currentState = 'waiting_for_confirmation';
+  let currentStateReason = 'Confirmation is not complete yet.';
+  if (candidateStatus === 'blocked' || poorStructurePersists || blockedPoorStructurePersists || currentActionStance === 'avoid') {
+    currentState = 'blocked';
+    currentStateReason = 'Blocked by poor structure/actionability failure conditions.';
+  } else if (confirmationState === 'waiting_for_confirmation') {
+    currentState = 'waiting_for_confirmation';
+    currentStateReason = 'Still waiting for critical confirmation triggers.';
+  } else if (confirmationState === 'partially_confirmed' || (metTriggers.length > 0 && missingTriggers.length > 0)) {
+    currentState = 'partially_constructive';
+    currentStateReason = 'Constructive progress exists but confirmation is incomplete.';
+  } else if (confirmationComplete && riskBucket === 'standard') {
+    currentState = 'confirmed_supportive';
+    currentStateReason = 'Constructive confirmation is complete with standard-risk posture.';
+  } else if (confirmationComplete) {
+    currentState = 'confirmed_defensive';
+    currentStateReason = 'Confirmation is complete but posture remains defensive.';
+  }
+
+  const triggerCount = triggerRows.length;
+  const failureCount = activeFailures.length;
+  const missingCount = missingTriggers.length;
+  const operatorSummaryLine = riskBucket === 'no_trade'
+    ? `No trade yet: ${missingCount} confirmation item(s) still missing; blocked by ${failureCount} active failure(s).`
+    : `Trigger card: ${metTriggers.length}/${triggerCount} trigger(s) met, ${failureCount} active failure(s), ${sizeGuidance.replace(/_/g, ' ')} guidance.`;
+
+  return {
+    modeUsed: String(confirmationGuide?.modeUsed || actionInterpretation?.modeUsed || 'loop_only').trim() || 'loop_only',
+    strategyLabel,
+    strategyKey,
+    setupLabel,
+    currentState,
+    currentStateReason,
+    currentActionStance,
+    historyJudgment,
+    historyConfidenceLabel,
+    confirmationState,
+    confirmationNeeded,
+    triggerCount,
+    failureCount,
+    metTriggers,
+    missingTriggers,
+    activeFailures,
+    nextUpgradeState,
+    invalidationState,
+    riskBucket,
+    sizeGuidance,
+    operatorSummaryLine,
+    advisoryOnly: true,
+  };
+}
+
+function buildLiveCandidateTradeTriggerCardAudit(input = {}) {
+  const card = input?.liveCandidateTradeTriggerCard
+    && typeof input.liveCandidateTradeTriggerCard === 'object'
+    ? input.liveCandidateTradeTriggerCard
+    : {};
+  const actionInterpretation = input?.liveCandidateHistoryActionInterpretation
+    && typeof input.liveCandidateHistoryActionInterpretation === 'object'
+    ? input.liveCandidateHistoryActionInterpretation
+    : {};
+  const confirmationGuide = input?.liveCandidateHistoryConfirmationGuide
+    && typeof input.liveCandidateHistoryConfirmationGuide === 'object'
+    ? input.liveCandidateHistoryConfirmationGuide
+    : {};
+  const shadowMockTradeDecision = input?.shadowMockTradeDecision
+    && typeof input.shadowMockTradeDecision === 'object'
+    ? input.shadowMockTradeDecision
+    : {};
+  const liveCandidateHistoryJudgment = input?.liveCandidateHistoryJudgment
+    && typeof input.liveCandidateHistoryJudgment === 'object'
+    ? input.liveCandidateHistoryJudgment
+    : {};
+
+  const triggerRows = Array.isArray(confirmationGuide?.confirmationTriggers)
+    ? confirmationGuide.confirmationTriggers
+    : [];
+  const failureRows = Array.isArray(confirmationGuide?.confirmationFailures)
+    ? confirmationGuide.confirmationFailures
+    : [];
+  const metTriggerCodes = triggerRows.filter((row) => row?.met === true).map((row) => String(row?.code || '').trim()).filter(Boolean);
+  const missingTriggerCodes = triggerRows.filter((row) => row?.met !== true).map((row) => String(row?.code || '').trim()).filter(Boolean);
+  const activeFailureCodes = failureRows.filter((row) => row?.active === true).map((row) => String(row?.code || '').trim()).filter(Boolean);
+  const strategyIdentitySource = card?.strategyKey
+    ? 'candidate_or_recommendation_basis'
+    : 'fallback_unknown_strategy';
+  const setupIdentitySource = card?.setupLabel && card.setupLabel !== 'Setup context unavailable'
+    ? 'candidate_trigger_structure'
+    : 'fallback_setup_context_unavailable';
+  const triggerSourceEmpty = triggerRows.length <= 0;
+  const failureSourceEmpty = failureRows.length <= 0;
+  const stateUpgradePath = missingTriggerCodes.length > 0
+    ? `${String(card?.currentState || 'unknown')} -> ${String(card?.nextUpgradeState || 'none')} when ${missingTriggerCodes.join(' + ')}`
+    : `${String(card?.currentState || 'unknown')} -> ${String(card?.nextUpgradeState || 'none')} (no missing trigger rows reported)`;
+  const stateInvalidationPath = activeFailureCodes.length > 0
+    ? `${String(card?.currentState || 'unknown')} -> ${String(card?.invalidationState || 'avoid')} if ${activeFailureCodes.join(' / ')} persists`
+    : `${String(card?.currentState || 'unknown')} -> ${String(card?.invalidationState || 'avoid')} if structure/actionability degrades`;
+  const ruleUsed = [
+    String(card?.currentActionStance || 'neutral_wait'),
+    String(card?.confirmationState || 'waiting_for_confirmation'),
+    String(card?.riskBucket || 'defensive'),
+    String(card?.currentState || 'waiting_for_confirmation'),
+  ].join('__');
+  const summaryLine = `Trigger card audit: ${ruleUsed}; met ${metTriggerCodes.length}/${triggerRows.length || 0}, active failures ${activeFailureCodes.length}.`;
+
+  return {
+    ruleUsed,
+    inputsUsed: {
+      modeUsed: String(card?.modeUsed || actionInterpretation?.modeUsed || 'loop_only').trim() || 'loop_only',
+      strategyIdentitySource,
+      setupIdentitySource,
+      currentActionStance: String(actionInterpretation?.actionStance || card?.currentActionStance || 'neutral_wait').trim().toLowerCase(),
+      confirmationState: String(confirmationGuide?.confirmationState || card?.confirmationState || 'waiting_for_confirmation').trim().toLowerCase(),
+      historyJudgment: String(liveCandidateHistoryJudgment?.judgment || card?.historyJudgment || 'sparse').trim().toLowerCase(),
+      historyConfidenceLabel: String(liveCandidateHistoryJudgment?.confidenceLabel || card?.historyConfidenceLabel || 'low').trim().toLowerCase(),
+      directionVsTransitionTension: liveCandidateHistoryJudgment?.directionVsTransitionTension === true,
+      triggerSourceEmpty,
+      failureSourceEmpty,
+    },
+    derivedFromActionInterpretation: {
+      actionStance: String(actionInterpretation?.actionStance || card?.currentActionStance || '').trim() || null,
+      actionBias: String(actionInterpretation?.actionBias || '').trim() || null,
+      requiresFreshConfirmation: actionInterpretation?.requiresFreshConfirmation === true,
+      summaryLine: String(actionInterpretation?.summaryLine || '').trim() || null,
+    },
+    derivedFromConfirmationGuide: {
+      confirmationState: String(confirmationGuide?.confirmationState || card?.confirmationState || '').trim() || null,
+      nextBestStateIfConfirmed: String(confirmationGuide?.nextBestStateIfConfirmed || card?.nextUpgradeState || '').trim() || null,
+      triggerSummaryLine: String(confirmationGuide?.triggerSummaryLine || '').trim() || null,
+      failureSummaryLine: String(confirmationGuide?.failureSummaryLine || '').trim() || null,
+    },
+    derivedFromShadowMockTradeDecision: {
+      eligible: shadowMockTradeDecision?.eligible === true,
+      status: String(shadowMockTradeDecision?.status || '').trim() || null,
+      reason: String(shadowMockTradeDecision?.reason || '').trim() || null,
+      tradePlanSummaryLine: String(shadowMockTradeDecision?.tradePlanSummaryLine || '').trim() || null,
+    },
+    triggerBreakdown: {
+      total: triggerRows.length,
+      met: metTriggerCodes,
+      missing: missingTriggerCodes,
+      sourceEmpty: triggerSourceEmpty,
+    },
+    failureBreakdown: {
+      total: failureRows.length,
+      active: activeFailureCodes,
+      sourceEmpty: failureSourceEmpty,
+    },
+    stateUpgradePath,
+    stateInvalidationPath,
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
 function buildLiveCandidateHistoryJudgmentAudit(input = {}) {
   const judgmentInput = buildLoopHistoryJudgmentInput(input);
   const observationClassifications = Array.isArray(judgmentInput.observationClassifications)
@@ -6262,6 +6596,23 @@ function buildCommandCenterPanels(input = {}) {
     latestSession,
     todayContext,
   });
+  const liveCandidateTradeTriggerCard = buildLiveCandidateTradeTriggerCard({
+    liveCandidateHistoryJudgment,
+    liveCandidateHistoryActionInterpretation,
+    liveCandidateHistoryConfirmationGuide,
+    liveCandidateStateMonitor,
+    liveCandidateTransitionHistory,
+    liveOpportunityCandidates,
+    shadowMockTradeDecision,
+    recommendationBasis,
+  });
+  const liveCandidateTradeTriggerCardAudit = buildLiveCandidateTradeTriggerCardAudit({
+    liveCandidateTradeTriggerCard,
+    liveCandidateHistoryJudgment,
+    liveCandidateHistoryActionInterpretation,
+    liveCandidateHistoryConfirmationGuide,
+    shadowMockTradeDecision,
+  });
 
   const mechanicsInsight = (() => {
     if (!mechanicsResearchSummary || !Array.isArray(mechanicsResearchSummary.mechanicsVariantTable)
@@ -6488,6 +6839,14 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryConfirmationGuideAudit,
     liveCandidateHistoryConfirmationGuideAudit
   );
+  todayRecommendation.liveCandidateTradeTriggerCard = cloneData(
+    liveCandidateTradeTriggerCard,
+    liveCandidateTradeTriggerCard
+  );
+  todayRecommendation.liveCandidateTradeTriggerCardAudit = cloneData(
+    liveCandidateTradeTriggerCardAudit,
+    liveCandidateTradeTriggerCardAudit
+  );
   todayRecommendation.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -6561,6 +6920,14 @@ function buildCommandCenterPanels(input = {}) {
   decisionBoard.liveCandidateHistoryConfirmationGuideAudit = cloneData(
     liveCandidateHistoryConfirmationGuideAudit,
     liveCandidateHistoryConfirmationGuideAudit
+  );
+  decisionBoard.liveCandidateTradeTriggerCard = cloneData(
+    liveCandidateTradeTriggerCard,
+    liveCandidateTradeTriggerCard
+  );
+  decisionBoard.liveCandidateTradeTriggerCardAudit = cloneData(
+    liveCandidateTradeTriggerCardAudit,
+    liveCandidateTradeTriggerCardAudit
   );
   decisionBoard.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
@@ -6636,6 +7003,14 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryConfirmationGuideAudit: cloneData(
       liveCandidateHistoryConfirmationGuideAudit,
       liveCandidateHistoryConfirmationGuideAudit
+    ),
+    liveCandidateTradeTriggerCard: cloneData(
+      liveCandidateTradeTriggerCard,
+      liveCandidateTradeTriggerCard
+    ),
+    liveCandidateTradeTriggerCardAudit: cloneData(
+      liveCandidateTradeTriggerCardAudit,
+      liveCandidateTradeTriggerCardAudit
     ),
     strategyCandidateOpportunityBridge: cloneData(
       strategyCandidateOpportunityBridge,
@@ -6795,5 +7170,7 @@ module.exports = {
   buildLiveCandidateHistoryActionInterpretationAudit,
   buildLiveCandidateHistoryConfirmationGuide,
   buildLiveCandidateHistoryConfirmationGuideAudit,
+  buildLiveCandidateTradeTriggerCard,
+  buildLiveCandidateTradeTriggerCardAudit,
   buildPineScriptForStrategy,
 };

@@ -10,6 +10,8 @@ const {
   buildLiveCandidateHistoryActionInterpretationAudit,
   buildLiveCandidateHistoryConfirmationGuide,
   buildLiveCandidateHistoryConfirmationGuideAudit,
+  buildLiveCandidateTradeTriggerCard,
+  buildLiveCandidateTradeTriggerCardAudit,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
 } = require('../server/jarvis-core/strategy-layers');
@@ -545,6 +547,10 @@ function run() {
     assert(Array.isArray(sparseSnapshot.liveCandidateHistoryConfirmationGuide.confirmationTriggers), 'sparse case should include confirmationTriggers');
     assert(Array.isArray(sparseSnapshot.liveCandidateHistoryConfirmationGuide.confirmationFailures), 'sparse case should include confirmationFailures');
     assert(sparseSnapshot.liveCandidateHistoryConfirmationGuideAudit && typeof sparseSnapshot.liveCandidateHistoryConfirmationGuideAudit === 'object', 'sparse case should surface confirmation guide audit');
+    assert(sparseSnapshot.liveCandidateTradeTriggerCard && typeof sparseSnapshot.liveCandidateTradeTriggerCard === 'object', 'sparse case should surface trade trigger card');
+    assert(sparseSnapshot.liveCandidateTradeTriggerCard.confirmationState === 'waiting_for_confirmation', 'sparse case trade trigger should keep waiting_for_confirmation');
+    assert(['waiting_for_confirmation', 'blocked'].includes(String(sparseSnapshot.liveCandidateTradeTriggerCard.currentState || '')), 'sparse case trade trigger should remain waiting/blocked');
+    assert(sparseSnapshot.liveCandidateTradeTriggerCardAudit && typeof sparseSnapshot.liveCandidateTradeTriggerCardAudit === 'object', 'sparse case should surface trade trigger card audit');
     sparseDb.close();
 
     const diagOnlyDb = new Database(':memory:');
@@ -584,6 +590,10 @@ function run() {
     assert(diagOnlySnapshot.liveCandidateHistoryActionInterpretationAudit.ruleUsed === 'sparse_history_neutral_wait', 'diagnostic-only sparse loop history should use sparse rule');
     assert(diagOnlySnapshot.liveCandidateHistoryConfirmationGuide.confirmationState === 'waiting_for_confirmation', 'diagnostic-only sparse loop history should wait for confirmation');
     assert(diagOnlySnapshot.liveCandidateHistoryConfirmationGuideAudit.ruleUsed === 'sparse_waiting_for_confirmation', 'diagnostic-only sparse loop history should use sparse confirmation rule');
+    assert(diagOnlySnapshot.liveCandidateTradeTriggerCard && typeof diagOnlySnapshot.liveCandidateTradeTriggerCard === 'object', 'diagnostic-only sparse loop history should surface trade trigger card');
+    assert(diagOnlySnapshot.liveCandidateTradeTriggerCard.riskBucket === 'no_trade', 'diagnostic-only sparse loop history should remain no_trade');
+    assert(diagOnlySnapshot.liveCandidateTradeTriggerCard.sizeGuidance === 'none', 'diagnostic-only sparse loop history should keep sizeGuidance none');
+    assert(diagOnlySnapshot.liveCandidateTradeTriggerCardAudit && typeof diagOnlySnapshot.liveCandidateTradeTriggerCardAudit === 'object', 'diagnostic-only sparse loop history should surface trade trigger card audit');
     diagOnlyDb.close();
 
     const preOpenDb = new Database(':memory:');
@@ -684,6 +694,10 @@ function run() {
     assert(supportiveSnapshot.liveCandidateHistoryJudgment.confidenceLabel !== 'low', 'supportive fixture should not be low-confidence');
     assert(['supportive_followthrough', 'early_reversal_watch'].includes(String(supportiveSnapshot.liveCandidateHistoryActionInterpretation.actionStance || '')), 'supportive fixture should surface constructive action interpretation');
     assert(['confirmed', 'not_needed'].includes(String(supportiveSnapshot.liveCandidateHistoryConfirmationGuide.confirmationState || '')), 'supportive fixture should be confirmed or not_needed');
+    assert(supportiveSnapshot.liveCandidateTradeTriggerCard && typeof supportiveSnapshot.liveCandidateTradeTriggerCard === 'object', 'supportive fixture should surface trade trigger card');
+    assert(['confirmed_supportive', 'confirmed_defensive', 'partially_constructive', 'waiting_for_confirmation', 'blocked'].includes(String(supportiveSnapshot.liveCandidateTradeTriggerCard.currentState || '')), 'supportive fixture should surface deterministic trade-trigger state');
+    assert(['full_size', 'half_size', 'quarter_size', 'none'].includes(String(supportiveSnapshot.liveCandidateTradeTriggerCard.sizeGuidance || '')), 'supportive fixture should provide deterministic size guidance');
+    assert(supportiveSnapshot.liveCandidateTradeTriggerCardAudit && typeof supportiveSnapshot.liveCandidateTradeTriggerCardAudit === 'object', 'supportive fixture should surface trade trigger card audit');
     supportiveDb.close();
 
     const weakDb = new Database(':memory:');
@@ -743,6 +757,11 @@ function run() {
     assert(weakSnapshot.liveCandidateHistoryActionInterpretation.confidenceImpact === 'reinforces', 'weak deteriorating fixture should reinforce directional weakness');
     assert(weakSnapshot.liveCandidateHistoryActionInterpretationAudit.ruleUsed === 'weak_deteriorating_avoid', 'weak deteriorating fixture should expose deterministic action rule');
     assert(['failed_confirmation', 'waiting_for_confirmation'].includes(String(weakSnapshot.liveCandidateHistoryConfirmationGuide.confirmationState || '')), 'avoid fixture should map to failed_confirmation or waiting_for_confirmation');
+    assert(weakSnapshot.liveCandidateTradeTriggerCard && typeof weakSnapshot.liveCandidateTradeTriggerCard === 'object', 'weak fixture should surface trade trigger card');
+    assert(weakSnapshot.liveCandidateTradeTriggerCard.currentState === 'blocked', 'weak fixture should map trade trigger currentState to blocked');
+    assert(weakSnapshot.liveCandidateTradeTriggerCard.riskBucket === 'no_trade', 'weak fixture should remain no_trade');
+    assert(weakSnapshot.liveCandidateTradeTriggerCard.sizeGuidance === 'none', 'weak fixture should keep size none');
+    assert(weakSnapshot.liveCandidateTradeTriggerCardAudit && typeof weakSnapshot.liveCandidateTradeTriggerCardAudit === 'object', 'weak fixture should surface trade trigger card audit');
     weakDb.close();
 
     const tensionDb = new Database(':memory:');
@@ -793,6 +812,12 @@ function run() {
     assert(Array.isArray(tensionSnapshot.liveCandidateHistoryConfirmationGuideAudit.unmetCriticalTriggers), 'stabilization_watch audit should include unmetCriticalTriggers');
     assert(tensionSnapshot.liveCandidateHistoryConfirmationGuideAudit.unmetCriticalTriggers.includes('structure_constructive_now'), 'stabilization_watch should require structure_constructive_now');
     assert(tensionSnapshot.liveCandidateHistoryConfirmationGuideAudit.unmetCriticalTriggers.includes('actionability_constructive_now'), 'stabilization_watch should require actionability_constructive_now');
+    assert(tensionSnapshot.liveCandidateTradeTriggerCard && typeof tensionSnapshot.liveCandidateTradeTriggerCard === 'object', 'tension fixture should surface trade trigger card');
+    assert(tensionSnapshot.liveCandidateTradeTriggerCard.currentActionStance === 'stabilization_watch', 'tension fixture trade trigger should keep stabilization_watch');
+    assert(tensionSnapshot.liveCandidateTradeTriggerCard.confirmationState === 'waiting_for_confirmation', 'tension fixture trade trigger should remain waiting_for_confirmation');
+    assert(tensionSnapshot.liveCandidateTradeTriggerCard.riskBucket === 'defensive' || tensionSnapshot.liveCandidateTradeTriggerCard.riskBucket === 'no_trade', 'tension fixture trade trigger should stay defensive/no_trade');
+    assert(tensionSnapshot.liveCandidateTradeTriggerCard.sizeGuidance === 'quarter_size' || tensionSnapshot.liveCandidateTradeTriggerCard.sizeGuidance === 'none', 'tension fixture trade trigger should remain constrained size');
+    assert(tensionSnapshot.liveCandidateTradeTriggerCardAudit && typeof tensionSnapshot.liveCandidateTradeTriggerCardAudit === 'object', 'tension fixture should surface trade trigger card audit');
     tensionDb.close();
 
     const supportiveDeterioratingInterpretation = buildLiveCandidateHistoryActionInterpretation({
@@ -936,6 +961,154 @@ function run() {
       },
     });
     assert(['not_needed', 'confirmed'].includes(String(supportiveGuide.confirmationState || '')), 'supportive_followthrough should map to confirmed or not_needed');
+    const weakImprovingTriggerCard = buildLiveCandidateTradeTriggerCard({
+      liveCandidateHistoryJudgment: {
+        modeUsed: 'loop_only',
+        judgment: 'weak',
+        confidenceLabel: 'high',
+        recentTransitionBias: 'improving',
+        directionVsTransitionTension: true,
+      },
+      liveCandidateHistoryActionInterpretation: {
+        modeUsed: 'loop_only',
+        actionStance: 'stabilization_watch',
+      },
+      liveCandidateHistoryConfirmationGuide: stabilizationGuide,
+      liveOpportunityCandidates: {
+        topCandidateOverall: {
+          candidateKey: 'candidate:one',
+          strategyKey: 'original_plan_orb_3130',
+          strategyName: 'Original Plan ORB 3130',
+          candidateType: 'orb_continuation_retest',
+          candidateStatus: 'blocked',
+        },
+      },
+      shadowMockTradeDecision: {
+        eligible: false,
+        status: 'ineligible',
+        reason: 'candidate_blocked',
+      },
+    });
+    const weakImprovingTriggerCardAudit = buildLiveCandidateTradeTriggerCardAudit({
+      liveCandidateTradeTriggerCard: weakImprovingTriggerCard,
+      liveCandidateHistoryJudgment: {
+        modeUsed: 'loop_only',
+        judgment: 'weak',
+        confidenceLabel: 'high',
+        recentTransitionBias: 'improving',
+        directionVsTransitionTension: true,
+      },
+      liveCandidateHistoryActionInterpretation: {
+        modeUsed: 'loop_only',
+        actionStance: 'stabilization_watch',
+      },
+      liveCandidateHistoryConfirmationGuide: stabilizationGuide,
+      shadowMockTradeDecision: {
+        eligible: false,
+        status: 'ineligible',
+        reason: 'candidate_blocked',
+      },
+    });
+    assert(weakImprovingTriggerCard.currentActionStance === 'stabilization_watch', 'weak+improving tension trigger card should keep stabilization_watch');
+    assert(weakImprovingTriggerCard.confirmationState === 'waiting_for_confirmation', 'weak+improving tension trigger card should wait for confirmation');
+    assert(weakImprovingTriggerCard.nextUpgradeState === 'early_reversal_watch', 'weak+improving tension trigger card should point next upgrade to early_reversal_watch');
+    assert(weakImprovingTriggerCard.riskBucket === 'no_trade' || weakImprovingTriggerCard.riskBucket === 'defensive', 'weak+improving tension trigger card should remain no_trade/defensive');
+    assert(weakImprovingTriggerCardAudit.ruleUsed && weakImprovingTriggerCardAudit.ruleUsed.length > 0, 'weak+improving tension trigger card audit should expose ruleUsed');
+    assert(Array.isArray(weakImprovingTriggerCardAudit.triggerBreakdown?.missing), 'weak+improving tension trigger card audit should expose missing trigger breakdown');
+
+    const supportiveTriggerCard = buildLiveCandidateTradeTriggerCard({
+      liveCandidateHistoryJudgment: {
+        modeUsed: 'loop_only',
+        judgment: 'supportive',
+        confidenceLabel: 'high',
+        recentTransitionBias: 'improving',
+        directionVsTransitionTension: false,
+      },
+      liveCandidateHistoryActionInterpretation: {
+        modeUsed: 'loop_only',
+        actionStance: 'supportive_followthrough',
+      },
+      liveCandidateHistoryConfirmationGuide: {
+        modeUsed: 'loop_only',
+        confirmationState: 'confirmed',
+        confirmationTriggers: [
+          { code: 'structure_constructive_now', met: true, source: 'test', detail: 'ok' },
+          { code: 'actionability_constructive_now', met: true, source: 'test', detail: 'ok' },
+        ],
+        confirmationFailures: [],
+      },
+      liveOpportunityCandidates: {
+        topCandidateActionableNow: {
+          candidateKey: 'candidate:confirmed',
+          strategyKey: 'original_plan_orb_3130',
+          strategyName: 'Original Plan ORB 3130',
+          candidateType: 'orb_continuation_retest',
+          candidateStatus: 'ready_now',
+          triggerStructure: { topSetupName: 'ORB Retest Long' },
+        },
+      },
+      shadowMockTradeDecision: {
+        eligible: true,
+        status: 'eligible',
+        reason: 'ready_for_shadow',
+      },
+    });
+    assert(supportiveTriggerCard.currentState === 'confirmed_supportive', 'supportive confirmed trigger card should map to confirmed_supportive');
+    assert(supportiveTriggerCard.riskBucket === 'standard', 'supportive confirmed trigger card should map to standard risk bucket');
+    assert(supportiveTriggerCard.sizeGuidance === 'full_size', 'supportive confirmed trigger card should map to full_size guidance');
+
+    const fallbackTriggerCard = buildLiveCandidateTradeTriggerCard({
+      liveCandidateHistoryJudgment: {
+        modeUsed: 'loop_only',
+        judgment: 'sparse',
+        confidenceLabel: 'low',
+        recentTransitionBias: 'insufficient_history',
+      },
+      liveCandidateHistoryActionInterpretation: {
+        modeUsed: 'loop_only',
+        actionStance: 'neutral_wait',
+      },
+      liveCandidateHistoryConfirmationGuide: {
+        modeUsed: 'loop_only',
+        confirmationState: 'waiting_for_confirmation',
+        confirmationTriggers: [],
+        confirmationFailures: [],
+      },
+      liveOpportunityCandidates: {},
+      recommendationBasis: {},
+      shadowMockTradeDecision: {
+        eligible: false,
+        status: 'ineligible',
+        reason: 'no_candidate',
+      },
+    });
+    const fallbackTriggerCardAudit = buildLiveCandidateTradeTriggerCardAudit({
+      liveCandidateTradeTriggerCard: fallbackTriggerCard,
+      liveCandidateHistoryJudgment: {
+        modeUsed: 'loop_only',
+        judgment: 'sparse',
+        confidenceLabel: 'low',
+      },
+      liveCandidateHistoryActionInterpretation: {
+        modeUsed: 'loop_only',
+        actionStance: 'neutral_wait',
+      },
+      liveCandidateHistoryConfirmationGuide: {
+        modeUsed: 'loop_only',
+        confirmationState: 'waiting_for_confirmation',
+        confirmationTriggers: [],
+        confirmationFailures: [],
+      },
+      shadowMockTradeDecision: {
+        eligible: false,
+        status: 'ineligible',
+        reason: 'no_candidate',
+      },
+    });
+    assert(fallbackTriggerCard.strategyLabel === 'Unknown strategy', 'missing-upstream trigger card should fallback strategy label');
+    assert(fallbackTriggerCardAudit.inputsUsed.strategyIdentitySource === 'fallback_unknown_strategy', 'missing-upstream trigger card audit should expose strategy fallback source');
+    assert(fallbackTriggerCardAudit.triggerBreakdown.sourceEmpty === true, 'missing-upstream trigger card audit should mark empty trigger source');
+    assert(fallbackTriggerCardAudit.failureBreakdown.sourceEmpty === true, 'missing-upstream trigger card audit should mark empty failure source');
 
     const forcedDiagnostics = buildLiveCandidateHistoryStatusCalibrationDiagnostics({
       statusCalibration: {
