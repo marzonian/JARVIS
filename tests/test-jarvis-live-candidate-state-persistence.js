@@ -6,6 +6,8 @@ const {
   buildStrategyLayerSnapshot,
   buildCommandCenterPanels,
   buildLiveCandidateHistoryStatusCalibrationDiagnostics,
+  buildLiveCandidateHistoryActionInterpretation,
+  buildLiveCandidateHistoryActionInterpretationAudit,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
 } = require('../server/jarvis-core/strategy-layers');
@@ -532,6 +534,10 @@ function run() {
     assert(sparseSnapshot.liveCandidateHistoryJudgmentAudit.sampleSize >= 1, 'sparse case audit should classify at least one row');
     assert(Array.isArray(sparseSnapshot.liveCandidateHistoryJudgmentAudit.recentClassifiedRows), 'sparse case audit should include recentClassifiedRows');
     assert(sparseSnapshot.liveCandidateHistoryStatusCalibration && typeof sparseSnapshot.liveCandidateHistoryStatusCalibration === 'object', 'sparse case should surface status calibration object');
+    assert(sparseSnapshot.liveCandidateHistoryActionInterpretation && typeof sparseSnapshot.liveCandidateHistoryActionInterpretation === 'object', 'sparse case should surface action interpretation');
+    assert(sparseSnapshot.liveCandidateHistoryActionInterpretation.actionStance === 'neutral_wait', 'sparse case should map to neutral_wait action stance');
+    assert(sparseSnapshot.liveCandidateHistoryActionInterpretation.requiresFreshConfirmation === true, 'sparse case should require fresh confirmation');
+    assert(sparseSnapshot.liveCandidateHistoryActionInterpretationAudit && typeof sparseSnapshot.liveCandidateHistoryActionInterpretationAudit === 'object', 'sparse case should surface action interpretation audit');
     sparseDb.close();
 
     const diagOnlyDb = new Database(':memory:');
@@ -567,6 +573,8 @@ function run() {
     assert(diagOnlySnapshot.liveCandidateHistoryJudgmentAudit.sampleSize === 0, 'diagnostic-only fixture should produce zero loop-only classified rows');
     assert(Array.isArray(diagOnlySnapshot.liveCandidateHistoryJudgmentAudit.dominantUnsupportiveRules), 'diagnostic-only fixture should expose dominant unsupportive rules array');
     assert(diagOnlySnapshot.liveCandidateHistoryStatusCalibration.statusEvidence && typeof diagOnlySnapshot.liveCandidateHistoryStatusCalibration.statusEvidence === 'object', 'diagnostic-only fixture should surface statusEvidence');
+    assert(diagOnlySnapshot.liveCandidateHistoryActionInterpretation.actionStance === 'neutral_wait', 'diagnostic-only sparse loop history should map to neutral_wait');
+    assert(diagOnlySnapshot.liveCandidateHistoryActionInterpretationAudit.ruleUsed === 'sparse_history_neutral_wait', 'diagnostic-only sparse loop history should use sparse rule');
     diagOnlyDb.close();
 
     const preOpenDb = new Database(':memory:');
@@ -665,6 +673,7 @@ function run() {
     assert(supportiveSnapshot.liveCandidateHistoryJudgmentAudit.supportiveRuleHits.observation_actionable_now_true >= 1, 'supportive fixture should expose supportive observation rule hit');
     assert(supportiveSnapshot.liveCandidateHistoryJudgmentAudit.dominantSupportiveRules.length > 0, 'supportive fixture should expose dominant supportive rules');
     assert(supportiveSnapshot.liveCandidateHistoryJudgment.confidenceLabel !== 'low', 'supportive fixture should not be low-confidence');
+    assert(['supportive_followthrough', 'early_reversal_watch'].includes(String(supportiveSnapshot.liveCandidateHistoryActionInterpretation.actionStance || '')), 'supportive fixture should surface constructive action interpretation');
     supportiveDb.close();
 
     const weakDb = new Database(':memory:');
@@ -719,6 +728,10 @@ function run() {
     assert(weakSnapshot.liveCandidateHistoryJudgmentAudit.recentClassifiedRows.every((row) => Array.isArray(row.ruleHits)), 'weak fixture recent classified rows should include ruleHits');
     assert(weakSnapshot.liveCandidateHistoryStatusCalibration.statusRuleMap.blocked.treatment === 'unsupportive_if_quality_negative_else_neutral', 'weak fixture should expose blocked split treatment');
     assert(weakSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics && weakSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics.consistent === true, 'weak fixture should report consistent status calibration diagnostics');
+    assert(weakSnapshot.liveCandidateHistoryActionInterpretation.actionStance === 'avoid', 'weak deteriorating fixture should map to avoid');
+    assert(weakSnapshot.liveCandidateHistoryActionInterpretation.actionBias === 'defensive', 'weak deteriorating fixture should remain defensive');
+    assert(weakSnapshot.liveCandidateHistoryActionInterpretation.confidenceImpact === 'reinforces', 'weak deteriorating fixture should reinforce directional weakness');
+    assert(weakSnapshot.liveCandidateHistoryActionInterpretationAudit.ruleUsed === 'weak_deteriorating_avoid', 'weak deteriorating fixture should expose deterministic action rule');
     weakDb.close();
 
     const tensionDb = new Database(':memory:');
@@ -755,7 +768,48 @@ function run() {
       || tensionSnapshot.liveCandidateHistoryJudgment.confidenceDrivers.includes('overall_direction_still_dominates_recent_transition_conflict'),
       'tension fixture should surface explicit confidence reconciliation rule'
     );
+    assert(tensionSnapshot.liveCandidateHistoryActionInterpretation.actionStance === 'stabilization_watch', 'weak improving tension fixture should map to stabilization_watch');
+    assert(tensionSnapshot.liveCandidateHistoryActionInterpretation.actionBias === 'defensive', 'weak improving tension fixture should stay defensive');
+    assert(tensionSnapshot.liveCandidateHistoryActionInterpretation.confidenceImpact === 'conflicts', 'weak improving tension fixture should mark confidence conflict');
+    assert(tensionSnapshot.liveCandidateHistoryActionInterpretation.requiresFreshConfirmation === true, 'weak improving tension fixture should require fresh confirmation');
+    assert(tensionSnapshot.liveCandidateHistoryActionInterpretationAudit.tensionCase === 'weak_overall_improving_recent', 'weak improving tension fixture should expose tension case');
     tensionDb.close();
+
+    const supportiveDeterioratingInterpretation = buildLiveCandidateHistoryActionInterpretation({
+      liveCandidateHistoryJudgment: {
+        modeUsed: 'loop_only',
+        judgment: 'supportive',
+        recentTransitionBias: 'deteriorating',
+        directionVsTransitionTension: true,
+        sparseHistory: false,
+        confidenceLabel: 'high',
+        historySampleSize: 24,
+        transitionSampleSize: 8,
+        supportiveCount: 18,
+        unsupportiveCount: 4,
+        neutralCount: 2,
+      },
+    });
+    const supportiveDeterioratingAudit = buildLiveCandidateHistoryActionInterpretationAudit({
+      liveCandidateHistoryJudgment: {
+        modeUsed: 'loop_only',
+        judgment: 'supportive',
+        recentTransitionBias: 'deteriorating',
+        directionVsTransitionTension: true,
+        sparseHistory: false,
+        confidenceLabel: 'high',
+        historySampleSize: 24,
+        transitionSampleSize: 8,
+        supportiveCount: 18,
+        unsupportiveCount: 4,
+        neutralCount: 2,
+      },
+      liveCandidateHistoryActionInterpretation: supportiveDeterioratingInterpretation,
+    });
+    assert(supportiveDeterioratingInterpretation.actionStance === 'caution', 'supportive+deteriorating tension should map to caution');
+    assert(supportiveDeterioratingInterpretation.actionBias === 'defensive', 'supportive+deteriorating tension should be defensive');
+    assert(supportiveDeterioratingInterpretation.confidenceImpact === 'conflicts', 'supportive+deteriorating tension should mark confidence conflict');
+    assert(supportiveDeterioratingAudit.ruleUsed === 'supportive_deteriorating_tension_caution', 'supportive+deteriorating tension should use deterministic caution rule');
 
     const forcedDiagnostics = buildLiveCandidateHistoryStatusCalibrationDiagnostics({
       statusCalibration: {

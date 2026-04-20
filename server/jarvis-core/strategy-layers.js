@@ -2574,6 +2574,161 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
   };
 }
 
+function buildLiveCandidateHistoryActionInterpretation(input = {}) {
+  const judgment = input?.liveCandidateHistoryJudgment && typeof input.liveCandidateHistoryJudgment === 'object'
+    ? input.liveCandidateHistoryJudgment
+    : {};
+  const modeUsed = String(judgment?.modeUsed || 'loop_only').trim() || 'loop_only';
+  const overallHistoryJudgment = String(judgment?.judgment || 'sparse').trim().toLowerCase() || 'sparse';
+  const recentTransitionBias = String(judgment?.recentTransitionBias || 'insufficient_history').trim().toLowerCase() || 'insufficient_history';
+  const directionVsTransitionTension = judgment?.directionVsTransitionTension === true;
+  const sparseHistory = judgment?.sparseHistory === true;
+  const confidenceLabel = String(judgment?.confidenceLabel || 'low').trim().toLowerCase() || 'low';
+
+  let ruleUsed = 'sparse_history_neutral_wait';
+  let actionStance = 'neutral_wait';
+  let actionStanceReason = 'Loop-only history is sparse; hold neutral until clearer signal.';
+  let actionBias = 'neutral';
+  let confidenceImpact = 'none';
+  let requiresFreshConfirmation = true;
+  let stanceAlternativesConsidered = ['neutral_wait', 'caution', 'stabilization_watch'];
+  let tensionCase = 'insufficient_history';
+
+  if (!sparseHistory) {
+    if (overallHistoryJudgment === 'weak' && recentTransitionBias === 'deteriorating') {
+      ruleUsed = 'weak_deteriorating_avoid';
+      actionStance = 'avoid';
+      actionStanceReason = 'Weak history is still deteriorating; avoid until structure resets.';
+      actionBias = 'defensive';
+      confidenceImpact = 'reinforces';
+      requiresFreshConfirmation = true;
+      stanceAlternativesConsidered = ['avoid', 'caution'];
+      tensionCase = 'none';
+    } else if (overallHistoryJudgment === 'weak' && directionVsTransitionTension && recentTransitionBias === 'improving') {
+      ruleUsed = 'weak_improving_tension_stabilization_watch';
+      actionStance = 'stabilization_watch';
+      actionStanceReason = 'History is weak but improving transitions suggest stabilization; wait for fresh confirmation.';
+      actionBias = 'defensive';
+      confidenceImpact = 'conflicts';
+      requiresFreshConfirmation = true;
+      stanceAlternativesConsidered = ['stabilization_watch', 'early_reversal_watch', 'avoid'];
+      tensionCase = 'weak_overall_improving_recent';
+    } else if (overallHistoryJudgment === 'weak') {
+      ruleUsed = 'weak_non_deteriorating_caution';
+      actionStance = 'caution';
+      actionStanceReason = 'History remains weak without clear deterioration or reversal confirmation.';
+      actionBias = 'defensive';
+      confidenceImpact = recentTransitionBias === 'neutral' ? 'none' : 'offsets';
+      requiresFreshConfirmation = true;
+      stanceAlternativesConsidered = ['caution', 'avoid', 'stabilization_watch'];
+      tensionCase = directionVsTransitionTension ? 'weak_overall_improving_recent' : 'none';
+    } else if (overallHistoryJudgment === 'supportive' && directionVsTransitionTension && recentTransitionBias === 'deteriorating') {
+      ruleUsed = 'supportive_deteriorating_tension_caution';
+      actionStance = 'caution';
+      actionStanceReason = 'Supportive history is losing momentum; shift to caution until follow-through returns.';
+      actionBias = 'defensive';
+      confidenceImpact = 'conflicts';
+      requiresFreshConfirmation = true;
+      stanceAlternativesConsidered = ['caution', 'supportive_followthrough'];
+      tensionCase = 'supportive_overall_deteriorating_recent';
+    } else if (overallHistoryJudgment === 'supportive') {
+      ruleUsed = 'supportive_aligned_followthrough';
+      actionStance = 'supportive_followthrough';
+      actionStanceReason = 'Supportive history and transition context support follow-through bias.';
+      actionBias = 'constructive';
+      confidenceImpact = recentTransitionBias === 'improving' ? 'reinforces' : (recentTransitionBias === 'neutral' ? 'none' : 'offsets');
+      requiresFreshConfirmation = confidenceLabel === 'low';
+      stanceAlternativesConsidered = ['supportive_followthrough', 'caution'];
+      tensionCase = 'none';
+    } else if (overallHistoryJudgment === 'mixed' && recentTransitionBias === 'improving') {
+      ruleUsed = 'mixed_improving_early_reversal_watch';
+      actionStance = 'early_reversal_watch';
+      actionStanceReason = 'Mixed history with improving transitions supports early reversal watch, not commitment.';
+      actionBias = 'constructive';
+      confidenceImpact = 'offsets';
+      requiresFreshConfirmation = true;
+      stanceAlternativesConsidered = ['early_reversal_watch', 'neutral_wait', 'stabilization_watch'];
+      tensionCase = 'none';
+    } else if (overallHistoryJudgment === 'mixed' && recentTransitionBias === 'deteriorating') {
+      ruleUsed = 'mixed_deteriorating_caution';
+      actionStance = 'caution';
+      actionStanceReason = 'Mixed history is slipping; stay cautious until deterioration stops.';
+      actionBias = 'defensive';
+      confidenceImpact = 'offsets';
+      requiresFreshConfirmation = true;
+      stanceAlternativesConsidered = ['caution', 'neutral_wait'];
+      tensionCase = 'none';
+    } else {
+      ruleUsed = 'mixed_or_neutral_wait';
+      actionStance = 'neutral_wait';
+      actionStanceReason = 'History is mixed without decisive transition edge.';
+      actionBias = 'neutral';
+      confidenceImpact = 'none';
+      requiresFreshConfirmation = true;
+      stanceAlternativesConsidered = ['neutral_wait', 'early_reversal_watch', 'caution'];
+      tensionCase = 'none';
+    }
+  }
+
+  const summaryLine = `${actionStance.replace(/_/g, ' ')}: ${actionStanceReason}`;
+
+  return {
+    modeUsed,
+    overallHistoryJudgment,
+    recentTransitionBias,
+    directionVsTransitionTension,
+    actionStance,
+    actionStanceReason,
+    actionBias,
+    confidenceImpact,
+    requiresFreshConfirmation,
+    summaryLine,
+    ruleUsed,
+    tensionCase,
+    stanceAlternativesConsidered,
+    advisoryOnly: true,
+  };
+}
+
+function buildLiveCandidateHistoryActionInterpretationAudit(input = {}) {
+  const interpretation = input?.liveCandidateHistoryActionInterpretation
+    && typeof input.liveCandidateHistoryActionInterpretation === 'object'
+    ? input.liveCandidateHistoryActionInterpretation
+    : {};
+  const judgment = input?.liveCandidateHistoryJudgment && typeof input.liveCandidateHistoryJudgment === 'object'
+    ? input.liveCandidateHistoryJudgment
+    : {};
+  const inputsUsed = {
+    modeUsed: String(judgment?.modeUsed || interpretation?.modeUsed || 'loop_only').trim() || 'loop_only',
+    overallHistoryJudgment: String(judgment?.judgment || interpretation?.overallHistoryJudgment || 'sparse').trim().toLowerCase() || 'sparse',
+    recentTransitionBias: String(judgment?.recentTransitionBias || interpretation?.recentTransitionBias || 'insufficient_history').trim().toLowerCase() || 'insufficient_history',
+    directionVsTransitionTension: judgment?.directionVsTransitionTension === true || interpretation?.directionVsTransitionTension === true,
+    confidenceLabel: String(judgment?.confidenceLabel || 'low').trim().toLowerCase() || 'low',
+    sparseHistory: judgment?.sparseHistory === true,
+    sparseReason: String(judgment?.sparseReason || '').trim() || null,
+    historySampleSize: Number(judgment?.historySampleSize || 0),
+    transitionSampleSize: Number(judgment?.transitionSampleSize || 0),
+    supportiveCount: Number(judgment?.supportiveCount || 0),
+    unsupportiveCount: Number(judgment?.unsupportiveCount || 0),
+    neutralCount: Number(judgment?.neutralCount || 0),
+  };
+  const ruleUsed = String(interpretation?.ruleUsed || 'sparse_history_neutral_wait').trim() || 'sparse_history_neutral_wait';
+  const tensionCase = String(interpretation?.tensionCase || 'none').trim() || 'none';
+  const stanceAlternativesConsidered = Array.isArray(interpretation?.stanceAlternativesConsidered)
+    ? interpretation.stanceAlternativesConsidered
+    : [];
+  const summaryLine = `Action interpretation audit: ${ruleUsed} selected ${String(interpretation?.actionStance || 'neutral_wait').replace(/_/g, ' ')}.`;
+
+  return {
+    ruleUsed,
+    inputsUsed,
+    tensionCase,
+    stanceAlternativesConsidered,
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
 function buildLiveCandidateHistoryJudgmentAudit(input = {}) {
   const judgmentInput = buildLoopHistoryJudgmentInput(input);
   const observationClassifications = Array.isArray(judgmentInput.observationClassifications)
@@ -5646,6 +5801,13 @@ function buildCommandCenterPanels(input = {}) {
   const liveCandidateHistoryStatusCalibrationDiagnostics = buildLiveCandidateHistoryStatusCalibrationDiagnostics({
     statusCalibration: liveCandidateHistoryStatusCalibration,
   });
+  const liveCandidateHistoryActionInterpretation = buildLiveCandidateHistoryActionInterpretation({
+    liveCandidateHistoryJudgment,
+  });
+  const liveCandidateHistoryActionInterpretationAudit = buildLiveCandidateHistoryActionInterpretationAudit({
+    liveCandidateHistoryJudgment,
+    liveCandidateHistoryActionInterpretation,
+  });
   const strategyCandidateOpportunityBridge = buildStrategyCandidateBridge({
     opportunityScoring,
     liveOpportunityCandidates,
@@ -5871,6 +6033,14 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryStatusCalibrationDiagnostics,
     liveCandidateHistoryStatusCalibrationDiagnostics
   );
+  todayRecommendation.liveCandidateHistoryActionInterpretation = cloneData(
+    liveCandidateHistoryActionInterpretation,
+    liveCandidateHistoryActionInterpretation
+  );
+  todayRecommendation.liveCandidateHistoryActionInterpretationAudit = cloneData(
+    liveCandidateHistoryActionInterpretationAudit,
+    liveCandidateHistoryActionInterpretationAudit
+  );
   todayRecommendation.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -5928,6 +6098,14 @@ function buildCommandCenterPanels(input = {}) {
   decisionBoard.liveCandidateHistoryStatusCalibrationDiagnostics = cloneData(
     liveCandidateHistoryStatusCalibrationDiagnostics,
     liveCandidateHistoryStatusCalibrationDiagnostics
+  );
+  decisionBoard.liveCandidateHistoryActionInterpretation = cloneData(
+    liveCandidateHistoryActionInterpretation,
+    liveCandidateHistoryActionInterpretation
+  );
+  decisionBoard.liveCandidateHistoryActionInterpretationAudit = cloneData(
+    liveCandidateHistoryActionInterpretationAudit,
+    liveCandidateHistoryActionInterpretationAudit
   );
   decisionBoard.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
@@ -5987,6 +6165,14 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryStatusCalibrationDiagnostics: cloneData(
       liveCandidateHistoryStatusCalibrationDiagnostics,
       liveCandidateHistoryStatusCalibrationDiagnostics
+    ),
+    liveCandidateHistoryActionInterpretation: cloneData(
+      liveCandidateHistoryActionInterpretation,
+      liveCandidateHistoryActionInterpretation
+    ),
+    liveCandidateHistoryActionInterpretationAudit: cloneData(
+      liveCandidateHistoryActionInterpretationAudit,
+      liveCandidateHistoryActionInterpretationAudit
     ),
     strategyCandidateOpportunityBridge: cloneData(
       strategyCandidateOpportunityBridge,
@@ -6142,5 +6328,7 @@ module.exports = {
   buildCommandCenterPanels,
   buildAssistantDecisionBrief,
   buildLiveCandidateHistoryStatusCalibrationDiagnostics,
+  buildLiveCandidateHistoryActionInterpretation,
+  buildLiveCandidateHistoryActionInterpretationAudit,
   buildPineScriptForStrategy,
 };

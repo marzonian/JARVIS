@@ -156,6 +156,14 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
       && typeof first.liveCandidateHistoryStatusCalibrationDiagnostics === 'object'
       ? first.liveCandidateHistoryStatusCalibrationDiagnostics
       : {};
+    const firstActionInterpretation = first?.liveCandidateHistoryActionInterpretation
+      && typeof first.liveCandidateHistoryActionInterpretation === 'object'
+      ? first.liveCandidateHistoryActionInterpretation
+      : {};
+    const firstActionInterpretationAudit = first?.liveCandidateHistoryActionInterpretationAudit
+      && typeof first.liveCandidateHistoryActionInterpretationAudit === 'object'
+      ? first.liveCandidateHistoryActionInterpretationAudit
+      : {};
     await sleep(3600);
     const second = await getJson(server.baseUrl, commandCenterQuery);
     const secondStatus = pullStatus(second);
@@ -174,6 +182,14 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
     const secondStatusCalibrationDiagnostics = second?.liveCandidateHistoryStatusCalibrationDiagnostics
       && typeof second.liveCandidateHistoryStatusCalibrationDiagnostics === 'object'
       ? second.liveCandidateHistoryStatusCalibrationDiagnostics
+      : {};
+    const secondActionInterpretation = second?.liveCandidateHistoryActionInterpretation
+      && typeof second.liveCandidateHistoryActionInterpretation === 'object'
+      ? second.liveCandidateHistoryActionInterpretation
+      : {};
+    const secondActionInterpretationAudit = second?.liveCandidateHistoryActionInterpretationAudit
+      && typeof second.liveCandidateHistoryActionInterpretationAudit === 'object'
+      ? second.liveCandidateHistoryActionInterpretationAudit
       : {};
     const third = await getJson(server.baseUrl, commandCenterQuery);
     const thirdMonitor = third?.liveCandidateStateMonitor && typeof third.liveCandidateStateMonitor === 'object'
@@ -316,6 +332,29 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           summaryDerivedFrom: firstStatusCalibrationDiagnostics.summaryDerivedFrom || null,
           summaryLine: firstStatusCalibrationDiagnostics.summaryLine || null,
         },
+        actionInterpretation: {
+          modeUsed: firstActionInterpretation.modeUsed || null,
+          overallHistoryJudgment: firstActionInterpretation.overallHistoryJudgment || null,
+          recentTransitionBias: firstActionInterpretation.recentTransitionBias || null,
+          directionVsTransitionTension: firstActionInterpretation.directionVsTransitionTension === true,
+          actionStance: firstActionInterpretation.actionStance || null,
+          actionStanceReason: firstActionInterpretation.actionStanceReason || null,
+          actionBias: firstActionInterpretation.actionBias || null,
+          confidenceImpact: firstActionInterpretation.confidenceImpact || null,
+          requiresFreshConfirmation: firstActionInterpretation.requiresFreshConfirmation === true,
+          summaryLine: firstActionInterpretation.summaryLine || null,
+        },
+        actionInterpretationAudit: {
+          ruleUsed: firstActionInterpretationAudit.ruleUsed || null,
+          inputsUsed: firstActionInterpretationAudit.inputsUsed && typeof firstActionInterpretationAudit.inputsUsed === 'object'
+            ? firstActionInterpretationAudit.inputsUsed
+            : {},
+          tensionCase: firstActionInterpretationAudit.tensionCase || null,
+          stanceAlternativesConsidered: Array.isArray(firstActionInterpretationAudit.stanceAlternativesConsidered)
+            ? firstActionInterpretationAudit.stanceAlternativesConsidered
+            : [],
+          summaryLine: firstActionInterpretationAudit.summaryLine || null,
+        },
       },
       second: {
         loop: {
@@ -427,6 +466,29 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           summaryDerivedFrom: secondStatusCalibrationDiagnostics.summaryDerivedFrom || null,
           summaryLine: secondStatusCalibrationDiagnostics.summaryLine || null,
         },
+        actionInterpretation: {
+          modeUsed: secondActionInterpretation.modeUsed || null,
+          overallHistoryJudgment: secondActionInterpretation.overallHistoryJudgment || null,
+          recentTransitionBias: secondActionInterpretation.recentTransitionBias || null,
+          directionVsTransitionTension: secondActionInterpretation.directionVsTransitionTension === true,
+          actionStance: secondActionInterpretation.actionStance || null,
+          actionStanceReason: secondActionInterpretation.actionStanceReason || null,
+          actionBias: secondActionInterpretation.actionBias || null,
+          confidenceImpact: secondActionInterpretation.confidenceImpact || null,
+          requiresFreshConfirmation: secondActionInterpretation.requiresFreshConfirmation === true,
+          summaryLine: secondActionInterpretation.summaryLine || null,
+        },
+        actionInterpretationAudit: {
+          ruleUsed: secondActionInterpretationAudit.ruleUsed || null,
+          inputsUsed: secondActionInterpretationAudit.inputsUsed && typeof secondActionInterpretationAudit.inputsUsed === 'object'
+            ? secondActionInterpretationAudit.inputsUsed
+            : {},
+          tensionCase: secondActionInterpretationAudit.tensionCase || null,
+          stanceAlternativesConsidered: Array.isArray(secondActionInterpretationAudit.stanceAlternativesConsidered)
+            ? secondActionInterpretationAudit.stanceAlternativesConsidered
+            : [],
+          summaryLine: secondActionInterpretationAudit.summaryLine || null,
+        },
       },
       thirdImmediateRead: {
         monitor: {
@@ -524,6 +586,20 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
         historyJudgmentTensionVisible:
           Object.prototype.hasOwnProperty.call(secondJudgment || {}, 'directionVsTransitionTension')
           && typeof secondJudgment?.directionVsTransitionSummaryLine === 'string',
+        historyActionInterpretationVisible:
+          Boolean(
+            secondActionInterpretation
+            && typeof secondActionInterpretation === 'object'
+            && typeof secondActionInterpretation.actionStance === 'string'
+            && secondActionInterpretation.actionStance.length > 0
+          ),
+        historyActionInterpretationAuditVisible:
+          Boolean(
+            secondActionInterpretationAudit
+            && typeof secondActionInterpretationAudit === 'object'
+            && typeof secondActionInterpretationAudit.ruleUsed === 'string'
+            && secondActionInterpretationAudit.ruleUsed.length > 0
+          ),
         fallbackExplicitWhenTriggered:
           syntheticFallbackMonitor.historyEvaluationFallbackUsed === true
           && String(syntheticFallbackMonitor.historyEvaluationMode || '') !== 'loop_only'

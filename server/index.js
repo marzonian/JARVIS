@@ -35354,6 +35354,26 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
   const liveCandidateHistoryStatusCalibrationDiagnostics = liveCandidateHistoryStatusCalibrationDiagnosticsSource
     ? cloneData(liveCandidateHistoryStatusCalibrationDiagnosticsSource, liveCandidateHistoryStatusCalibrationDiagnosticsSource)
     : null;
+  const liveCandidateHistoryActionInterpretationSource = (
+    commandCenter?.liveCandidateHistoryActionInterpretation && typeof commandCenter.liveCandidateHistoryActionInterpretation === 'object'
+      ? commandCenter.liveCandidateHistoryActionInterpretation
+      : (strategyLayers?.liveCandidateHistoryActionInterpretation && typeof strategyLayers.liveCandidateHistoryActionInterpretation === 'object'
+        ? strategyLayers.liveCandidateHistoryActionInterpretation
+        : null)
+  );
+  const liveCandidateHistoryActionInterpretation = liveCandidateHistoryActionInterpretationSource
+    ? cloneData(liveCandidateHistoryActionInterpretationSource, liveCandidateHistoryActionInterpretationSource)
+    : null;
+  const liveCandidateHistoryActionInterpretationAuditSource = (
+    commandCenter?.liveCandidateHistoryActionInterpretationAudit && typeof commandCenter.liveCandidateHistoryActionInterpretationAudit === 'object'
+      ? commandCenter.liveCandidateHistoryActionInterpretationAudit
+      : (strategyLayers?.liveCandidateHistoryActionInterpretationAudit && typeof strategyLayers.liveCandidateHistoryActionInterpretationAudit === 'object'
+        ? strategyLayers.liveCandidateHistoryActionInterpretationAudit
+        : null)
+  );
+  const liveCandidateHistoryActionInterpretationAudit = liveCandidateHistoryActionInterpretationAuditSource
+    ? cloneData(liveCandidateHistoryActionInterpretationAuditSource, liveCandidateHistoryActionInterpretationAuditSource)
+    : null;
   const liveCandidateObservationLoopStatusSource = (
     commandCenter?.liveCandidateObservationLoopStatus && typeof commandCenter.liveCandidateObservationLoopStatus === 'object'
       ? commandCenter.liveCandidateObservationLoopStatus
@@ -35446,6 +35466,8 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
     liveCandidateHistoryJudgmentAudit,
     liveCandidateHistoryStatusCalibration,
     liveCandidateHistoryStatusCalibrationDiagnostics,
+    liveCandidateHistoryActionInterpretation,
+    liveCandidateHistoryActionInterpretationAudit,
     liveCandidateObservationLoopStatus,
     liveCandidateObservationLoopStatusLine,
     liveCandidateObservationRenderMode,
@@ -35489,6 +35511,14 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       liveCandidateHistoryStatusCalibrationDiagnostics: cloneData(
         liveCandidateHistoryStatusCalibrationDiagnostics,
         liveCandidateHistoryStatusCalibrationDiagnostics
+      ),
+      liveCandidateHistoryActionInterpretation: cloneData(
+        liveCandidateHistoryActionInterpretation,
+        liveCandidateHistoryActionInterpretation
+      ),
+      liveCandidateHistoryActionInterpretationAudit: cloneData(
+        liveCandidateHistoryActionInterpretationAudit,
+        liveCandidateHistoryActionInterpretationAudit
       ),
       liveCandidateObservationLoopStatus: cloneData(liveCandidateObservationLoopStatus, liveCandidateObservationLoopStatus),
       liveCandidateObservationLoopStatusLine,
@@ -35538,6 +35568,14 @@ function buildStrategyLayerSnapshotContract(payload = {}) {
       liveCandidateHistoryStatusCalibrationDiagnostics: cloneData(
         liveCandidateHistoryStatusCalibrationDiagnostics,
         liveCandidateHistoryStatusCalibrationDiagnostics
+      ),
+      liveCandidateHistoryActionInterpretation: cloneData(
+        liveCandidateHistoryActionInterpretation,
+        liveCandidateHistoryActionInterpretation
+      ),
+      liveCandidateHistoryActionInterpretationAudit: cloneData(
+        liveCandidateHistoryActionInterpretationAudit,
+        liveCandidateHistoryActionInterpretationAudit
       ),
       liveCandidateObservationLoopStatus: cloneData(liveCandidateObservationLoopStatus, liveCandidateObservationLoopStatus),
       liveCandidateObservationLoopStatusLine,
@@ -35611,6 +35649,14 @@ function applyStrategyLayerSnapshotMirrors(commandCenter = {}, strategyLayerSnap
   commandCenter.liveCandidateHistoryStatusCalibrationDiagnostics = cloneData(
     strategyLayerSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics,
     strategyLayerSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics
+  );
+  commandCenter.liveCandidateHistoryActionInterpretation = cloneData(
+    strategyLayerSnapshot.liveCandidateHistoryActionInterpretation,
+    strategyLayerSnapshot.liveCandidateHistoryActionInterpretation
+  );
+  commandCenter.liveCandidateHistoryActionInterpretationAudit = cloneData(
+    strategyLayerSnapshot.liveCandidateHistoryActionInterpretationAudit,
+    strategyLayerSnapshot.liveCandidateHistoryActionInterpretationAudit
   );
   commandCenter.liveCandidateObservationLoopStatus = cloneData(
     strategyLayerSnapshot.liveCandidateObservationLoopStatus,
@@ -35756,6 +35802,14 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
         strategyLayerSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics,
         strategyLayerSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics
       );
+      recommendationPerformance.liveCandidateHistoryActionInterpretation = cloneData(
+        strategyLayerSnapshot.liveCandidateHistoryActionInterpretation,
+        strategyLayerSnapshot.liveCandidateHistoryActionInterpretation
+      );
+      recommendationPerformance.liveCandidateHistoryActionInterpretationAudit = cloneData(
+        strategyLayerSnapshot.liveCandidateHistoryActionInterpretationAudit,
+        strategyLayerSnapshot.liveCandidateHistoryActionInterpretationAudit
+      );
       recommendationPerformance.liveCandidateObservationLoopStatus = cloneData(
         strategyLayerSnapshot.liveCandidateObservationLoopStatus,
         strategyLayerSnapshot.liveCandidateObservationLoopStatus
@@ -35816,6 +35870,8 @@ app.get('/api/jarvis/recommendation/performance', async (req, res) => {
       liveCandidateHistoryJudgmentAudit: strategyLayerSnapshot?.liveCandidateHistoryJudgmentAudit || null,
       liveCandidateHistoryStatusCalibration: strategyLayerSnapshot?.liveCandidateHistoryStatusCalibration || null,
       liveCandidateHistoryStatusCalibrationDiagnostics: strategyLayerSnapshot?.liveCandidateHistoryStatusCalibrationDiagnostics || null,
+      liveCandidateHistoryActionInterpretation: strategyLayerSnapshot?.liveCandidateHistoryActionInterpretation || null,
+      liveCandidateHistoryActionInterpretationAudit: strategyLayerSnapshot?.liveCandidateHistoryActionInterpretationAudit || null,
       liveCandidateObservationLoopStatus: strategyLayerSnapshot?.liveCandidateObservationLoopStatus || null,
       liveCandidateObservationLoopStatusLine: strategyLayerSnapshot?.liveCandidateObservationLoopStatusLine || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
@@ -36400,6 +36456,8 @@ app.get('/api/jarvis/command-center', async (req, res) => {
       liveCandidateHistoryJudgmentAudit: strategyLayerSnapshot?.liveCandidateHistoryJudgmentAudit || null,
       liveCandidateHistoryStatusCalibration: strategyLayerSnapshot?.liveCandidateHistoryStatusCalibration || null,
       liveCandidateHistoryStatusCalibrationDiagnostics: strategyLayerSnapshot?.liveCandidateHistoryStatusCalibrationDiagnostics || null,
+      liveCandidateHistoryActionInterpretation: strategyLayerSnapshot?.liveCandidateHistoryActionInterpretation || null,
+      liveCandidateHistoryActionInterpretationAudit: strategyLayerSnapshot?.liveCandidateHistoryActionInterpretationAudit || null,
       liveCandidateObservationLoopStatus: strategyLayerSnapshot?.liveCandidateObservationLoopStatus || null,
       liveCandidateObservationLoopStatusLine: strategyLayerSnapshot?.liveCandidateObservationLoopStatusLine || null,
       strategyCandidateOpportunityBridge: strategyLayerSnapshot?.strategyCandidateOpportunityBridge || null,
