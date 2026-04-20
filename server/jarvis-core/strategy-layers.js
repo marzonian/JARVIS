@@ -88,6 +88,7 @@ const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_CONTEXT_ROWS = 3;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_RECENT_ROW_LIMIT = 20;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_DOMINANT_RULE_LIMIT = 3;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_CONTEXT_DOMINANCE_RATIO = 0.6;
+const LIVE_CANDIDATE_HISTORY_JUDGMENT_TENSION_DOMINANCE_MARGIN = 8;
 const LIVE_CANDIDATE_DB_STATEMENT_CACHE = new WeakMap();
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY = 'read_only';
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO = 'loop_auto';
@@ -2088,6 +2089,7 @@ function buildLiveCandidateHistoryStatusCalibration(input = {}) {
     'ready_now',
   ];
   const statusRuleMap = buildDefaultHistoryStatusRuleMap();
+  const statusSourceOfTruth = 'statusRuleMap.directionalEffect';
   const statusEvidence = {};
   const dominantStatusEffects = [];
 
@@ -2111,6 +2113,14 @@ function buildLiveCandidateHistoryStatusCalibration(input = {}) {
       acc[key] = Number(acc[key] || 0) + 1;
       return acc;
     }, {});
+    const observedDirectionalEffect = supportiveCount > unsupportiveCount
+      ? 'supportive'
+      : (unsupportiveCount > supportiveCount ? 'unsupportive' : 'neutral');
+    const observedConfidenceEffect = confidenceEffectCounts.negative > confidenceEffectCounts.positive
+      ? 'negative'
+      : (confidenceEffectCounts.positive > confidenceEffectCounts.negative ? 'positive' : 'none');
+    const mappedDirectionalEffect = String(statusRuleMap?.[status]?.directionalEffect || 'neutral').trim().toLowerCase() || 'neutral';
+    const mappedConfidenceEffect = String(statusRuleMap?.[status]?.confidenceEffect || 'none').trim().toLowerCase() || 'none';
 
     statusEvidence[status] = {
       status,
@@ -2118,6 +2128,10 @@ function buildLiveCandidateHistoryStatusCalibration(input = {}) {
       supportiveCount,
       unsupportiveCount,
       neutralCount,
+      observedDirectionalEffect,
+      observedConfidenceEffect,
+      mappedDirectionalEffect,
+      mappedConfidenceEffect,
       confidenceEffectCounts,
       recentExampleRuleHits,
       recentRows: matchingRows
@@ -2139,12 +2153,10 @@ function buildLiveCandidateHistoryStatusCalibration(input = {}) {
       dominantStatusEffects.push({
         status,
         sampledRowCount: matchingRows.length,
-        directionalEffect: supportiveCount > unsupportiveCount
-          ? 'supportive'
-          : (unsupportiveCount > supportiveCount ? 'unsupportive' : 'neutral'),
-        confidenceEffect: confidenceEffectCounts.negative > confidenceEffectCounts.positive
-          ? 'negative'
-          : (confidenceEffectCounts.positive > confidenceEffectCounts.negative ? 'positive' : 'none'),
+        directionalEffect: mappedDirectionalEffect,
+        confidenceEffect: mappedConfidenceEffect,
+        observedDirectionalEffect,
+        observedConfidenceEffect,
       });
     }
   });
@@ -2159,13 +2171,101 @@ function buildLiveCandidateHistoryStatusCalibration(input = {}) {
   const dominantLabel = dominantStatusEffects.length > 0
     ? `${dominantStatusEffects[0].status} (${dominantStatusEffects[0].directionalEffect})`
     : 'none';
-  const summaryLine = `Status calibration: ${dominantLabel} dominates loop-only status evidence.`;
+  const summaryLine = dominantStatusEffects.length > 0
+    ? `Status calibration: ${dominantLabel} dominates loop-only status evidence (rule-map driven).`
+    : 'Status calibration: no loop-only status evidence yet.';
 
   return {
     modeUsed: 'loop_only',
+    statusSourceOfTruth,
     statusRuleMap,
     statusEvidence,
     dominantStatusEffects,
+    summaryDerivedFrom: 'dominantStatusEffects.directionalEffect(rule_map)',
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
+function buildLiveCandidateHistoryStatusCalibrationDiagnostics(input = {}) {
+  const calibration = input?.statusCalibration && typeof input.statusCalibration === 'object'
+    ? input.statusCalibration
+    : {};
+  const statusRuleMap = calibration?.statusRuleMap && typeof calibration.statusRuleMap === 'object'
+    ? calibration.statusRuleMap
+    : {};
+  const statusEvidence = calibration?.statusEvidence && typeof calibration.statusEvidence === 'object'
+    ? calibration.statusEvidence
+    : {};
+  const dominantStatusEffects = Array.isArray(calibration?.dominantStatusEffects)
+    ? calibration.dominantStatusEffects
+    : [];
+  const statusSourceOfTruth = String(calibration?.statusSourceOfTruth || 'statusRuleMap.directionalEffect').trim() || 'statusRuleMap.directionalEffect';
+  const summaryDerivedFrom = String(calibration?.summaryDerivedFrom || 'dominantStatusEffects.directionalEffect(rule_map)').trim()
+    || 'dominantStatusEffects.directionalEffect(rule_map)';
+  const inconsistencies = [];
+
+  dominantStatusEffects.forEach((entry) => {
+    const status = String(entry?.status || '').trim().toLowerCase();
+    if (!status) return;
+    const mapEntry = statusRuleMap?.[status] && typeof statusRuleMap[status] === 'object'
+      ? statusRuleMap[status]
+      : null;
+    if (!mapEntry) {
+      inconsistencies.push({
+        status,
+        issue: 'status_rule_map_missing',
+        expected: 'status_rule_map_entry',
+        actual: 'missing',
+      });
+      return;
+    }
+    const expectedDirectionalEffect = String(mapEntry?.directionalEffect || 'neutral').trim().toLowerCase() || 'neutral';
+    const actualDirectionalEffect = String(entry?.directionalEffect || '').trim().toLowerCase() || 'neutral';
+    if (expectedDirectionalEffect !== actualDirectionalEffect) {
+      inconsistencies.push({
+        status,
+        issue: 'dominant_directional_effect_mismatch',
+        expected: expectedDirectionalEffect,
+        actual: actualDirectionalEffect,
+      });
+    }
+    const evidence = statusEvidence?.[status] && typeof statusEvidence[status] === 'object'
+      ? statusEvidence[status]
+      : null;
+    const mappedDirectionalEffect = String(evidence?.mappedDirectionalEffect || expectedDirectionalEffect).trim().toLowerCase() || expectedDirectionalEffect;
+    if (mappedDirectionalEffect !== expectedDirectionalEffect) {
+      inconsistencies.push({
+        status,
+        issue: 'status_evidence_mapped_directional_effect_mismatch',
+        expected: expectedDirectionalEffect,
+        actual: mappedDirectionalEffect,
+      });
+    }
+  });
+
+  Object.entries(statusEvidence).forEach(([status, evidence]) => {
+    if (!evidence || typeof evidence !== 'object') return;
+    if (Number(evidence?.sampledRowCount || 0) <= 0) return;
+    if (statusRuleMap?.[status]) return;
+    inconsistencies.push({
+      status,
+      issue: 'status_evidence_has_rows_but_rule_missing',
+      expected: 'status_rule_map_entry',
+      actual: 'missing',
+    });
+  });
+
+  const consistent = inconsistencies.length <= 0;
+  const summaryLine = consistent
+    ? 'Status calibration consistency: rule map, evidence, and summary are aligned.'
+    : `Status calibration consistency failed: ${inconsistencies.length} inconsistency issue(s) detected.`;
+
+  return {
+    consistent,
+    inconsistencies,
+    statusSourceOfTruth,
+    summaryDerivedFrom,
     summaryLine,
     advisoryOnly: true,
   };
@@ -2317,10 +2417,26 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
     else if (unsupportiveCount > supportiveCount || recentTransitionBias === 'deteriorating') judgment = 'weak';
     else judgment = 'mixed';
   }
+  const directionVsTransitionTension = !sparseHistory
+    && ((judgment === 'weak' && recentTransitionBias === 'improving')
+      || (judgment === 'supportive' && recentTransitionBias === 'deteriorating'));
+  let directionVsTransitionSummaryLine = 'No direction-vs-transition read; loop history is sparse.';
+  if (!sparseHistory && directionVsTransitionTension && judgment === 'weak' && recentTransitionBias === 'improving') {
+    directionVsTransitionSummaryLine = 'History remains weak overall, but recent transitions are improving.';
+  } else if (!sparseHistory && directionVsTransitionTension && judgment === 'supportive' && recentTransitionBias === 'deteriorating') {
+    directionVsTransitionSummaryLine = 'History remains supportive overall, but recent transitions are deteriorating.';
+  } else if (!sparseHistory && recentTransitionBias === 'insufficient_history') {
+    directionVsTransitionSummaryLine = 'Overall direction available; transition bias has insufficient history.';
+  } else if (!sparseHistory && recentTransitionBias === 'neutral') {
+    directionVsTransitionSummaryLine = 'No tension: recent transitions are neutral versus overall direction.';
+  } else if (!sparseHistory) {
+    directionVsTransitionSummaryLine = 'No tension: overall direction and recent transitions are aligned.';
+  }
 
   const clarity = directionalCount > 0
     ? Math.abs(supportiveCount - unsupportiveCount) / directionalCount
     : 0;
+  const directionalMargin = Math.abs(supportiveCount - unsupportiveCount);
   const contextNeutralCount = observationClassifications.reduce((count, row) => {
     const hits = Array.isArray(row?.ruleHits) ? row.ruleHits : [];
     if (hits.some((rule) => String(rule || '').includes('context_neutral') || String(rule || '').includes('outside_action_window'))) {
@@ -2354,6 +2470,13 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
   if (recentTransitionBias === 'improving') confidenceDrivers.push('recent_transition_bias_improving');
   else if (recentTransitionBias === 'deteriorating') confidenceDrivers.push('recent_transition_bias_deteriorating');
   else if (recentTransitionBias === 'insufficient_history') confidencePenaltyReasons.push('transition_bias_insufficient_history');
+  if (directionVsTransitionTension) {
+    if (directionalMargin >= LIVE_CANDIDATE_HISTORY_JUDGMENT_TENSION_DOMINANCE_MARGIN && clarity >= 0.35) {
+      confidenceDrivers.push('overall_direction_still_dominates_recent_transition_conflict');
+    } else {
+      confidencePenaltyReasons.push('recent_transition_bias_conflicts_with_overall_direction');
+    }
+  }
   if (contextDominanceRatio >= LIVE_CANDIDATE_HISTORY_JUDGMENT_CONTEXT_DOMINANCE_RATIO) {
     confidencePenaltyReasons.push('context_only_status_dominance');
   }
@@ -2368,6 +2491,9 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
     confidenceLabel = 'medium';
   }
   if (confidenceLabel === 'high' && contextDominanceRatio >= LIVE_CANDIDATE_HISTORY_JUDGMENT_CONTEXT_DOMINANCE_RATIO) {
+    confidenceLabel = 'medium';
+  }
+  if (confidenceLabel === 'high' && confidencePenaltyReasons.includes('recent_transition_bias_conflicts_with_overall_direction')) {
     confidenceLabel = 'medium';
   }
   if (confidenceLabel === 'medium' && sparseHistory) confidenceLabel = 'low';
@@ -2398,6 +2524,13 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
   }
   if (confidencePenaltyReasons.includes('context_only_status_dominance') && confidenceLabel !== 'low') {
     confidenceReason = 'Confidence capped because context-only statuses dominate loop-only observations.';
+  }
+  if (directionVsTransitionTension) {
+    if (confidenceDrivers.includes('overall_direction_still_dominates_recent_transition_conflict')) {
+      confidenceReason = `${confidenceReason} Overall directional majority still dominates recent opposing transitions.`;
+    } else {
+      confidenceReason = `${confidenceReason} Recent transitions conflict with the overall directional read.`;
+    }
   }
 
   let summaryLine = 'Loop history sparse; no strong read.';
@@ -2432,6 +2565,8 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
     unsupportiveCount,
     neutralCount,
     recentTransitionBias,
+    directionVsTransitionTension,
+    directionVsTransitionSummaryLine,
     sparseHistory,
     sparseReason,
     summaryLine,
@@ -5508,6 +5643,9 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateTransitionHistory,
     liveOpportunityCandidates,
   });
+  const liveCandidateHistoryStatusCalibrationDiagnostics = buildLiveCandidateHistoryStatusCalibrationDiagnostics({
+    statusCalibration: liveCandidateHistoryStatusCalibration,
+  });
   const strategyCandidateOpportunityBridge = buildStrategyCandidateBridge({
     opportunityScoring,
     liveOpportunityCandidates,
@@ -5729,6 +5867,10 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryStatusCalibration,
     liveCandidateHistoryStatusCalibration
   );
+  todayRecommendation.liveCandidateHistoryStatusCalibrationDiagnostics = cloneData(
+    liveCandidateHistoryStatusCalibrationDiagnostics,
+    liveCandidateHistoryStatusCalibrationDiagnostics
+  );
   todayRecommendation.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -5782,6 +5924,10 @@ function buildCommandCenterPanels(input = {}) {
   decisionBoard.liveCandidateHistoryStatusCalibration = cloneData(
     liveCandidateHistoryStatusCalibration,
     liveCandidateHistoryStatusCalibration
+  );
+  decisionBoard.liveCandidateHistoryStatusCalibrationDiagnostics = cloneData(
+    liveCandidateHistoryStatusCalibrationDiagnostics,
+    liveCandidateHistoryStatusCalibrationDiagnostics
   );
   decisionBoard.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
@@ -5837,6 +5983,10 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryStatusCalibration: cloneData(
       liveCandidateHistoryStatusCalibration,
       liveCandidateHistoryStatusCalibration
+    ),
+    liveCandidateHistoryStatusCalibrationDiagnostics: cloneData(
+      liveCandidateHistoryStatusCalibrationDiagnostics,
+      liveCandidateHistoryStatusCalibrationDiagnostics
     ),
     strategyCandidateOpportunityBridge: cloneData(
       strategyCandidateOpportunityBridge,
@@ -5991,5 +6141,6 @@ module.exports = {
   buildReplayVariantAssessment,
   buildCommandCenterPanels,
   buildAssistantDecisionBrief,
+  buildLiveCandidateHistoryStatusCalibrationDiagnostics,
   buildPineScriptForStrategy,
 };

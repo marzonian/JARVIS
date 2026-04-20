@@ -152,6 +152,10 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
     const firstStatusCalibration = first?.liveCandidateHistoryStatusCalibration && typeof first.liveCandidateHistoryStatusCalibration === 'object'
       ? first.liveCandidateHistoryStatusCalibration
       : {};
+    const firstStatusCalibrationDiagnostics = first?.liveCandidateHistoryStatusCalibrationDiagnostics
+      && typeof first.liveCandidateHistoryStatusCalibrationDiagnostics === 'object'
+      ? first.liveCandidateHistoryStatusCalibrationDiagnostics
+      : {};
     await sleep(3600);
     const second = await getJson(server.baseUrl, commandCenterQuery);
     const secondStatus = pullStatus(second);
@@ -166,6 +170,10 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
       : {};
     const secondStatusCalibration = second?.liveCandidateHistoryStatusCalibration && typeof second.liveCandidateHistoryStatusCalibration === 'object'
       ? second.liveCandidateHistoryStatusCalibration
+      : {};
+    const secondStatusCalibrationDiagnostics = second?.liveCandidateHistoryStatusCalibrationDiagnostics
+      && typeof second.liveCandidateHistoryStatusCalibrationDiagnostics === 'object'
+      ? second.liveCandidateHistoryStatusCalibrationDiagnostics
       : {};
     const third = await getJson(server.baseUrl, commandCenterQuery);
     const thirdMonitor = third?.liveCandidateStateMonitor && typeof third.liveCandidateStateMonitor === 'object'
@@ -262,6 +270,8 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           unsupportiveCount: Number(firstJudgment.unsupportiveCount || 0),
           neutralCount: Number(firstJudgment.neutralCount || 0),
           recentTransitionBias: firstJudgment.recentTransitionBias || null,
+          directionVsTransitionTension: firstJudgment.directionVsTransitionTension === true,
+          directionVsTransitionSummaryLine: firstJudgment.directionVsTransitionSummaryLine || null,
           sparseHistory: firstJudgment.sparseHistory === true,
           sparseReason: firstJudgment.sparseReason || null,
           summaryLine: firstJudgment.summaryLine || null,
@@ -286,6 +296,8 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
         },
         statusCalibration: {
           modeUsed: firstStatusCalibration.modeUsed || null,
+          statusSourceOfTruth: firstStatusCalibration.statusSourceOfTruth || null,
+          summaryDerivedFrom: firstStatusCalibration.summaryDerivedFrom || null,
           dominantStatusEffects: Array.isArray(firstStatusCalibration.dominantStatusEffects)
             ? firstStatusCalibration.dominantStatusEffects
             : [],
@@ -294,6 +306,15 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           preOpenWatchEvidence: firstStatusCalibration?.statusEvidence?.pre_open_watch || null,
           blockedEvidence: firstStatusCalibration?.statusEvidence?.blocked || null,
           summaryLine: firstStatusCalibration.summaryLine || null,
+        },
+        statusCalibrationDiagnostics: {
+          consistent: firstStatusCalibrationDiagnostics.consistent === true,
+          inconsistencies: Array.isArray(firstStatusCalibrationDiagnostics.inconsistencies)
+            ? firstStatusCalibrationDiagnostics.inconsistencies
+            : [],
+          statusSourceOfTruth: firstStatusCalibrationDiagnostics.statusSourceOfTruth || null,
+          summaryDerivedFrom: firstStatusCalibrationDiagnostics.summaryDerivedFrom || null,
+          summaryLine: firstStatusCalibrationDiagnostics.summaryLine || null,
         },
       },
       second: {
@@ -360,6 +381,8 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           unsupportiveCount: Number(secondJudgment.unsupportiveCount || 0),
           neutralCount: Number(secondJudgment.neutralCount || 0),
           recentTransitionBias: secondJudgment.recentTransitionBias || null,
+          directionVsTransitionTension: secondJudgment.directionVsTransitionTension === true,
+          directionVsTransitionSummaryLine: secondJudgment.directionVsTransitionSummaryLine || null,
           sparseHistory: secondJudgment.sparseHistory === true,
           sparseReason: secondJudgment.sparseReason || null,
           summaryLine: secondJudgment.summaryLine || null,
@@ -384,6 +407,8 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
         },
         statusCalibration: {
           modeUsed: secondStatusCalibration.modeUsed || null,
+          statusSourceOfTruth: secondStatusCalibration.statusSourceOfTruth || null,
+          summaryDerivedFrom: secondStatusCalibration.summaryDerivedFrom || null,
           dominantStatusEffects: Array.isArray(secondStatusCalibration.dominantStatusEffects)
             ? secondStatusCalibration.dominantStatusEffects
             : [],
@@ -392,6 +417,15 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           preOpenWatchEvidence: secondStatusCalibration?.statusEvidence?.pre_open_watch || null,
           blockedEvidence: secondStatusCalibration?.statusEvidence?.blocked || null,
           summaryLine: secondStatusCalibration.summaryLine || null,
+        },
+        statusCalibrationDiagnostics: {
+          consistent: secondStatusCalibrationDiagnostics.consistent === true,
+          inconsistencies: Array.isArray(secondStatusCalibrationDiagnostics.inconsistencies)
+            ? secondStatusCalibrationDiagnostics.inconsistencies
+            : [],
+          statusSourceOfTruth: secondStatusCalibrationDiagnostics.statusSourceOfTruth || null,
+          summaryDerivedFrom: secondStatusCalibrationDiagnostics.summaryDerivedFrom || null,
+          summaryLine: secondStatusCalibrationDiagnostics.summaryLine || null,
         },
       },
       thirdImmediateRead: {
@@ -479,6 +513,17 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           String(secondStatusCalibration?.statusRuleMap?.pre_open_watch?.directionalEffect || '') === 'neutral',
         historyStatusCalibrationBlockedExplicit:
           String(secondStatusCalibration?.statusRuleMap?.blocked?.treatment || '').length > 0,
+        historyStatusCalibrationDiagnosticsVisible:
+          Boolean(
+            secondStatusCalibrationDiagnostics
+            && typeof secondStatusCalibrationDiagnostics === 'object'
+            && Object.prototype.hasOwnProperty.call(secondStatusCalibrationDiagnostics, 'consistent')
+          ),
+        historyStatusCalibrationConsistent:
+          secondStatusCalibrationDiagnostics?.consistent === true,
+        historyJudgmentTensionVisible:
+          Object.prototype.hasOwnProperty.call(secondJudgment || {}, 'directionVsTransitionTension')
+          && typeof secondJudgment?.directionVsTransitionSummaryLine === 'string',
         fallbackExplicitWhenTriggered:
           syntheticFallbackMonitor.historyEvaluationFallbackUsed === true
           && String(syntheticFallbackMonitor.historyEvaluationMode || '') !== 'loop_only'

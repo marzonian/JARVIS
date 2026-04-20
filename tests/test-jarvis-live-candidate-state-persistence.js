@@ -5,6 +5,7 @@ const Database = require('better-sqlite3');
 const {
   buildStrategyLayerSnapshot,
   buildCommandCenterPanels,
+  buildLiveCandidateHistoryStatusCalibrationDiagnostics,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
 } = require('../server/jarvis-core/strategy-layers');
@@ -601,10 +602,19 @@ function run() {
     });
     const preOpenSnapshot = makeReadSnapshot({ db: preOpenDb, nowEt: '2026-04-17 10:01' });
     assert(preOpenSnapshot.liveCandidateHistoryJudgment.unsupportiveCount === 0, 'pre_open fixture should not auto-classify pre_open rows as unsupportive');
+    assert(typeof preOpenSnapshot.liveCandidateHistoryJudgment.directionVsTransitionTension === 'boolean', 'pre_open fixture should surface directionVsTransitionTension');
+    assert(typeof preOpenSnapshot.liveCandidateHistoryJudgment.directionVsTransitionSummaryLine === 'string' && preOpenSnapshot.liveCandidateHistoryJudgment.directionVsTransitionSummaryLine.length > 0, 'pre_open fixture should surface directionVsTransitionSummaryLine');
     assert(preOpenSnapshot.liveCandidateHistoryStatusCalibration.statusEvidence.pre_open_watch.sampledRowCount >= 1, 'pre_open fixture should expose pre_open_watch status evidence');
     assert(preOpenSnapshot.liveCandidateHistoryStatusCalibration.statusRuleMap.pre_open_watch.directionalEffect === 'neutral', 'pre_open status map should mark directional neutral');
+    const preOpenDominant = Array.isArray(preOpenSnapshot.liveCandidateHistoryStatusCalibration.dominantStatusEffects)
+      ? preOpenSnapshot.liveCandidateHistoryStatusCalibration.dominantStatusEffects.find((entry) => String(entry?.status || '') === 'pre_open_watch')
+      : null;
+    assert(preOpenDominant && preOpenDominant.directionalEffect === 'neutral', 'pre_open dominant status effect should remain neutral under calibrated map');
+    assert(!String(preOpenSnapshot.liveCandidateHistoryStatusCalibration.summaryLine || '').includes('pre_open_watch (unsupportive)'), 'pre_open summary should not describe pre_open_watch as unsupportive');
     assert(preOpenSnapshot.liveCandidateHistoryJudgmentAudit.neutralRuleHits.observation_status_pre_open_watch_context_neutral >= 1, 'pre_open fixture should track context-neutral pre_open rule hits');
     assert(preOpenSnapshot.liveCandidateHistoryJudgment.confidencePenaltyReasons.includes('context_only_status_dominance'), 'pre_open fixture should apply context-only confidence penalty');
+    assert(preOpenSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics && typeof preOpenSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics === 'object', 'pre_open fixture should surface status calibration diagnostics');
+    assert(preOpenSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics.consistent === true, 'pre_open fixture should report consistent status calibration diagnostics');
     preOpenDb.close();
 
     const supportiveDb = new Database(':memory:');
@@ -701,13 +711,77 @@ function run() {
     assert(weakSnapshot.liveCandidateHistoryJudgment.sparseHistory === false, 'weak fixture should not be sparse');
     assert(weakSnapshot.liveCandidateHistoryJudgment.judgment === 'weak', 'weak fixture should classify as weak');
     assert(weakSnapshot.liveCandidateHistoryJudgment.recentTransitionBias === 'deteriorating', 'weak fixture should classify transition bias as deteriorating');
+    assert(weakSnapshot.liveCandidateHistoryJudgment.directionVsTransitionTension === false, 'weak fixture should not mark direction-vs-transition tension when both are deteriorating');
     assert(weakSnapshot.liveCandidateHistoryJudgment.unsupportiveCount > weakSnapshot.liveCandidateHistoryJudgment.supportiveCount, 'weak fixture should have unsupportive edge');
     assert(weakSnapshot.liveCandidateHistoryJudgmentAudit.unsupportiveRuleHits.observation_status_blocked_poor_structure >= 1, 'weak fixture should expose blocked-poor-structure unsupportive rule hit');
     assert(weakSnapshot.liveCandidateHistoryJudgmentAudit.dominantUnsupportiveRules.length > 0, 'weak fixture should expose dominant unsupportive rules');
     assert(weakSnapshot.liveCandidateHistoryJudgment.confidenceReason.toLowerCase().includes('unsupportive'), 'weak fixture confidence reason should explain unsupportive majority');
     assert(weakSnapshot.liveCandidateHistoryJudgmentAudit.recentClassifiedRows.every((row) => Array.isArray(row.ruleHits)), 'weak fixture recent classified rows should include ruleHits');
     assert(weakSnapshot.liveCandidateHistoryStatusCalibration.statusRuleMap.blocked.treatment === 'unsupportive_if_quality_negative_else_neutral', 'weak fixture should expose blocked split treatment');
+    assert(weakSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics && weakSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics.consistent === true, 'weak fixture should report consistent status calibration diagnostics');
     weakDb.close();
+
+    const tensionDb = new Database(':memory:');
+    buildCommandCenterPanels(buildInput({ db: tensionDb, persistLiveCandidateState: false }));
+    for (let i = 0; i < 12; i += 1) {
+      insertObservation(tensionDb, {
+        observed_at: `2026-04-17 11:${String(i).padStart(2, '0')}`,
+        candidate_status: 'blocked',
+        structure_quality_score: 15,
+        structure_quality_label: 'poor',
+        candidate_expected_value: -28,
+        actionable_now: false,
+        observation_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+      });
+    }
+    for (let i = 0; i < 10; i += 1) {
+      insertTransition(tensionDb, {
+        transition_at: `2026-04-17 11:${String(30 + i).padStart(2, '0')}`,
+        transition_type: 'structure_improved',
+        previous_status: 'watch_trigger',
+        current_status: 'watch_trigger',
+        previous_actionable: false,
+        current_actionable: false,
+        transition_write_source: LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
+      });
+    }
+    const tensionSnapshot = makeReadSnapshot({ db: tensionDb });
+    assert(tensionSnapshot.liveCandidateHistoryJudgment.judgment === 'weak', 'tension fixture should keep weak overall direction');
+    assert(tensionSnapshot.liveCandidateHistoryJudgment.recentTransitionBias === 'improving', 'tension fixture should mark improving transition bias');
+    assert(tensionSnapshot.liveCandidateHistoryJudgment.directionVsTransitionTension === true, 'tension fixture should detect direction-vs-transition tension');
+    assert(String(tensionSnapshot.liveCandidateHistoryJudgment.directionVsTransitionSummaryLine || '').toLowerCase().includes('improving'), 'tension fixture summary should mention improving transitions');
+    assert(
+      tensionSnapshot.liveCandidateHistoryJudgment.confidencePenaltyReasons.includes('recent_transition_bias_conflicts_with_overall_direction')
+      || tensionSnapshot.liveCandidateHistoryJudgment.confidenceDrivers.includes('overall_direction_still_dominates_recent_transition_conflict'),
+      'tension fixture should surface explicit confidence reconciliation rule'
+    );
+    tensionDb.close();
+
+    const forcedDiagnostics = buildLiveCandidateHistoryStatusCalibrationDiagnostics({
+      statusCalibration: {
+        statusRuleMap: {
+          pre_open_watch: {
+            directionalEffect: 'neutral',
+          },
+        },
+        statusEvidence: {
+          pre_open_watch: {
+            sampledRowCount: 2,
+            mappedDirectionalEffect: 'neutral',
+          },
+        },
+        dominantStatusEffects: [
+          {
+            status: 'pre_open_watch',
+            directionalEffect: 'unsupportive',
+          },
+        ],
+        statusSourceOfTruth: 'statusRuleMap.directionalEffect',
+        summaryDerivedFrom: 'dominantStatusEffects.directionalEffect(rule_map)',
+      },
+    });
+    assert(forcedDiagnostics.consistent === false, 'forced diagnostics fixture should detect inconsistency');
+    assert(Array.isArray(forcedDiagnostics.inconsistencies) && forcedDiagnostics.inconsistencies.length > 0, 'forced diagnostics fixture should return non-empty inconsistency list');
 
     const mixedDb = new Database(':memory:');
     buildCommandCenterPanels(buildInput({ db: mixedDb, persistLiveCandidateState: false }));
@@ -762,6 +836,7 @@ function run() {
     assert(mixedJudgmentSnapshot.liveCandidateHistoryJudgmentAudit.sampleSize === mixedJudgmentSnapshot.liveCandidateHistoryJudgment.historySampleSize + mixedJudgmentSnapshot.liveCandidateHistoryJudgment.transitionSampleSize, 'mixed fixture audit sample size should include observations plus transitions');
     assert(mixedJudgmentSnapshot.shadowMockTradeDecision && mixedJudgmentSnapshot.shadowMockTradeDecision.advisoryOnly === true, 'history judgment audit should not change authority path');
     assert(Array.isArray(mixedJudgmentSnapshot.liveCandidateHistoryStatusCalibration.dominantStatusEffects), 'mixed fixture should surface dominant status effects');
+    assert(mixedJudgmentSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics && mixedJudgmentSnapshot.liveCandidateHistoryStatusCalibrationDiagnostics.consistent === true, 'mixed fixture should report calibration consistency');
     mixedDb.close();
   }
 
