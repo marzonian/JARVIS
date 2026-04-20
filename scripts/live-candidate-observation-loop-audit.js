@@ -149,6 +149,9 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
     const firstJudgmentAudit = first?.liveCandidateHistoryJudgmentAudit && typeof first.liveCandidateHistoryJudgmentAudit === 'object'
       ? first.liveCandidateHistoryJudgmentAudit
       : {};
+    const firstStatusCalibration = first?.liveCandidateHistoryStatusCalibration && typeof first.liveCandidateHistoryStatusCalibration === 'object'
+      ? first.liveCandidateHistoryStatusCalibration
+      : {};
     await sleep(3600);
     const second = await getJson(server.baseUrl, commandCenterQuery);
     const secondStatus = pullStatus(second);
@@ -160,6 +163,9 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
       : {};
     const secondJudgmentAudit = second?.liveCandidateHistoryJudgmentAudit && typeof second.liveCandidateHistoryJudgmentAudit === 'object'
       ? second.liveCandidateHistoryJudgmentAudit
+      : {};
+    const secondStatusCalibration = second?.liveCandidateHistoryStatusCalibration && typeof second.liveCandidateHistoryStatusCalibration === 'object'
+      ? second.liveCandidateHistoryStatusCalibration
       : {};
     const third = await getJson(server.baseUrl, commandCenterQuery);
     const thirdMonitor = third?.liveCandidateStateMonitor && typeof third.liveCandidateStateMonitor === 'object'
@@ -278,6 +284,17 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           recentClassifiedRows: Array.isArray(firstJudgmentAudit.recentClassifiedRows) ? firstJudgmentAudit.recentClassifiedRows.slice(0, 5) : [],
           summaryLine: firstJudgmentAudit.summaryLine || null,
         },
+        statusCalibration: {
+          modeUsed: firstStatusCalibration.modeUsed || null,
+          dominantStatusEffects: Array.isArray(firstStatusCalibration.dominantStatusEffects)
+            ? firstStatusCalibration.dominantStatusEffects
+            : [],
+          preOpenWatchTreatment: firstStatusCalibration?.statusRuleMap?.pre_open_watch || null,
+          blockedTreatment: firstStatusCalibration?.statusRuleMap?.blocked || null,
+          preOpenWatchEvidence: firstStatusCalibration?.statusEvidence?.pre_open_watch || null,
+          blockedEvidence: firstStatusCalibration?.statusEvidence?.blocked || null,
+          summaryLine: firstStatusCalibration.summaryLine || null,
+        },
       },
       second: {
         loop: {
@@ -365,6 +382,17 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           recentClassifiedRows: Array.isArray(secondJudgmentAudit.recentClassifiedRows) ? secondJudgmentAudit.recentClassifiedRows.slice(0, 5) : [],
           summaryLine: secondJudgmentAudit.summaryLine || null,
         },
+        statusCalibration: {
+          modeUsed: secondStatusCalibration.modeUsed || null,
+          dominantStatusEffects: Array.isArray(secondStatusCalibration.dominantStatusEffects)
+            ? secondStatusCalibration.dominantStatusEffects
+            : [],
+          preOpenWatchTreatment: secondStatusCalibration?.statusRuleMap?.pre_open_watch || null,
+          blockedTreatment: secondStatusCalibration?.statusRuleMap?.blocked || null,
+          preOpenWatchEvidence: secondStatusCalibration?.statusEvidence?.pre_open_watch || null,
+          blockedEvidence: secondStatusCalibration?.statusEvidence?.blocked || null,
+          summaryLine: secondStatusCalibration.summaryLine || null,
+        },
       },
       thirdImmediateRead: {
         monitor: {
@@ -440,6 +468,17 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           secondJudgmentAudit && typeof secondJudgmentAudit === 'object'
           && Array.isArray(secondJudgmentAudit.dominantUnsupportiveRules)
           && Array.isArray(secondJudgmentAudit.recentClassifiedRows),
+        historyStatusCalibrationVisible:
+          Boolean(
+            secondStatusCalibration
+            && typeof secondStatusCalibration === 'object'
+            && secondStatusCalibration.statusRuleMap
+            && secondStatusCalibration.statusEvidence
+          ),
+        historyStatusCalibrationPreOpenExplicit:
+          String(secondStatusCalibration?.statusRuleMap?.pre_open_watch?.directionalEffect || '') === 'neutral',
+        historyStatusCalibrationBlockedExplicit:
+          String(secondStatusCalibration?.statusRuleMap?.blocked?.treatment || '').length > 0,
         fallbackExplicitWhenTriggered:
           syntheticFallbackMonitor.historyEvaluationFallbackUsed === true
           && String(syntheticFallbackMonitor.historyEvaluationMode || '') !== 'loop_only'

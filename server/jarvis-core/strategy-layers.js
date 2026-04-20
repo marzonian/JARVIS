@@ -87,6 +87,7 @@ const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_DIRECTIONAL_ROWS = 3;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_CONTEXT_ROWS = 3;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_RECENT_ROW_LIMIT = 20;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_DOMINANT_RULE_LIMIT = 3;
+const LIVE_CANDIDATE_HISTORY_JUDGMENT_CONTEXT_DOMINANCE_RATIO = 0.6;
 const LIVE_CANDIDATE_DB_STATEMENT_CACHE = new WeakMap();
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY = 'read_only';
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO = 'loop_auto';
@@ -1899,24 +1900,37 @@ function classifyLoopObservationJudgmentSignal(observation = {}) {
   const structureScore = Number(observation?.structureQualityScore);
   const expectedValue = Number(observation?.candidateExpectedValue);
   const actionableNow = observation?.actionableNow === true;
+  const insideApprovedActionWindow = observation?.insideApprovedActionWindow === true;
 
   if (actionableNow) {
     return { classification: 'supportive', ruleHits: ['observation_actionable_now_true'] };
   }
-  if (status === 'blocked') {
-    return { classification: 'unsupportive', ruleHits: ['observation_status_blocked'] };
+  if (status === 'blocked' && structureLabel === 'poor') {
+    return { classification: 'unsupportive', ruleHits: ['observation_status_blocked_poor_structure'] };
   }
-  if (status === 'await_next_session') {
-    return { classification: 'unsupportive', ruleHits: ['observation_status_await_next_session'] };
-  }
-  if (status === 'pre_open_watch') {
-    return { classification: 'unsupportive', ruleHits: ['observation_status_pre_open_watch'] };
+  if (status === 'blocked' && Number.isFinite(expectedValue) && expectedValue < -15) {
+    return { classification: 'unsupportive', ruleHits: ['observation_status_blocked_negative_ev'] };
   }
   if (structureLabel === 'poor') {
     return { classification: 'unsupportive', ruleHits: ['observation_structure_quality_poor'] };
   }
   if (Number.isFinite(expectedValue) && expectedValue < -15) {
     return { classification: 'unsupportive', ruleHits: ['observation_expected_value_below_neg15'] };
+  }
+  if (status === 'pre_open_watch') {
+    return { classification: 'neutral', ruleHits: ['observation_status_pre_open_watch_context_neutral'] };
+  }
+  if (status === 'await_next_session') {
+    return { classification: 'neutral', ruleHits: ['observation_status_await_next_session_context_neutral'] };
+  }
+  if (status === 'watch_trigger') {
+    return { classification: 'neutral', ruleHits: ['observation_status_watch_trigger_context_neutral'] };
+  }
+  if (status === 'blocked') {
+    if (!insideApprovedActionWindow) {
+      return { classification: 'neutral', ruleHits: ['observation_status_blocked_outside_action_window'] };
+    }
+    return { classification: 'neutral', ruleHits: ['observation_status_blocked_context_neutral'] };
   }
   if ((status === 'ready_now' || status === 'secondary_watch')
     && structureLabel !== 'poor'
@@ -1949,13 +1963,16 @@ function classifyLoopTransitionJudgmentSignal(transition = {}) {
     return { classification: 'supportive', ruleHits: ['transition_status_changed_to_ready_or_secondary'] };
   }
   if (currentStatus === 'blocked') {
-    return { classification: 'unsupportive', ruleHits: ['transition_status_changed_to_blocked'] };
+    return { classification: 'neutral', ruleHits: ['transition_status_changed_to_blocked_context_neutral'] };
   }
   if (currentStatus === 'await_next_session') {
-    return { classification: 'unsupportive', ruleHits: ['transition_status_changed_to_await_next_session'] };
+    return { classification: 'neutral', ruleHits: ['transition_status_changed_to_await_next_session_context_neutral'] };
   }
   if (currentStatus === 'pre_open_watch') {
-    return { classification: 'unsupportive', ruleHits: ['transition_status_changed_to_pre_open_watch'] };
+    return { classification: 'neutral', ruleHits: ['transition_status_changed_to_pre_open_watch_context_neutral'] };
+  }
+  if (currentStatus === 'watch_trigger') {
+    return { classification: 'neutral', ruleHits: ['transition_status_changed_to_watch_trigger_context_neutral'] };
   }
   return { classification: 'neutral', ruleHits: ['transition_status_changed_neutral'] };
 }
@@ -1989,6 +2006,169 @@ function buildDominantRuleList(hitMap, limit = LIVE_CANDIDATE_HISTORY_JUDGMENT_D
 function toComparableTimestamp(value) {
   const text = String(value || '').trim();
   return text || '';
+}
+
+function determineConfidenceEffectFromRuleHits(ruleHits = []) {
+  const hits = Array.isArray(ruleHits) ? ruleHits : [];
+  if (hits.some((rule) => String(rule || '').includes('context_neutral')
+    || String(rule || '').includes('outside_action_window')
+    || String(rule || '').includes('watch_trigger_context'))) {
+    return 'negative';
+  }
+  if (hits.some((rule) => String(rule || '').includes('actionable')
+    || String(rule || '').includes('ready_or_secondary_viable_structure')
+    || String(rule || '').includes('structure_improved'))) {
+    return 'positive';
+  }
+  return 'none';
+}
+
+function buildDefaultHistoryStatusRuleMap() {
+  return {
+    pre_open_watch: {
+      directionalEffect: 'neutral',
+      confidenceEffect: 'negative',
+      treatment: 'context_only',
+      ruleCodes: ['observation_status_pre_open_watch_context_neutral', 'transition_status_changed_to_pre_open_watch_context_neutral'],
+    },
+    watch_trigger: {
+      directionalEffect: 'neutral',
+      confidenceEffect: 'negative',
+      treatment: 'context_only',
+      ruleCodes: ['observation_status_watch_trigger_context_neutral', 'transition_status_changed_to_watch_trigger_context_neutral'],
+    },
+    await_next_session: {
+      directionalEffect: 'neutral',
+      confidenceEffect: 'negative',
+      treatment: 'context_only',
+      ruleCodes: ['observation_status_await_next_session_context_neutral', 'transition_status_changed_to_await_next_session_context_neutral'],
+    },
+    blocked: {
+      directionalEffect: 'split',
+      confidenceEffect: 'negative',
+      treatment: 'unsupportive_if_quality_negative_else_neutral',
+      ruleCodes: [
+        'observation_status_blocked_poor_structure',
+        'observation_status_blocked_negative_ev',
+        'observation_status_blocked_context_neutral',
+        'observation_status_blocked_outside_action_window',
+        'transition_status_changed_to_blocked_context_neutral',
+      ],
+    },
+    secondary_watch: {
+      directionalEffect: 'split',
+      confidenceEffect: 'none',
+      treatment: 'supportive_if_viable_structure_else_neutral',
+      ruleCodes: ['observation_ready_or_secondary_viable_structure', 'transition_status_changed_to_ready_or_secondary'],
+    },
+    ready_now: {
+      directionalEffect: 'supportive',
+      confidenceEffect: 'positive',
+      treatment: 'supportive_if_actionable_or_viable_structure',
+      ruleCodes: ['observation_actionable_now_true', 'observation_ready_or_secondary_viable_structure', 'transition_status_changed_to_ready_or_secondary'],
+    },
+  };
+}
+
+function buildLiveCandidateHistoryStatusCalibration(input = {}) {
+  const judgmentInput = buildLoopHistoryJudgmentInput(input);
+  const observationClassifications = Array.isArray(judgmentInput.observationClassifications)
+    ? judgmentInput.observationClassifications
+    : [];
+  const transitionClassifications = Array.isArray(judgmentInput.transitionClassifications)
+    ? judgmentInput.transitionClassifications
+    : [];
+  const rows = observationClassifications.concat(transitionClassifications);
+  const statuses = [
+    'pre_open_watch',
+    'watch_trigger',
+    'await_next_session',
+    'blocked',
+    'secondary_watch',
+    'ready_now',
+  ];
+  const statusRuleMap = buildDefaultHistoryStatusRuleMap();
+  const statusEvidence = {};
+  const dominantStatusEffects = [];
+
+  statuses.forEach((status) => {
+    const matchingRows = rows.filter((row) => String(row?.candidateStatus || '').trim().toLowerCase() === status);
+    let supportiveCount = 0;
+    let unsupportiveCount = 0;
+    let neutralCount = 0;
+    const ruleHitCounts = {};
+    matchingRows.forEach((row) => {
+      if (row?.classification === 'supportive') supportiveCount += 1;
+      else if (row?.classification === 'unsupportive') unsupportiveCount += 1;
+      else neutralCount += 1;
+      incrementRuleHits(ruleHitCounts, Array.isArray(row?.ruleHits) ? row.ruleHits : []);
+    });
+    const recentExampleRuleHits = buildDominantRuleList(ruleHitCounts, 5).map((entry) => entry.ruleCode);
+    const confidenceEffects = matchingRows.map((row) =>
+      determineConfidenceEffectFromRuleHits(Array.isArray(row?.ruleHits) ? row.ruleHits : []));
+    const confidenceEffectCounts = confidenceEffects.reduce((acc, effect) => {
+      const key = String(effect || 'none');
+      acc[key] = Number(acc[key] || 0) + 1;
+      return acc;
+    }, {});
+
+    statusEvidence[status] = {
+      status,
+      sampledRowCount: matchingRows.length,
+      supportiveCount,
+      unsupportiveCount,
+      neutralCount,
+      confidenceEffectCounts,
+      recentExampleRuleHits,
+      recentRows: matchingRows
+        .slice()
+        .sort((left, right) => toComparableTimestamp(right?.timestamp).localeCompare(toComparableTimestamp(left?.timestamp)))
+        .slice(0, 3)
+        .map((row) => ({
+          timestamp: row?.timestamp || null,
+          sourceType: row?.sourceType || null,
+          classification: row?.classification || 'neutral',
+          ruleHits: Array.isArray(row?.ruleHits) ? row.ruleHits : [],
+          candidateKey: row?.candidateKey || null,
+          candidateExpectedValue: normalizeObservationValue(row?.candidateExpectedValue),
+          transitionType: row?.transitionType || null,
+          actionableNow: row?.actionableNow === true,
+        })),
+    };
+    if (matchingRows.length > 0) {
+      dominantStatusEffects.push({
+        status,
+        sampledRowCount: matchingRows.length,
+        directionalEffect: supportiveCount > unsupportiveCount
+          ? 'supportive'
+          : (unsupportiveCount > supportiveCount ? 'unsupportive' : 'neutral'),
+        confidenceEffect: confidenceEffectCounts.negative > confidenceEffectCounts.positive
+          ? 'negative'
+          : (confidenceEffectCounts.positive > confidenceEffectCounts.negative ? 'positive' : 'none'),
+      });
+    }
+  });
+
+  dominantStatusEffects.sort((left, right) => {
+    if (Number(right.sampledRowCount) !== Number(left.sampledRowCount)) {
+      return Number(right.sampledRowCount) - Number(left.sampledRowCount);
+    }
+    return String(left.status).localeCompare(String(right.status));
+  });
+
+  const dominantLabel = dominantStatusEffects.length > 0
+    ? `${dominantStatusEffects[0].status} (${dominantStatusEffects[0].directionalEffect})`
+    : 'none';
+  const summaryLine = `Status calibration: ${dominantLabel} dominates loop-only status evidence.`;
+
+  return {
+    modeUsed: 'loop_only',
+    statusRuleMap,
+    statusEvidence,
+    dominantStatusEffects,
+    summaryLine,
+    advisoryOnly: true,
+  };
 }
 
 function buildLoopHistoryJudgmentInput(input = {}) {
@@ -2141,6 +2321,14 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
   const clarity = directionalCount > 0
     ? Math.abs(supportiveCount - unsupportiveCount) / directionalCount
     : 0;
+  const contextNeutralCount = observationClassifications.reduce((count, row) => {
+    const hits = Array.isArray(row?.ruleHits) ? row.ruleHits : [];
+    if (hits.some((rule) => String(rule || '').includes('context_neutral') || String(rule || '').includes('outside_action_window'))) {
+      return count + 1;
+    }
+    return count;
+  }, 0);
+  const contextDominanceRatio = historySampleSize > 0 ? contextNeutralCount / historySampleSize : 0;
   const confidenceDrivers = [];
   const confidencePenaltyReasons = [];
   if (historySampleSize >= LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_OBSERVATIONS) {
@@ -2166,6 +2354,9 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
   if (recentTransitionBias === 'improving') confidenceDrivers.push('recent_transition_bias_improving');
   else if (recentTransitionBias === 'deteriorating') confidenceDrivers.push('recent_transition_bias_deteriorating');
   else if (recentTransitionBias === 'insufficient_history') confidencePenaltyReasons.push('transition_bias_insufficient_history');
+  if (contextDominanceRatio >= LIVE_CANDIDATE_HISTORY_JUDGMENT_CONTEXT_DOMINANCE_RATIO) {
+    confidencePenaltyReasons.push('context_only_status_dominance');
+  }
   if (sparseHistory) confidencePenaltyReasons.push(`sparse_${sparseReason || 'history'}`);
 
   let confidenceLabel = 'low';
@@ -2174,6 +2365,9 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
     else if (historySampleSize >= 10 && transitionSampleSize >= 3) confidenceLabel = 'medium';
   }
   if (confidenceLabel === 'high' && confidencePenaltyReasons.some((reason) => String(reason).startsWith('sparse_'))) {
+    confidenceLabel = 'medium';
+  }
+  if (confidenceLabel === 'high' && contextDominanceRatio >= LIVE_CANDIDATE_HISTORY_JUDGMENT_CONTEXT_DOMINANCE_RATIO) {
     confidenceLabel = 'medium';
   }
   if (confidenceLabel === 'medium' && sparseHistory) confidenceLabel = 'low';
@@ -2201,6 +2395,9 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
     confidenceReason = 'Low confidence because loop-only transition depth is insufficient.';
   } else if (sparseReason === 'insufficient_supportive_signal') {
     confidenceReason = 'Low confidence because loop-only directional signal is insufficient.';
+  }
+  if (confidencePenaltyReasons.includes('context_only_status_dominance') && confidenceLabel !== 'low') {
+    confidenceReason = 'Confidence capped because context-only statuses dominate loop-only observations.';
   }
 
   let summaryLine = 'Loop history sparse; no strong read.';
@@ -5306,6 +5503,11 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateTransitionHistory,
     liveOpportunityCandidates,
   });
+  const liveCandidateHistoryStatusCalibration = buildLiveCandidateHistoryStatusCalibration({
+    liveCandidateStateMonitor,
+    liveCandidateTransitionHistory,
+    liveOpportunityCandidates,
+  });
   const strategyCandidateOpportunityBridge = buildStrategyCandidateBridge({
     opportunityScoring,
     liveOpportunityCandidates,
@@ -5523,6 +5725,10 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryJudgmentAudit,
     liveCandidateHistoryJudgmentAudit
   );
+  todayRecommendation.liveCandidateHistoryStatusCalibration = cloneData(
+    liveCandidateHistoryStatusCalibration,
+    liveCandidateHistoryStatusCalibration
+  );
   todayRecommendation.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -5572,6 +5778,10 @@ function buildCommandCenterPanels(input = {}) {
   decisionBoard.liveCandidateHistoryJudgmentAudit = cloneData(
     liveCandidateHistoryJudgmentAudit,
     liveCandidateHistoryJudgmentAudit
+  );
+  decisionBoard.liveCandidateHistoryStatusCalibration = cloneData(
+    liveCandidateHistoryStatusCalibration,
+    liveCandidateHistoryStatusCalibration
   );
   decisionBoard.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
@@ -5623,6 +5833,10 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryJudgmentAudit: cloneData(
       liveCandidateHistoryJudgmentAudit,
       liveCandidateHistoryJudgmentAudit
+    ),
+    liveCandidateHistoryStatusCalibration: cloneData(
+      liveCandidateHistoryStatusCalibration,
+      liveCandidateHistoryStatusCalibration
     ),
     strategyCandidateOpportunityBridge: cloneData(
       strategyCandidateOpportunityBridge,
