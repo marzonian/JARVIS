@@ -85,6 +85,8 @@ const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_OBSERVATIONS = 6;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_TRANSITIONS = 2;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_DIRECTIONAL_ROWS = 3;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_CONTEXT_ROWS = 3;
+const LIVE_CANDIDATE_HISTORY_JUDGMENT_RECENT_ROW_LIMIT = 20;
+const LIVE_CANDIDATE_HISTORY_JUDGMENT_DOMINANT_RULE_LIMIT = 3;
 const LIVE_CANDIDATE_DB_STATEMENT_CACHE = new WeakMap();
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY = 'read_only';
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO = 'loop_auto';
@@ -1898,31 +1900,98 @@ function classifyLoopObservationJudgmentSignal(observation = {}) {
   const expectedValue = Number(observation?.candidateExpectedValue);
   const actionableNow = observation?.actionableNow === true;
 
-  if (actionableNow) return 'supportive';
-  if (status === 'blocked' || status === 'await_next_session' || status === 'pre_open_watch') return 'unsupportive';
-  if (structureLabel === 'poor') return 'unsupportive';
-  if (Number.isFinite(expectedValue) && expectedValue < -15) return 'unsupportive';
+  if (actionableNow) {
+    return { classification: 'supportive', ruleHits: ['observation_actionable_now_true'] };
+  }
+  if (status === 'blocked') {
+    return { classification: 'unsupportive', ruleHits: ['observation_status_blocked'] };
+  }
+  if (status === 'await_next_session') {
+    return { classification: 'unsupportive', ruleHits: ['observation_status_await_next_session'] };
+  }
+  if (status === 'pre_open_watch') {
+    return { classification: 'unsupportive', ruleHits: ['observation_status_pre_open_watch'] };
+  }
+  if (structureLabel === 'poor') {
+    return { classification: 'unsupportive', ruleHits: ['observation_structure_quality_poor'] };
+  }
+  if (Number.isFinite(expectedValue) && expectedValue < -15) {
+    return { classification: 'unsupportive', ruleHits: ['observation_expected_value_below_neg15'] };
+  }
   if ((status === 'ready_now' || status === 'secondary_watch')
     && structureLabel !== 'poor'
     && (!Number.isFinite(structureScore) || structureScore >= 58)
     && (!Number.isFinite(expectedValue) || expectedValue >= -5)) {
-    return 'supportive';
+    return { classification: 'supportive', ruleHits: ['observation_ready_or_secondary_viable_structure'] };
   }
-  return 'neutral';
+  return { classification: 'neutral', ruleHits: ['observation_no_directional_rule_hit'] };
 }
 
 function classifyLoopTransitionJudgmentSignal(transition = {}) {
   const transitionType = String(transition?.transitionType || '').trim().toLowerCase();
-  if (transitionType === 'crossed_into_actionable' || transitionType === 'structure_improved') return 'supportive';
-  if (transitionType === 'dropped_out_of_actionable' || transitionType === 'structure_worsened') return 'unsupportive';
-  if (transitionType !== 'status_changed') return 'neutral';
+  if (transitionType === 'crossed_into_actionable') {
+    return { classification: 'supportive', ruleHits: ['transition_crossed_into_actionable'] };
+  }
+  if (transitionType === 'structure_improved') {
+    return { classification: 'supportive', ruleHits: ['transition_structure_improved'] };
+  }
+  if (transitionType === 'dropped_out_of_actionable') {
+    return { classification: 'unsupportive', ruleHits: ['transition_dropped_out_of_actionable'] };
+  }
+  if (transitionType === 'structure_worsened') {
+    return { classification: 'unsupportive', ruleHits: ['transition_structure_worsened'] };
+  }
+  if (transitionType !== 'status_changed') {
+    return { classification: 'neutral', ruleHits: ['transition_no_directional_rule_hit'] };
+  }
   const currentStatus = String(transition?.currentStatus || '').trim().toLowerCase();
-  if (currentStatus === 'ready_now' || currentStatus === 'secondary_watch') return 'supportive';
-  if (currentStatus === 'blocked' || currentStatus === 'await_next_session' || currentStatus === 'pre_open_watch') return 'unsupportive';
-  return 'neutral';
+  if (currentStatus === 'ready_now' || currentStatus === 'secondary_watch') {
+    return { classification: 'supportive', ruleHits: ['transition_status_changed_to_ready_or_secondary'] };
+  }
+  if (currentStatus === 'blocked') {
+    return { classification: 'unsupportive', ruleHits: ['transition_status_changed_to_blocked'] };
+  }
+  if (currentStatus === 'await_next_session') {
+    return { classification: 'unsupportive', ruleHits: ['transition_status_changed_to_await_next_session'] };
+  }
+  if (currentStatus === 'pre_open_watch') {
+    return { classification: 'unsupportive', ruleHits: ['transition_status_changed_to_pre_open_watch'] };
+  }
+  return { classification: 'neutral', ruleHits: ['transition_status_changed_neutral'] };
 }
 
-function buildLiveCandidateHistoryJudgment(input = {}) {
+function incrementRuleHits(hitMap, ruleHits = []) {
+  const next = hitMap && typeof hitMap === 'object' ? hitMap : {};
+  if (!Array.isArray(ruleHits)) return next;
+  ruleHits.forEach((ruleCode) => {
+    const key = String(ruleCode || '').trim();
+    if (!key) return;
+    const current = Number(next[key] || 0);
+    next[key] = Number.isFinite(current) ? current + 1 : 1;
+  });
+  return next;
+}
+
+function buildDominantRuleList(hitMap, limit = LIVE_CANDIDATE_HISTORY_JUDGMENT_DOMINANT_RULE_LIMIT) {
+  const entries = hitMap && typeof hitMap === 'object'
+    ? Object.entries(hitMap)
+    : [];
+  return entries
+    .filter((entry) => Number(entry[1]) > 0)
+    .sort((left, right) => {
+      if (Number(right[1]) !== Number(left[1])) return Number(right[1]) - Number(left[1]);
+      return String(left[0]).localeCompare(String(right[0]));
+    })
+    .slice(0, Math.max(0, Math.round(Number(limit || 0))))
+    .map(([ruleCode, hits]) => ({ ruleCode, hits: Number(hits) }));
+}
+
+function toComparableTimestamp(value) {
+  const text = String(value || '').trim();
+  return text || '';
+}
+
+function buildLoopHistoryJudgmentInput(input = {}) {
   const liveCandidateStateMonitor = input?.liveCandidateStateMonitor && typeof input.liveCandidateStateMonitor === 'object'
     ? input.liveCandidateStateMonitor
     : {};
@@ -1939,7 +2008,6 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
   const loopOnlyTransitionsAll = Array.isArray(liveCandidateTransitionHistory?.loopOnlyRecentTransitions)
     ? liveCandidateTransitionHistory.loopOnlyRecentTransitions
     : [];
-
   const topCandidateContext = liveOpportunityCandidates?.topCandidateActionableNow
     && typeof liveOpportunityCandidates.topCandidateActionableNow === 'object'
     ? liveOpportunityCandidates.topCandidateActionableNow
@@ -1960,23 +2028,78 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
     : loopOnlyObservationsAll;
   const loopOnlyTransitions = loopOnlyTransitionsAll;
 
+  const observationClassifications = loopOnlyObservations.map((row) => {
+    const result = classifyLoopObservationJudgmentSignal(row);
+    return {
+      timestamp: String(row?.timestamp || row?.observedAt || row?.observed_at || '').trim() || null,
+      candidateKey: String(row?.candidateKey || '').trim() || null,
+      sourceType: 'observation',
+      classification: String(result?.classification || 'neutral'),
+      ruleHits: Array.isArray(result?.ruleHits) ? result.ruleHits.filter(Boolean) : [],
+      candidateStatus: String(row?.candidateStatus || '').trim() || null,
+      structureQualityLabel: String(row?.structureQualityLabel || '').trim() || null,
+      candidateExpectedValue: normalizeObservationValue(row?.candidateExpectedValue),
+      actionableNow: row?.actionableNow === true,
+      transitionType: null,
+    };
+  });
+  const transitionClassifications = loopOnlyTransitions.map((row) => {
+    const result = classifyLoopTransitionJudgmentSignal(row);
+    return {
+      timestamp: String(row?.timestamp || row?.transitionAt || row?.transition_at || '').trim() || null,
+      candidateKey: String(row?.candidateKey || '').trim() || null,
+      sourceType: 'transition',
+      classification: String(result?.classification || 'neutral'),
+      ruleHits: Array.isArray(result?.ruleHits) ? result.ruleHits.filter(Boolean) : [],
+      candidateStatus: String(row?.currentStatus || '').trim() || null,
+      structureQualityLabel: null,
+      candidateExpectedValue: null,
+      actionableNow: row?.currentActionable === true,
+      transitionType: String(row?.transitionType || '').trim() || null,
+    };
+  });
+
+  return {
+    modeUsed: 'loop_only',
+    loopOnlyObservations,
+    loopOnlyTransitions,
+    observationClassifications,
+    transitionClassifications,
+    topCandidateContext: topCandidateContext || null,
+    contextUsed: contextRows.length >= LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_CONTEXT_ROWS,
+  };
+}
+
+function buildLiveCandidateHistoryJudgment(input = {}) {
+  const judgmentInput = buildLoopHistoryJudgmentInput(input);
+  const loopOnlyObservations = Array.isArray(judgmentInput.loopOnlyObservations)
+    ? judgmentInput.loopOnlyObservations
+    : [];
+  const loopOnlyTransitions = Array.isArray(judgmentInput.loopOnlyTransitions)
+    ? judgmentInput.loopOnlyTransitions
+    : [];
+  const observationClassifications = Array.isArray(judgmentInput.observationClassifications)
+    ? judgmentInput.observationClassifications
+    : [];
+  const transitionClassifications = Array.isArray(judgmentInput.transitionClassifications)
+    ? judgmentInput.transitionClassifications
+    : [];
+
   let supportiveCount = 0;
   let unsupportiveCount = 0;
   let neutralCount = 0;
-  loopOnlyObservations.forEach((row) => {
-    const signal = classifyLoopObservationJudgmentSignal(row);
-    if (signal === 'supportive') supportiveCount += 1;
-    else if (signal === 'unsupportive') unsupportiveCount += 1;
+  observationClassifications.forEach((row) => {
+    if (row.classification === 'supportive') supportiveCount += 1;
+    else if (row.classification === 'unsupportive') unsupportiveCount += 1;
     else neutralCount += 1;
   });
 
   let transitionSupportiveCount = 0;
   let transitionUnsupportiveCount = 0;
   let transitionNeutralCount = 0;
-  loopOnlyTransitions.forEach((row) => {
-    const signal = classifyLoopTransitionJudgmentSignal(row);
-    if (signal === 'supportive') transitionSupportiveCount += 1;
-    else if (signal === 'unsupportive') transitionUnsupportiveCount += 1;
+  transitionClassifications.forEach((row) => {
+    if (row.classification === 'supportive') transitionSupportiveCount += 1;
+    else if (row.classification === 'unsupportive') transitionUnsupportiveCount += 1;
     else transitionNeutralCount += 1;
   });
 
@@ -2018,10 +2141,66 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
   const clarity = directionalCount > 0
     ? Math.abs(supportiveCount - unsupportiveCount) / directionalCount
     : 0;
+  const confidenceDrivers = [];
+  const confidencePenaltyReasons = [];
+  if (historySampleSize >= LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_OBSERVATIONS) {
+    confidenceDrivers.push('sufficient_loop_observation_depth');
+  } else {
+    confidencePenaltyReasons.push('limited_loop_observation_depth');
+  }
+  if (transitionSampleSize >= LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_TRANSITIONS) {
+    confidenceDrivers.push('sufficient_loop_transition_depth');
+  } else {
+    confidencePenaltyReasons.push('limited_loop_transition_depth');
+  }
+  if (directionalCount >= LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_DIRECTIONAL_ROWS) {
+    confidenceDrivers.push('sufficient_directional_signal');
+  } else {
+    confidencePenaltyReasons.push('limited_directional_signal');
+  }
+  if (clarity >= 0.35) {
+    confidenceDrivers.push('clear_directional_majority');
+  } else if (!sparseHistory) {
+    confidencePenaltyReasons.push('weak_directional_majority');
+  }
+  if (recentTransitionBias === 'improving') confidenceDrivers.push('recent_transition_bias_improving');
+  else if (recentTransitionBias === 'deteriorating') confidenceDrivers.push('recent_transition_bias_deteriorating');
+  else if (recentTransitionBias === 'insufficient_history') confidencePenaltyReasons.push('transition_bias_insufficient_history');
+  if (sparseHistory) confidencePenaltyReasons.push(`sparse_${sparseReason || 'history'}`);
+
   let confidenceLabel = 'low';
   if (!sparseHistory) {
     if (historySampleSize >= 24 && transitionSampleSize >= 8 && clarity >= 0.35) confidenceLabel = 'high';
     else if (historySampleSize >= 10 && transitionSampleSize >= 3) confidenceLabel = 'medium';
+  }
+  if (confidenceLabel === 'high' && confidencePenaltyReasons.some((reason) => String(reason).startsWith('sparse_'))) {
+    confidenceLabel = 'medium';
+  }
+  if (confidenceLabel === 'medium' && sparseHistory) confidenceLabel = 'low';
+
+  let confidenceReason = 'Low confidence due to sparse loop-only history.';
+  if (confidenceLabel === 'high' && judgment === 'supportive') {
+    confidenceReason = 'High confidence from strong supportive majority with deep loop-only sample.';
+  } else if (confidenceLabel === 'high' && judgment === 'weak') {
+    confidenceReason = 'High confidence from strong unsupportive majority with deep loop-only sample.';
+  } else if (confidenceLabel === 'high') {
+    confidenceReason = 'High confidence from deep loop-only sample and clear directional majority.';
+  } else if (confidenceLabel === 'medium' && judgment === 'supportive') {
+    confidenceReason = 'Medium confidence from supportive edge with adequate loop-only depth.';
+  } else if (confidenceLabel === 'medium' && judgment === 'weak') {
+    confidenceReason = 'Medium confidence from unsupportive edge with adequate loop-only depth.';
+  } else if (confidenceLabel === 'medium') {
+    confidenceReason = 'Medium confidence from adequate loop-only sample with mixed directional signal.';
+  } else if (!sparseHistory) {
+    confidenceReason = 'Low confidence because directional evidence is weak despite available history.';
+  } else if (sparseReason === 'no_loop_history') {
+    confidenceReason = 'Low confidence because loop-only history has no rows.';
+  } else if (sparseReason === 'insufficient_loop_observations') {
+    confidenceReason = 'Low confidence because loop-only observation depth is insufficient.';
+  } else if (sparseReason === 'insufficient_loop_transitions') {
+    confidenceReason = 'Low confidence because loop-only transition depth is insufficient.';
+  } else if (sparseReason === 'insufficient_supportive_signal') {
+    confidenceReason = 'Low confidence because loop-only directional signal is insufficient.';
   }
 
   let summaryLine = 'Loop history sparse; no strong read.';
@@ -2047,6 +2226,9 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
     modeUsed,
     judgment,
     confidenceLabel,
+    confidenceReason,
+    confidenceDrivers,
+    confidencePenaltyReasons,
     historySampleSize,
     transitionSampleSize,
     supportiveCount,
@@ -2055,6 +2237,94 @@ function buildLiveCandidateHistoryJudgment(input = {}) {
     recentTransitionBias,
     sparseHistory,
     sparseReason,
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
+function buildLiveCandidateHistoryJudgmentAudit(input = {}) {
+  const judgmentInput = buildLoopHistoryJudgmentInput(input);
+  const observationClassifications = Array.isArray(judgmentInput.observationClassifications)
+    ? judgmentInput.observationClassifications
+    : [];
+  const transitionClassifications = Array.isArray(judgmentInput.transitionClassifications)
+    ? judgmentInput.transitionClassifications
+    : [];
+  const rows = observationClassifications.concat(transitionClassifications);
+  const supportiveRuleHits = {};
+  const unsupportiveRuleHits = {};
+  const neutralRuleHits = {};
+  let supportiveCount = 0;
+  let unsupportiveCount = 0;
+  let neutralCount = 0;
+
+  rows.forEach((row) => {
+    const ruleHits = Array.isArray(row?.ruleHits) ? row.ruleHits : [];
+    if (row?.classification === 'supportive') {
+      supportiveCount += 1;
+      incrementRuleHits(supportiveRuleHits, ruleHits);
+    } else if (row?.classification === 'unsupportive') {
+      unsupportiveCount += 1;
+      incrementRuleHits(unsupportiveRuleHits, ruleHits);
+    } else {
+      neutralCount += 1;
+      incrementRuleHits(neutralRuleHits, ruleHits);
+    }
+  });
+
+  const recentClassifiedRows = rows
+    .slice()
+    .sort((left, right) => toComparableTimestamp(right?.timestamp).localeCompare(toComparableTimestamp(left?.timestamp)))
+    .slice(0, LIVE_CANDIDATE_HISTORY_JUDGMENT_RECENT_ROW_LIMIT)
+    .map((row) => ({
+      timestamp: row?.timestamp || null,
+      candidateKey: row?.candidateKey || null,
+      sourceType: row?.sourceType || null,
+      classification: row?.classification || 'neutral',
+      ruleHits: Array.isArray(row?.ruleHits) ? row.ruleHits : [],
+      candidateStatus: row?.candidateStatus || null,
+      structureQualityLabel: row?.structureQualityLabel || null,
+      candidateExpectedValue: normalizeObservationValue(row?.candidateExpectedValue),
+      actionableNow: row?.actionableNow === true,
+      transitionType: row?.transitionType || null,
+    }));
+
+  const dominantSupportiveRules = buildDominantRuleList(supportiveRuleHits);
+  const dominantUnsupportiveRules = buildDominantRuleList(unsupportiveRuleHits);
+  const dominantNeutralRules = buildDominantRuleList(neutralRuleHits);
+  const sourceMix = {
+    observation: observationClassifications.length,
+    transition: transitionClassifications.length,
+  };
+
+  const sampleSize = rows.length;
+  let summaryLine = 'Judgment audit: no loop-only rows classified yet.';
+  if (sampleSize > 0) {
+    const dominantClass = supportiveCount > unsupportiveCount && supportiveCount > neutralCount
+      ? 'supportive'
+      : (unsupportiveCount > supportiveCount && unsupportiveCount > neutralCount
+        ? 'unsupportive'
+        : (neutralCount > 0 ? 'neutral' : 'mixed'));
+    const dominantRules = dominantClass === 'supportive'
+      ? dominantSupportiveRules
+      : (dominantClass === 'unsupportive' ? dominantUnsupportiveRules : dominantNeutralRules);
+    const topRuleSummary = dominantRules.length > 0
+      ? `${dominantRules[0].ruleCode} x${dominantRules[0].hits}`
+      : 'no dominant rule';
+    summaryLine = `Judgment audit: ${dominantClass} rows dominated; top rule ${topRuleSummary}.`;
+  }
+
+  return {
+    modeUsed: 'loop_only',
+    sampleSize,
+    sourceMix,
+    supportiveRuleHits,
+    unsupportiveRuleHits,
+    neutralRuleHits,
+    dominantSupportiveRules,
+    dominantUnsupportiveRules,
+    dominantNeutralRules,
+    recentClassifiedRows,
     summaryLine,
     advisoryOnly: true,
   };
@@ -5031,6 +5301,11 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateTransitionHistory,
     liveOpportunityCandidates,
   });
+  const liveCandidateHistoryJudgmentAudit = buildLiveCandidateHistoryJudgmentAudit({
+    liveCandidateStateMonitor,
+    liveCandidateTransitionHistory,
+    liveOpportunityCandidates,
+  });
   const strategyCandidateOpportunityBridge = buildStrategyCandidateBridge({
     opportunityScoring,
     liveOpportunityCandidates,
@@ -5244,6 +5519,10 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryJudgment,
     liveCandidateHistoryJudgment
   );
+  todayRecommendation.liveCandidateHistoryJudgmentAudit = cloneData(
+    liveCandidateHistoryJudgmentAudit,
+    liveCandidateHistoryJudgmentAudit
+  );
   todayRecommendation.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -5289,6 +5568,10 @@ function buildCommandCenterPanels(input = {}) {
   decisionBoard.liveCandidateHistoryJudgment = cloneData(
     liveCandidateHistoryJudgment,
     liveCandidateHistoryJudgment
+  );
+  decisionBoard.liveCandidateHistoryJudgmentAudit = cloneData(
+    liveCandidateHistoryJudgmentAudit,
+    liveCandidateHistoryJudgmentAudit
   );
   decisionBoard.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
@@ -5337,6 +5620,10 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateStateMonitor: cloneData(liveCandidateStateMonitor, liveCandidateStateMonitor),
     liveCandidateTransitionHistory: cloneData(liveCandidateTransitionHistory, liveCandidateTransitionHistory),
     liveCandidateHistoryJudgment: cloneData(liveCandidateHistoryJudgment, liveCandidateHistoryJudgment),
+    liveCandidateHistoryJudgmentAudit: cloneData(
+      liveCandidateHistoryJudgmentAudit,
+      liveCandidateHistoryJudgmentAudit
+    ),
     strategyCandidateOpportunityBridge: cloneData(
       strategyCandidateOpportunityBridge,
       strategyCandidateOpportunityBridge

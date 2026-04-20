@@ -146,6 +146,9 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
     const firstJudgment = first?.liveCandidateHistoryJudgment && typeof first.liveCandidateHistoryJudgment === 'object'
       ? first.liveCandidateHistoryJudgment
       : {};
+    const firstJudgmentAudit = first?.liveCandidateHistoryJudgmentAudit && typeof first.liveCandidateHistoryJudgmentAudit === 'object'
+      ? first.liveCandidateHistoryJudgmentAudit
+      : {};
     await sleep(3600);
     const second = await getJson(server.baseUrl, commandCenterQuery);
     const secondStatus = pullStatus(second);
@@ -154,6 +157,9 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
       : {};
     const secondJudgment = second?.liveCandidateHistoryJudgment && typeof second.liveCandidateHistoryJudgment === 'object'
       ? second.liveCandidateHistoryJudgment
+      : {};
+    const secondJudgmentAudit = second?.liveCandidateHistoryJudgmentAudit && typeof second.liveCandidateHistoryJudgmentAudit === 'object'
+      ? second.liveCandidateHistoryJudgmentAudit
       : {};
     const third = await getJson(server.baseUrl, commandCenterQuery);
     const thirdMonitor = third?.liveCandidateStateMonitor && typeof third.liveCandidateStateMonitor === 'object'
@@ -241,6 +247,9 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           modeUsed: firstJudgment.modeUsed || null,
           judgment: firstJudgment.judgment || null,
           confidenceLabel: firstJudgment.confidenceLabel || null,
+          confidenceReason: firstJudgment.confidenceReason || null,
+          confidenceDrivers: Array.isArray(firstJudgment.confidenceDrivers) ? firstJudgment.confidenceDrivers : [],
+          confidencePenaltyReasons: Array.isArray(firstJudgment.confidencePenaltyReasons) ? firstJudgment.confidencePenaltyReasons : [],
           historySampleSize: Number(firstJudgment.historySampleSize || 0),
           transitionSampleSize: Number(firstJudgment.transitionSampleSize || 0),
           supportiveCount: Number(firstJudgment.supportiveCount || 0),
@@ -250,6 +259,24 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           sparseHistory: firstJudgment.sparseHistory === true,
           sparseReason: firstJudgment.sparseReason || null,
           summaryLine: firstJudgment.summaryLine || null,
+        },
+        judgmentAudit: {
+          modeUsed: firstJudgmentAudit.modeUsed || null,
+          sampleSize: Number(firstJudgmentAudit.sampleSize || 0),
+          supportiveRuleHits: firstJudgmentAudit.supportiveRuleHits && typeof firstJudgmentAudit.supportiveRuleHits === 'object'
+            ? firstJudgmentAudit.supportiveRuleHits
+            : {},
+          unsupportiveRuleHits: firstJudgmentAudit.unsupportiveRuleHits && typeof firstJudgmentAudit.unsupportiveRuleHits === 'object'
+            ? firstJudgmentAudit.unsupportiveRuleHits
+            : {},
+          neutralRuleHits: firstJudgmentAudit.neutralRuleHits && typeof firstJudgmentAudit.neutralRuleHits === 'object'
+            ? firstJudgmentAudit.neutralRuleHits
+            : {},
+          dominantSupportiveRules: Array.isArray(firstJudgmentAudit.dominantSupportiveRules) ? firstJudgmentAudit.dominantSupportiveRules : [],
+          dominantUnsupportiveRules: Array.isArray(firstJudgmentAudit.dominantUnsupportiveRules) ? firstJudgmentAudit.dominantUnsupportiveRules : [],
+          dominantNeutralRules: Array.isArray(firstJudgmentAudit.dominantNeutralRules) ? firstJudgmentAudit.dominantNeutralRules : [],
+          recentClassifiedRows: Array.isArray(firstJudgmentAudit.recentClassifiedRows) ? firstJudgmentAudit.recentClassifiedRows.slice(0, 5) : [],
+          summaryLine: firstJudgmentAudit.summaryLine || null,
         },
       },
       second: {
@@ -307,6 +334,9 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           modeUsed: secondJudgment.modeUsed || null,
           judgment: secondJudgment.judgment || null,
           confidenceLabel: secondJudgment.confidenceLabel || null,
+          confidenceReason: secondJudgment.confidenceReason || null,
+          confidenceDrivers: Array.isArray(secondJudgment.confidenceDrivers) ? secondJudgment.confidenceDrivers : [],
+          confidencePenaltyReasons: Array.isArray(secondJudgment.confidencePenaltyReasons) ? secondJudgment.confidencePenaltyReasons : [],
           historySampleSize: Number(secondJudgment.historySampleSize || 0),
           transitionSampleSize: Number(secondJudgment.transitionSampleSize || 0),
           supportiveCount: Number(secondJudgment.supportiveCount || 0),
@@ -316,6 +346,24 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
           sparseHistory: secondJudgment.sparseHistory === true,
           sparseReason: secondJudgment.sparseReason || null,
           summaryLine: secondJudgment.summaryLine || null,
+        },
+        judgmentAudit: {
+          modeUsed: secondJudgmentAudit.modeUsed || null,
+          sampleSize: Number(secondJudgmentAudit.sampleSize || 0),
+          supportiveRuleHits: secondJudgmentAudit.supportiveRuleHits && typeof secondJudgmentAudit.supportiveRuleHits === 'object'
+            ? secondJudgmentAudit.supportiveRuleHits
+            : {},
+          unsupportiveRuleHits: secondJudgmentAudit.unsupportiveRuleHits && typeof secondJudgmentAudit.unsupportiveRuleHits === 'object'
+            ? secondJudgmentAudit.unsupportiveRuleHits
+            : {},
+          neutralRuleHits: secondJudgmentAudit.neutralRuleHits && typeof secondJudgmentAudit.neutralRuleHits === 'object'
+            ? secondJudgmentAudit.neutralRuleHits
+            : {},
+          dominantSupportiveRules: Array.isArray(secondJudgmentAudit.dominantSupportiveRules) ? secondJudgmentAudit.dominantSupportiveRules : [],
+          dominantUnsupportiveRules: Array.isArray(secondJudgmentAudit.dominantUnsupportiveRules) ? secondJudgmentAudit.dominantUnsupportiveRules : [],
+          dominantNeutralRules: Array.isArray(secondJudgmentAudit.dominantNeutralRules) ? secondJudgmentAudit.dominantNeutralRules : [],
+          recentClassifiedRows: Array.isArray(secondJudgmentAudit.recentClassifiedRows) ? secondJudgmentAudit.recentClassifiedRows.slice(0, 5) : [],
+          summaryLine: secondJudgmentAudit.summaryLine || null,
         },
       },
       thirdImmediateRead: {
@@ -385,6 +433,13 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
             secondJudgment.sparseHistory !== true
             || (typeof secondJudgment.sparseReason === 'string' && secondJudgment.sparseReason.length > 0)
           ),
+        historyJudgmentConfidenceReasonVisible:
+          typeof secondJudgment.confidenceReason === 'string'
+          && secondJudgment.confidenceReason.length > 0,
+        historyJudgmentRuleAuditVisible:
+          secondJudgmentAudit && typeof secondJudgmentAudit === 'object'
+          && Array.isArray(secondJudgmentAudit.dominantUnsupportiveRules)
+          && Array.isArray(secondJudgmentAudit.recentClassifiedRows),
         fallbackExplicitWhenTriggered:
           syntheticFallbackMonitor.historyEvaluationFallbackUsed === true
           && String(syntheticFallbackMonitor.historyEvaluationMode || '') !== 'loop_only'

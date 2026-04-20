@@ -521,9 +521,15 @@ function run() {
     });
     const sparseSnapshot = makeReadSnapshot({ db: sparseDb });
     assert(sparseSnapshot.liveCandidateHistoryJudgment && typeof sparseSnapshot.liveCandidateHistoryJudgment === 'object', 'sparse case should surface liveCandidateHistoryJudgment');
+    assert(sparseSnapshot.liveCandidateHistoryJudgmentAudit && typeof sparseSnapshot.liveCandidateHistoryJudgmentAudit === 'object', 'sparse case should surface liveCandidateHistoryJudgmentAudit');
     assert(sparseSnapshot.liveCandidateHistoryJudgment.modeUsed === 'loop_only', 'sparse case should stay loop_only');
     assert(sparseSnapshot.liveCandidateHistoryJudgment.sparseHistory === true, 'sparse case should mark sparseHistory true');
     assert(['insufficient_loop_observations', 'insufficient_loop_transitions', 'insufficient_supportive_signal'].includes(String(sparseSnapshot.liveCandidateHistoryJudgment.sparseReason || '')), 'sparse case should expose explicit sparseReason');
+    assert(typeof sparseSnapshot.liveCandidateHistoryJudgment.confidenceReason === 'string' && sparseSnapshot.liveCandidateHistoryJudgment.confidenceReason.length > 0, 'sparse case should surface confidenceReason');
+    assert(Array.isArray(sparseSnapshot.liveCandidateHistoryJudgment.confidenceDrivers), 'sparse case should surface confidenceDrivers');
+    assert(Array.isArray(sparseSnapshot.liveCandidateHistoryJudgment.confidencePenaltyReasons), 'sparse case should surface confidencePenaltyReasons');
+    assert(sparseSnapshot.liveCandidateHistoryJudgmentAudit.sampleSize >= 1, 'sparse case audit should classify at least one row');
+    assert(Array.isArray(sparseSnapshot.liveCandidateHistoryJudgmentAudit.recentClassifiedRows), 'sparse case audit should include recentClassifiedRows');
     sparseDb.close();
 
     const diagOnlyDb = new Database(':memory:');
@@ -556,6 +562,8 @@ function run() {
     assert(diagOnlySnapshot.liveCandidateHistoryJudgment.modeUsed === 'loop_only', 'diagnostic-only fixture should keep judgment mode loop_only');
     assert(diagOnlySnapshot.liveCandidateHistoryJudgment.sparseHistory === true, 'diagnostic-only fixture should remain sparse (no loop history)');
     assert(diagOnlySnapshot.liveCandidateHistoryJudgment.sparseReason === 'no_loop_history', 'diagnostic-only fixture should surface no_loop_history');
+    assert(diagOnlySnapshot.liveCandidateHistoryJudgmentAudit.sampleSize === 0, 'diagnostic-only fixture should produce zero loop-only classified rows');
+    assert(Array.isArray(diagOnlySnapshot.liveCandidateHistoryJudgmentAudit.dominantUnsupportiveRules), 'diagnostic-only fixture should expose dominant unsupportive rules array');
     diagOnlyDb.close();
 
     const supportiveDb = new Database(':memory:');
@@ -603,6 +611,9 @@ function run() {
     assert(supportiveSnapshot.liveCandidateHistoryJudgment.judgment === 'supportive', 'supportive fixture should classify as supportive');
     assert(supportiveSnapshot.liveCandidateHistoryJudgment.recentTransitionBias === 'improving', 'supportive fixture should classify transition bias as improving');
     assert(supportiveSnapshot.liveCandidateHistoryJudgment.supportiveCount > supportiveSnapshot.liveCandidateHistoryJudgment.unsupportiveCount, 'supportive fixture should have supportive edge');
+    assert(supportiveSnapshot.liveCandidateHistoryJudgmentAudit.supportiveRuleHits.observation_actionable_now_true >= 1, 'supportive fixture should expose supportive observation rule hit');
+    assert(supportiveSnapshot.liveCandidateHistoryJudgmentAudit.dominantSupportiveRules.length > 0, 'supportive fixture should expose dominant supportive rules');
+    assert(supportiveSnapshot.liveCandidateHistoryJudgment.confidenceLabel !== 'low', 'supportive fixture should not be low-confidence');
     supportiveDb.close();
 
     const weakDb = new Database(':memory:');
@@ -650,6 +661,10 @@ function run() {
     assert(weakSnapshot.liveCandidateHistoryJudgment.judgment === 'weak', 'weak fixture should classify as weak');
     assert(weakSnapshot.liveCandidateHistoryJudgment.recentTransitionBias === 'deteriorating', 'weak fixture should classify transition bias as deteriorating');
     assert(weakSnapshot.liveCandidateHistoryJudgment.unsupportiveCount > weakSnapshot.liveCandidateHistoryJudgment.supportiveCount, 'weak fixture should have unsupportive edge');
+    assert(weakSnapshot.liveCandidateHistoryJudgmentAudit.unsupportiveRuleHits.observation_status_blocked >= 1, 'weak fixture should expose blocked unsupportive rule hit');
+    assert(weakSnapshot.liveCandidateHistoryJudgmentAudit.dominantUnsupportiveRules.length > 0, 'weak fixture should expose dominant unsupportive rules');
+    assert(weakSnapshot.liveCandidateHistoryJudgment.confidenceReason.toLowerCase().includes('unsupportive'), 'weak fixture confidence reason should explain unsupportive majority');
+    assert(weakSnapshot.liveCandidateHistoryJudgmentAudit.recentClassifiedRows.every((row) => Array.isArray(row.ruleHits)), 'weak fixture recent classified rows should include ruleHits');
     weakDb.close();
 
     const mixedDb = new Database(':memory:');
@@ -700,6 +715,10 @@ function run() {
     assert(mixedJudgmentSnapshot.liveCandidateHistoryJudgment.sparseHistory === false, 'mixed fixture should not be sparse');
     assert(mixedJudgmentSnapshot.liveCandidateHistoryJudgment.judgment === 'mixed', 'mixed fixture should classify as mixed');
     assert(mixedJudgmentSnapshot.liveCandidateHistoryJudgment.recentTransitionBias === 'neutral', 'mixed fixture should classify transition bias as neutral');
+    assert(mixedJudgmentSnapshot.liveCandidateHistoryJudgmentAudit.dominantSupportiveRules.length > 0, 'mixed fixture should include supportive dominant rules');
+    assert(mixedJudgmentSnapshot.liveCandidateHistoryJudgmentAudit.dominantUnsupportiveRules.length > 0, 'mixed fixture should include unsupportive dominant rules');
+    assert(mixedJudgmentSnapshot.liveCandidateHistoryJudgmentAudit.sampleSize === mixedJudgmentSnapshot.liveCandidateHistoryJudgment.historySampleSize + mixedJudgmentSnapshot.liveCandidateHistoryJudgment.transitionSampleSize, 'mixed fixture audit sample size should include observations plus transitions');
+    assert(mixedJudgmentSnapshot.shadowMockTradeDecision && mixedJudgmentSnapshot.shadowMockTradeDecision.advisoryOnly === true, 'history judgment audit should not change authority path');
     mixedDb.close();
   }
 
