@@ -164,6 +164,14 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
       && typeof first.liveCandidateHistoryActionInterpretationAudit === 'object'
       ? first.liveCandidateHistoryActionInterpretationAudit
       : {};
+    const firstConfirmationGuide = first?.liveCandidateHistoryConfirmationGuide
+      && typeof first.liveCandidateHistoryConfirmationGuide === 'object'
+      ? first.liveCandidateHistoryConfirmationGuide
+      : {};
+    const firstConfirmationGuideAudit = first?.liveCandidateHistoryConfirmationGuideAudit
+      && typeof first.liveCandidateHistoryConfirmationGuideAudit === 'object'
+      ? first.liveCandidateHistoryConfirmationGuideAudit
+      : {};
     await sleep(3600);
     const second = await getJson(server.baseUrl, commandCenterQuery);
     const secondStatus = pullStatus(second);
@@ -190,6 +198,14 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
     const secondActionInterpretationAudit = second?.liveCandidateHistoryActionInterpretationAudit
       && typeof second.liveCandidateHistoryActionInterpretationAudit === 'object'
       ? second.liveCandidateHistoryActionInterpretationAudit
+      : {};
+    const secondConfirmationGuide = second?.liveCandidateHistoryConfirmationGuide
+      && typeof second.liveCandidateHistoryConfirmationGuide === 'object'
+      ? second.liveCandidateHistoryConfirmationGuide
+      : {};
+    const secondConfirmationGuideAudit = second?.liveCandidateHistoryConfirmationGuideAudit
+      && typeof second.liveCandidateHistoryConfirmationGuideAudit === 'object'
+      ? second.liveCandidateHistoryConfirmationGuideAudit
       : {};
     const third = await getJson(server.baseUrl, commandCenterQuery);
     const thirdMonitor = third?.liveCandidateStateMonitor && typeof third.liveCandidateStateMonitor === 'object'
@@ -355,6 +371,33 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
             : [],
           summaryLine: firstActionInterpretationAudit.summaryLine || null,
         },
+        confirmationGuide: {
+          modeUsed: firstConfirmationGuide.modeUsed || null,
+          currentActionStance: firstConfirmationGuide.currentActionStance || null,
+          confirmationState: firstConfirmationGuide.confirmationState || null,
+          confirmationTriggers: Array.isArray(firstConfirmationGuide.confirmationTriggers)
+            ? firstConfirmationGuide.confirmationTriggers
+            : [],
+          confirmationFailures: Array.isArray(firstConfirmationGuide.confirmationFailures)
+            ? firstConfirmationGuide.confirmationFailures
+            : [],
+          triggerSummaryLine: firstConfirmationGuide.triggerSummaryLine || null,
+          failureSummaryLine: firstConfirmationGuide.failureSummaryLine || null,
+          nextBestStateIfConfirmed: firstConfirmationGuide.nextBestStateIfConfirmed || null,
+          summaryLine: firstConfirmationGuide.summaryLine || null,
+        },
+        confirmationGuideAudit: {
+          ruleUsed: firstConfirmationGuideAudit.ruleUsed || null,
+          inputsUsed: firstConfirmationGuideAudit.inputsUsed && typeof firstConfirmationGuideAudit.inputsUsed === 'object'
+            ? firstConfirmationGuideAudit.inputsUsed
+            : {},
+          triggerCount: Number(firstConfirmationGuideAudit.triggerCount || 0),
+          failureCount: Number(firstConfirmationGuideAudit.failureCount || 0),
+          unmetCriticalTriggers: Array.isArray(firstConfirmationGuideAudit.unmetCriticalTriggers)
+            ? firstConfirmationGuideAudit.unmetCriticalTriggers
+            : [],
+          summaryLine: firstConfirmationGuideAudit.summaryLine || null,
+        },
       },
       second: {
         loop: {
@@ -489,6 +532,33 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
             : [],
           summaryLine: secondActionInterpretationAudit.summaryLine || null,
         },
+        confirmationGuide: {
+          modeUsed: secondConfirmationGuide.modeUsed || null,
+          currentActionStance: secondConfirmationGuide.currentActionStance || null,
+          confirmationState: secondConfirmationGuide.confirmationState || null,
+          confirmationTriggers: Array.isArray(secondConfirmationGuide.confirmationTriggers)
+            ? secondConfirmationGuide.confirmationTriggers
+            : [],
+          confirmationFailures: Array.isArray(secondConfirmationGuide.confirmationFailures)
+            ? secondConfirmationGuide.confirmationFailures
+            : [],
+          triggerSummaryLine: secondConfirmationGuide.triggerSummaryLine || null,
+          failureSummaryLine: secondConfirmationGuide.failureSummaryLine || null,
+          nextBestStateIfConfirmed: secondConfirmationGuide.nextBestStateIfConfirmed || null,
+          summaryLine: secondConfirmationGuide.summaryLine || null,
+        },
+        confirmationGuideAudit: {
+          ruleUsed: secondConfirmationGuideAudit.ruleUsed || null,
+          inputsUsed: secondConfirmationGuideAudit.inputsUsed && typeof secondConfirmationGuideAudit.inputsUsed === 'object'
+            ? secondConfirmationGuideAudit.inputsUsed
+            : {},
+          triggerCount: Number(secondConfirmationGuideAudit.triggerCount || 0),
+          failureCount: Number(secondConfirmationGuideAudit.failureCount || 0),
+          unmetCriticalTriggers: Array.isArray(secondConfirmationGuideAudit.unmetCriticalTriggers)
+            ? secondConfirmationGuideAudit.unmetCriticalTriggers
+            : [],
+          summaryLine: secondConfirmationGuideAudit.summaryLine || null,
+        },
       },
       thirdImmediateRead: {
         monitor: {
@@ -599,6 +669,20 @@ function buildSyntheticInput({ db, nowEt = '2026-04-16 10:10', persistLiveCandid
             && typeof secondActionInterpretationAudit === 'object'
             && typeof secondActionInterpretationAudit.ruleUsed === 'string'
             && secondActionInterpretationAudit.ruleUsed.length > 0
+          ),
+        historyConfirmationGuideVisible:
+          Boolean(
+            secondConfirmationGuide
+            && typeof secondConfirmationGuide === 'object'
+            && typeof secondConfirmationGuide.confirmationState === 'string'
+            && secondConfirmationGuide.confirmationState.length > 0
+          ),
+        historyConfirmationGuideAuditVisible:
+          Boolean(
+            secondConfirmationGuideAudit
+            && typeof secondConfirmationGuideAudit === 'object'
+            && typeof secondConfirmationGuideAudit.ruleUsed === 'string'
+            && secondConfirmationGuideAudit.ruleUsed.length > 0
           ),
         fallbackExplicitWhenTriggered:
           syntheticFallbackMonitor.historyEvaluationFallbackUsed === true

@@ -8,6 +8,8 @@ const {
   buildLiveCandidateHistoryStatusCalibrationDiagnostics,
   buildLiveCandidateHistoryActionInterpretation,
   buildLiveCandidateHistoryActionInterpretationAudit,
+  buildLiveCandidateHistoryConfirmationGuide,
+  buildLiveCandidateHistoryConfirmationGuideAudit,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
 } = require('../server/jarvis-core/strategy-layers');
@@ -538,6 +540,11 @@ function run() {
     assert(sparseSnapshot.liveCandidateHistoryActionInterpretation.actionStance === 'neutral_wait', 'sparse case should map to neutral_wait action stance');
     assert(sparseSnapshot.liveCandidateHistoryActionInterpretation.requiresFreshConfirmation === true, 'sparse case should require fresh confirmation');
     assert(sparseSnapshot.liveCandidateHistoryActionInterpretationAudit && typeof sparseSnapshot.liveCandidateHistoryActionInterpretationAudit === 'object', 'sparse case should surface action interpretation audit');
+    assert(sparseSnapshot.liveCandidateHistoryConfirmationGuide && typeof sparseSnapshot.liveCandidateHistoryConfirmationGuide === 'object', 'sparse case should surface confirmation guide');
+    assert(sparseSnapshot.liveCandidateHistoryConfirmationGuide.confirmationState === 'waiting_for_confirmation', 'sparse case should wait for confirmation');
+    assert(Array.isArray(sparseSnapshot.liveCandidateHistoryConfirmationGuide.confirmationTriggers), 'sparse case should include confirmationTriggers');
+    assert(Array.isArray(sparseSnapshot.liveCandidateHistoryConfirmationGuide.confirmationFailures), 'sparse case should include confirmationFailures');
+    assert(sparseSnapshot.liveCandidateHistoryConfirmationGuideAudit && typeof sparseSnapshot.liveCandidateHistoryConfirmationGuideAudit === 'object', 'sparse case should surface confirmation guide audit');
     sparseDb.close();
 
     const diagOnlyDb = new Database(':memory:');
@@ -575,6 +582,8 @@ function run() {
     assert(diagOnlySnapshot.liveCandidateHistoryStatusCalibration.statusEvidence && typeof diagOnlySnapshot.liveCandidateHistoryStatusCalibration.statusEvidence === 'object', 'diagnostic-only fixture should surface statusEvidence');
     assert(diagOnlySnapshot.liveCandidateHistoryActionInterpretation.actionStance === 'neutral_wait', 'diagnostic-only sparse loop history should map to neutral_wait');
     assert(diagOnlySnapshot.liveCandidateHistoryActionInterpretationAudit.ruleUsed === 'sparse_history_neutral_wait', 'diagnostic-only sparse loop history should use sparse rule');
+    assert(diagOnlySnapshot.liveCandidateHistoryConfirmationGuide.confirmationState === 'waiting_for_confirmation', 'diagnostic-only sparse loop history should wait for confirmation');
+    assert(diagOnlySnapshot.liveCandidateHistoryConfirmationGuideAudit.ruleUsed === 'sparse_waiting_for_confirmation', 'diagnostic-only sparse loop history should use sparse confirmation rule');
     diagOnlyDb.close();
 
     const preOpenDb = new Database(':memory:');
@@ -674,6 +683,7 @@ function run() {
     assert(supportiveSnapshot.liveCandidateHistoryJudgmentAudit.dominantSupportiveRules.length > 0, 'supportive fixture should expose dominant supportive rules');
     assert(supportiveSnapshot.liveCandidateHistoryJudgment.confidenceLabel !== 'low', 'supportive fixture should not be low-confidence');
     assert(['supportive_followthrough', 'early_reversal_watch'].includes(String(supportiveSnapshot.liveCandidateHistoryActionInterpretation.actionStance || '')), 'supportive fixture should surface constructive action interpretation');
+    assert(['confirmed', 'not_needed'].includes(String(supportiveSnapshot.liveCandidateHistoryConfirmationGuide.confirmationState || '')), 'supportive fixture should be confirmed or not_needed');
     supportiveDb.close();
 
     const weakDb = new Database(':memory:');
@@ -732,6 +742,7 @@ function run() {
     assert(weakSnapshot.liveCandidateHistoryActionInterpretation.actionBias === 'defensive', 'weak deteriorating fixture should remain defensive');
     assert(weakSnapshot.liveCandidateHistoryActionInterpretation.confidenceImpact === 'reinforces', 'weak deteriorating fixture should reinforce directional weakness');
     assert(weakSnapshot.liveCandidateHistoryActionInterpretationAudit.ruleUsed === 'weak_deteriorating_avoid', 'weak deteriorating fixture should expose deterministic action rule');
+    assert(['failed_confirmation', 'waiting_for_confirmation'].includes(String(weakSnapshot.liveCandidateHistoryConfirmationGuide.confirmationState || '')), 'avoid fixture should map to failed_confirmation or waiting_for_confirmation');
     weakDb.close();
 
     const tensionDb = new Database(':memory:');
@@ -773,6 +784,15 @@ function run() {
     assert(tensionSnapshot.liveCandidateHistoryActionInterpretation.confidenceImpact === 'conflicts', 'weak improving tension fixture should mark confidence conflict');
     assert(tensionSnapshot.liveCandidateHistoryActionInterpretation.requiresFreshConfirmation === true, 'weak improving tension fixture should require fresh confirmation');
     assert(tensionSnapshot.liveCandidateHistoryActionInterpretationAudit.tensionCase === 'weak_overall_improving_recent', 'weak improving tension fixture should expose tension case');
+    assert(tensionSnapshot.liveCandidateHistoryConfirmationGuide && typeof tensionSnapshot.liveCandidateHistoryConfirmationGuide === 'object', 'weak improving tension fixture should surface confirmation guide');
+    assert(tensionSnapshot.liveCandidateHistoryConfirmationGuide.confirmationState === 'waiting_for_confirmation', 'stabilization_watch should map to waiting_for_confirmation');
+    assert(Array.isArray(tensionSnapshot.liveCandidateHistoryConfirmationGuide.confirmationTriggers), 'stabilization_watch should include confirmation trigger list');
+    assert(Array.isArray(tensionSnapshot.liveCandidateHistoryConfirmationGuide.confirmationFailures), 'stabilization_watch should include confirmation failure list');
+    assert(tensionSnapshot.liveCandidateHistoryConfirmationGuide.nextBestStateIfConfirmed === 'early_reversal_watch', 'stabilization_watch should expose next state if confirmed');
+    assert(tensionSnapshot.liveCandidateHistoryConfirmationGuideAudit && typeof tensionSnapshot.liveCandidateHistoryConfirmationGuideAudit === 'object', 'stabilization_watch should surface confirmation guide audit');
+    assert(Array.isArray(tensionSnapshot.liveCandidateHistoryConfirmationGuideAudit.unmetCriticalTriggers), 'stabilization_watch audit should include unmetCriticalTriggers');
+    assert(tensionSnapshot.liveCandidateHistoryConfirmationGuideAudit.unmetCriticalTriggers.includes('structure_constructive_now'), 'stabilization_watch should require structure_constructive_now');
+    assert(tensionSnapshot.liveCandidateHistoryConfirmationGuideAudit.unmetCriticalTriggers.includes('actionability_constructive_now'), 'stabilization_watch should require actionability_constructive_now');
     tensionDb.close();
 
     const supportiveDeterioratingInterpretation = buildLiveCandidateHistoryActionInterpretation({
@@ -810,6 +830,112 @@ function run() {
     assert(supportiveDeterioratingInterpretation.actionBias === 'defensive', 'supportive+deteriorating tension should be defensive');
     assert(supportiveDeterioratingInterpretation.confidenceImpact === 'conflicts', 'supportive+deteriorating tension should mark confidence conflict');
     assert(supportiveDeterioratingAudit.ruleUsed === 'supportive_deteriorating_tension_caution', 'supportive+deteriorating tension should use deterministic caution rule');
+    const stabilizationGuide = buildLiveCandidateHistoryConfirmationGuide({
+      liveCandidateHistoryActionInterpretation: {
+        modeUsed: 'loop_only',
+        actionStance: 'stabilization_watch',
+        requiresFreshConfirmation: true,
+      },
+      liveCandidateHistoryJudgment: {
+        modeUsed: 'loop_only',
+        judgment: 'weak',
+        recentTransitionBias: 'improving',
+        directionVsTransitionTension: true,
+        sparseHistory: false,
+        historySampleSize: 30,
+        transitionSampleSize: 10,
+        supportiveCount: 4,
+        unsupportiveCount: 12,
+        neutralCount: 14,
+      },
+      liveCandidateHistoryJudgmentAudit: {
+        unsupportiveRuleHits: {
+          observation_structure_quality_poor: 12,
+        },
+      },
+      liveCandidateStateMonitor: {
+        monitoredCandidates: [{
+          candidateKey: 'candidate:one',
+          currentStatus: 'pre_open_watch',
+          currentStructureQualityScore: 25,
+          currentActionable: false,
+        }],
+        actionableTransitionDetected: false,
+      },
+      liveCandidateTransitionHistory: {
+        loopOnlyRecentTransitions: [{
+          candidateKey: 'candidate:one',
+          transitionType: 'structure_improved',
+        }],
+      },
+      liveOpportunityCandidates: {
+        hasActionableCandidateNow: false,
+        topCandidateOverall: {
+          candidateKey: 'candidate:one',
+          candidateStatus: 'pre_open_watch',
+          structureQualityLabel: 'poor',
+          structureQualityScore: 25,
+        },
+      },
+      liveCandidateHistoryStatusCalibration: {
+        statusRuleMap: {
+          pre_open_watch: {
+            directionalEffect: 'neutral',
+            treatment: 'context_only',
+          },
+        },
+      },
+    });
+    const stabilizationGuideAudit = buildLiveCandidateHistoryConfirmationGuideAudit({
+      liveCandidateHistoryConfirmationGuide: stabilizationGuide,
+      liveCandidateHistoryActionInterpretation: {
+        modeUsed: 'loop_only',
+        actionStance: 'stabilization_watch',
+        requiresFreshConfirmation: true,
+      },
+      liveCandidateHistoryJudgment: {
+        modeUsed: 'loop_only',
+        judgment: 'weak',
+        recentTransitionBias: 'improving',
+        directionVsTransitionTension: true,
+        sparseHistory: false,
+      },
+    });
+    assert(stabilizationGuide.confirmationState === 'waiting_for_confirmation', 'stabilization_watch guide should wait for confirmation');
+    assert(stabilizationGuide.confirmationTriggers.some((item) => item.code === 'improving_transition_bias_persists' && item.met === true), 'stabilization_watch guide should mark improving transition trigger');
+    assert(stabilizationGuide.confirmationState !== 'confirmed', 'transition improvement alone with poor structure must not count as full confirmation');
+    assert(stabilizationGuideAudit.ruleUsed && stabilizationGuideAudit.ruleUsed.length > 0, 'stabilization_watch guide audit should expose deterministic ruleUsed');
+    const supportiveGuide = buildLiveCandidateHistoryConfirmationGuide({
+      liveCandidateHistoryActionInterpretation: {
+        modeUsed: 'loop_only',
+        actionStance: 'supportive_followthrough',
+        requiresFreshConfirmation: false,
+      },
+      liveCandidateHistoryJudgment: {
+        modeUsed: 'loop_only',
+        judgment: 'supportive',
+        recentTransitionBias: 'improving',
+        directionVsTransitionTension: false,
+        sparseHistory: false,
+      },
+      liveOpportunityCandidates: {
+        hasActionableCandidateNow: true,
+        topCandidateActionableNow: {
+          candidateKey: 'candidate:two',
+          candidateStatus: 'ready_now',
+          structureQualityLabel: 'clean',
+          structureQualityScore: 72,
+          insideApprovedActionWindow: true,
+        },
+      },
+      liveCandidateTransitionHistory: {
+        loopOnlyRecentTransitions: [{
+          candidateKey: 'candidate:two',
+          transitionType: 'crossed_into_actionable',
+        }],
+      },
+    });
+    assert(['not_needed', 'confirmed'].includes(String(supportiveGuide.confirmationState || '')), 'supportive_followthrough should map to confirmed or not_needed');
 
     const forcedDiagnostics = buildLiveCandidateHistoryStatusCalibrationDiagnostics({
       statusCalibration: {

@@ -89,6 +89,8 @@ const LIVE_CANDIDATE_HISTORY_JUDGMENT_RECENT_ROW_LIMIT = 20;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_DOMINANT_RULE_LIMIT = 3;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_CONTEXT_DOMINANCE_RATIO = 0.6;
 const LIVE_CANDIDATE_HISTORY_JUDGMENT_TENSION_DOMINANCE_MARGIN = 8;
+const LIVE_CANDIDATE_CONFIRMATION_MIN_STRUCTURE_SCORE = 58;
+const LIVE_CANDIDATE_CONFIRMATION_MIN_IMPROVING_TRANSITIONS = 2;
 const LIVE_CANDIDATE_DB_STATEMENT_CACHE = new WeakMap();
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY = 'read_only';
 const LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO = 'loop_auto';
@@ -2724,6 +2726,429 @@ function buildLiveCandidateHistoryActionInterpretationAudit(input = {}) {
     inputsUsed,
     tensionCase,
     stanceAlternativesConsidered,
+    summaryLine,
+    advisoryOnly: true,
+  };
+}
+
+function buildLiveCandidateHistoryConfirmationGuide(input = {}) {
+  const interpretation = input?.liveCandidateHistoryActionInterpretation
+    && typeof input.liveCandidateHistoryActionInterpretation === 'object'
+    ? input.liveCandidateHistoryActionInterpretation
+    : {};
+  const judgment = input?.liveCandidateHistoryJudgment && typeof input.liveCandidateHistoryJudgment === 'object'
+    ? input.liveCandidateHistoryJudgment
+    : {};
+  const judgmentAudit = input?.liveCandidateHistoryJudgmentAudit && typeof input.liveCandidateHistoryJudgmentAudit === 'object'
+    ? input.liveCandidateHistoryJudgmentAudit
+    : {};
+  const liveCandidateStateMonitor = input?.liveCandidateStateMonitor && typeof input.liveCandidateStateMonitor === 'object'
+    ? input.liveCandidateStateMonitor
+    : {};
+  const liveCandidateTransitionHistory = input?.liveCandidateTransitionHistory
+    && typeof input.liveCandidateTransitionHistory === 'object'
+    ? input.liveCandidateTransitionHistory
+    : {};
+  const liveOpportunityCandidates = input?.liveOpportunityCandidates && typeof input.liveOpportunityCandidates === 'object'
+    ? input.liveOpportunityCandidates
+    : {};
+  const statusCalibration = input?.liveCandidateHistoryStatusCalibration
+    && typeof input.liveCandidateHistoryStatusCalibration === 'object'
+    ? input.liveCandidateHistoryStatusCalibration
+    : {};
+
+  const modeUsed = String(interpretation?.modeUsed || judgment?.modeUsed || 'loop_only').trim() || 'loop_only';
+  const currentActionStance = String(interpretation?.actionStance || 'neutral_wait').trim().toLowerCase() || 'neutral_wait';
+  const overallHistoryJudgment = String(judgment?.judgment || interpretation?.overallHistoryJudgment || 'sparse').trim().toLowerCase() || 'sparse';
+  const recentTransitionBias = String(judgment?.recentTransitionBias || interpretation?.recentTransitionBias || 'insufficient_history').trim().toLowerCase() || 'insufficient_history';
+  const directionVsTransitionTension = judgment?.directionVsTransitionTension === true || interpretation?.directionVsTransitionTension === true;
+  const sparseHistory = judgment?.sparseHistory === true;
+  const requiresFreshConfirmation = interpretation?.requiresFreshConfirmation === true;
+  const topCandidateActionableNow = liveOpportunityCandidates?.topCandidateActionableNow
+    && typeof liveOpportunityCandidates.topCandidateActionableNow === 'object'
+    ? liveOpportunityCandidates.topCandidateActionableNow
+    : null;
+  const topCandidateOverall = liveOpportunityCandidates?.topCandidateOverall
+    && typeof liveOpportunityCandidates.topCandidateOverall === 'object'
+    ? liveOpportunityCandidates.topCandidateOverall
+    : null;
+  const contextCandidate = topCandidateActionableNow || topCandidateOverall;
+  const contextCandidateKey = String(contextCandidate?.candidateKey || '').trim();
+  const monitoredCandidates = Array.isArray(liveCandidateStateMonitor?.monitoredCandidates)
+    ? liveCandidateStateMonitor.monitoredCandidates
+    : [];
+  const monitoredContext = monitoredCandidates.find((row) => String(row?.candidateKey || '').trim() === contextCandidateKey)
+    || monitoredCandidates[0]
+    || null;
+  const currentStatus = String(
+    contextCandidate?.candidateStatus
+    || monitoredContext?.currentStatus
+    || monitoredContext?.candidateStatus
+    || ''
+  ).trim().toLowerCase() || null;
+  const structureQualityLabel = String(contextCandidate?.structureQualityLabel || '').trim().toLowerCase()
+    || String(monitoredContext?.currentStructureQualityLabel || '').trim().toLowerCase()
+    || null;
+  const structureQualityScore = Number.isFinite(Number(contextCandidate?.structureQualityScore))
+    ? Number(contextCandidate.structureQualityScore)
+    : (Number.isFinite(Number(monitoredContext?.currentStructureQualityScore))
+      ? Number(monitoredContext.currentStructureQualityScore)
+      : null);
+  const hasActionableCandidateNow = liveOpportunityCandidates?.hasActionableCandidateNow === true
+    || topCandidateActionableNow !== null;
+
+  const loopTransitions = Array.isArray(liveCandidateTransitionHistory?.loopOnlyRecentTransitions)
+    ? liveCandidateTransitionHistory.loopOnlyRecentTransitions
+    : [];
+  const transitionRows = contextCandidateKey
+    ? loopTransitions.filter((row) => String(row?.candidateKey || '').trim() === contextCandidateKey)
+    : loopTransitions;
+  const recentTransitionTypes = transitionRows.map((row) => String(row?.transitionType || '').trim().toLowerCase()).filter(Boolean);
+  const recentStructureImprovedCount = recentTransitionTypes.filter((item) => item === 'structure_improved').length;
+  const recentStructureWorsenedCount = recentTransitionTypes.filter((item) => item === 'structure_worsened').length;
+  const recentCrossedIntoActionableCount = recentTransitionTypes.filter((item) => item === 'crossed_into_actionable').length;
+  const recentDroppedOutCount = recentTransitionTypes.filter((item) => item === 'dropped_out_of_actionable').length;
+  const latestTransition = transitionRows[0]
+    || liveCandidateTransitionHistory?.historyEvaluationLatestTransition
+    || liveCandidateTransitionHistory?.latestTransition
+    || null;
+
+  const unsupportiveRuleHits = judgmentAudit?.unsupportiveRuleHits && typeof judgmentAudit.unsupportiveRuleHits === 'object'
+    ? judgmentAudit.unsupportiveRuleHits
+    : {};
+  const poorStructureRuleHits = Number(unsupportiveRuleHits?.observation_structure_quality_poor || 0)
+    + Number(unsupportiveRuleHits?.observation_status_blocked_poor_structure || 0);
+  const calibrationStatusMap = statusCalibration?.statusRuleMap && typeof statusCalibration.statusRuleMap === 'object'
+    ? statusCalibration.statusRuleMap
+    : {};
+  const statusMapEntry = currentStatus && calibrationStatusMap?.[currentStatus] && typeof calibrationStatusMap[currentStatus] === 'object'
+    ? calibrationStatusMap[currentStatus]
+    : null;
+  const statusDirectionalEffect = String(statusMapEntry?.directionalEffect || '').trim().toLowerCase() || null;
+  const statusIsContextOnly = Boolean(
+    statusMapEntry
+    && (String(statusMapEntry?.treatment || '').includes('context_only')
+      || statusDirectionalEffect === 'neutral')
+  );
+  const insideApprovedActionWindow = contextCandidate?.insideApprovedActionWindow === true
+    || monitoredContext?.insideApprovedActionWindow === true
+    || monitoredContext?.currentActionable === true;
+
+  const structureConstructiveNow = Boolean(
+    (structureQualityLabel && ['clean', 'good', 'acceptable'].includes(structureQualityLabel))
+    || (Number.isFinite(structureQualityScore)
+      && structureQualityScore >= LIVE_CANDIDATE_CONFIRMATION_MIN_STRUCTURE_SCORE
+      && structureQualityLabel !== 'poor')
+    || (recentStructureImprovedCount >= LIVE_CANDIDATE_CONFIRMATION_MIN_IMPROVING_TRANSITIONS
+      && recentStructureWorsenedCount <= 0
+      && currentStatus !== 'blocked')
+  );
+  const actionabilityConstructiveNow = Boolean(
+    hasActionableCandidateNow
+    || liveCandidateStateMonitor?.actionableTransitionDetected === true
+    || recentCrossedIntoActionableCount > 0
+    || (String(currentStatus || '') === 'ready_now'
+      || (String(currentStatus || '') === 'secondary_watch' && structureConstructiveNow))
+  );
+  const contextBlockCleared = Boolean(
+    currentStatus
+    && !['pre_open_watch', 'watch_trigger', 'await_next_session'].includes(currentStatus)
+    && (currentStatus !== 'blocked' || structureConstructiveNow)
+  );
+  const improvingBiasConfirmed = recentTransitionBias === 'improving'
+    && (recentStructureImprovedCount >= 1
+      || String(latestTransition?.transitionType || '').trim().toLowerCase() === 'structure_improved');
+  const poorStructureDominanceReduced = Number(judgment?.unsupportiveCount || 0)
+    <= (Number(judgment?.supportiveCount || 0) + Number(judgment?.neutralCount || 0));
+
+  const confirmationTriggers = [
+    {
+      code: 'structure_constructive_now',
+      met: structureConstructiveNow,
+      detail: structureConstructiveNow
+        ? 'Structure quality is constructive enough for confirmation.'
+        : 'Need structure to improve beyond poor/blocked quality.',
+      source: 'live_candidate_structure',
+      critical: true,
+    },
+    {
+      code: 'actionability_constructive_now',
+      met: actionabilityConstructiveNow,
+      detail: actionabilityConstructiveNow
+        ? 'Candidate has actionable confirmation signal.'
+        : 'Need actionable-now or crossed-into-actionable confirmation.',
+      source: 'live_candidate_actionability',
+      critical: true,
+    },
+    {
+      code: 'improving_transition_bias_persists',
+      met: improvingBiasConfirmed,
+      detail: improvingBiasConfirmed
+        ? 'Recent transition bias remains improving.'
+        : 'Need improving transitions to persist.',
+      source: 'loop_transition_bias',
+      critical: false,
+    },
+    {
+      code: 'context_block_cleared',
+      met: contextBlockCleared,
+      detail: contextBlockCleared
+        ? 'Context-only block is no longer dominant.'
+        : 'Context state is still pre-open/watch/blocked.',
+      source: 'status_context',
+      critical: false,
+    },
+    {
+      code: 'poor_structure_dominance_reduced',
+      met: poorStructureDominanceReduced,
+      detail: poorStructureDominanceReduced
+        ? 'Poor-structure dominance has eased.'
+        : 'Poor-structure negatives still dominate loop history.',
+      source: 'loop_history_mix',
+      critical: false,
+    },
+  ];
+
+  const poorStructurePersists = structureQualityLabel === 'poor' || poorStructureRuleHits > 0;
+  const blockedPoorStructurePersists = currentStatus === 'blocked'
+    && (structureQualityLabel === 'poor'
+      || poorStructureRuleHits > 0
+      || String(statusDirectionalEffect || '') === 'split');
+  const transitionBiasDeteriorating = recentTransitionBias === 'deteriorating';
+  const noConfirmationProgress = !structureConstructiveNow
+    && !actionabilityConstructiveNow
+    && !improvingBiasConfirmed
+    && Number(judgment?.historySampleSize || 0) >= LIVE_CANDIDATE_HISTORY_JUDGMENT_MIN_OBSERVATIONS;
+
+  const confirmationFailures = [
+    {
+      code: 'poor_structure_persists',
+      active: poorStructurePersists,
+      detail: poorStructurePersists
+        ? 'Poor-structure evidence still dominates.'
+        : 'No persistent poor-structure failure detected.',
+      source: 'loop_history_structure',
+      critical: true,
+    },
+    {
+      code: 'blocked_poor_structure_persists',
+      active: blockedPoorStructurePersists,
+      detail: blockedPoorStructurePersists
+        ? 'Candidate is still blocked by poor structure.'
+        : 'Blocked poor-structure failure not active.',
+      source: 'candidate_status',
+      critical: true,
+    },
+    {
+      code: 'transition_structure_worsened_recent',
+      active: recentStructureWorsenedCount > 0,
+      detail: recentStructureWorsenedCount > 0
+        ? 'Recent transitions include structure worsening.'
+        : 'No recent structure-worsened transition.',
+      source: 'loop_transitions',
+      critical: false,
+    },
+    {
+      code: 'dropped_out_of_actionable_recent',
+      active: recentDroppedOutCount > 0,
+      detail: recentDroppedOutCount > 0
+        ? 'Recent transitions dropped out of actionable.'
+        : 'No recent drop-out-of-actionable transition.',
+      source: 'loop_transitions',
+      critical: false,
+    },
+    {
+      code: 'transition_bias_deteriorating',
+      active: transitionBiasDeteriorating,
+      detail: transitionBiasDeteriorating
+        ? 'Recent transition bias is deteriorating.'
+        : 'Transition bias is not deteriorating.',
+      source: 'loop_transition_bias',
+      critical: false,
+    },
+    {
+      code: 'no_confirmation_progress',
+      active: noConfirmationProgress,
+      detail: noConfirmationProgress
+        ? 'No constructive confirmation progress after sufficient history.'
+        : 'Confirmation progress is present or history is still thin.',
+      source: 'confirmation_progress',
+      critical: false,
+    },
+  ];
+
+  const triggerCount = confirmationTriggers.filter((item) => item.met === true).length;
+  const failureCount = confirmationFailures.filter((item) => item.active === true).length;
+  const unmetCriticalTriggers = confirmationTriggers
+    .filter((item) => item.critical === true && item.met !== true)
+    .map((item) => item.code);
+  const activeCriticalFailures = confirmationFailures
+    .filter((item) => item.critical === true && item.active === true)
+    .map((item) => item.code);
+  const fullConstructiveConfirmation = structureConstructiveNow && actionabilityConstructiveNow;
+  const hasPartialProgress = triggerCount > 0
+    && (structureConstructiveNow || actionabilityConstructiveNow || improvingBiasConfirmed);
+  const severeReversalFailure = transitionBiasDeteriorating
+    || recentDroppedOutCount > 0
+    || (recentStructureWorsenedCount > recentStructureImprovedCount && recentStructureWorsenedCount > 0);
+
+  let ruleUsed = 'sparse_waiting_for_confirmation';
+  let confirmationState = 'waiting_for_confirmation';
+  let nextBestStateIfConfirmed = 'none';
+
+  if (sparseHistory) {
+    ruleUsed = 'sparse_waiting_for_confirmation';
+    confirmationState = 'waiting_for_confirmation';
+    nextBestStateIfConfirmed = currentActionStance === 'stabilization_watch'
+      ? 'early_reversal_watch'
+      : (currentActionStance === 'avoid' ? 'constructive_caution' : 'none');
+  } else if (currentActionStance === 'supportive_followthrough') {
+    if (requiresFreshConfirmation) {
+      ruleUsed = fullConstructiveConfirmation
+        ? 'supportive_requires_fresh_confirmation_confirmed'
+        : 'supportive_requires_fresh_confirmation_partial';
+      confirmationState = fullConstructiveConfirmation ? 'confirmed' : 'partially_confirmed';
+    } else {
+      ruleUsed = 'supportive_not_needed';
+      confirmationState = 'not_needed';
+    }
+    nextBestStateIfConfirmed = 'supportive_followthrough';
+  } else if (currentActionStance === 'avoid') {
+    ruleUsed = failureCount > 0 ? 'avoid_failed_confirmation' : 'avoid_waiting_for_confirmation';
+    confirmationState = failureCount > 0 ? 'failed_confirmation' : 'waiting_for_confirmation';
+    nextBestStateIfConfirmed = 'constructive_caution';
+  } else if (currentActionStance === 'stabilization_watch') {
+    if (fullConstructiveConfirmation && activeCriticalFailures.length <= 0) {
+      ruleUsed = 'stabilization_watch_confirmed';
+      confirmationState = 'confirmed';
+    } else if (severeReversalFailure) {
+      ruleUsed = 'stabilization_watch_failed_confirmation';
+      confirmationState = 'failed_confirmation';
+    } else {
+      ruleUsed = 'stabilization_watch_waiting_for_confirmation';
+      confirmationState = 'waiting_for_confirmation';
+    }
+    nextBestStateIfConfirmed = 'early_reversal_watch';
+  } else if (currentActionStance === 'early_reversal_watch') {
+    if (fullConstructiveConfirmation && improvingBiasConfirmed && activeCriticalFailures.length <= 0) {
+      ruleUsed = 'early_reversal_watch_confirmed';
+      confirmationState = 'confirmed';
+    } else if (activeCriticalFailures.length > 0) {
+      ruleUsed = 'early_reversal_watch_failed_confirmation';
+      confirmationState = 'failed_confirmation';
+    } else if (hasPartialProgress) {
+      ruleUsed = 'early_reversal_watch_partially_confirmed';
+      confirmationState = 'partially_confirmed';
+    } else {
+      ruleUsed = 'early_reversal_watch_waiting_for_confirmation';
+      confirmationState = 'waiting_for_confirmation';
+    }
+    nextBestStateIfConfirmed = 'supportive_followthrough';
+  } else if (currentActionStance === 'caution') {
+    if (fullConstructiveConfirmation && activeCriticalFailures.length <= 0) {
+      ruleUsed = 'caution_confirmed';
+      confirmationState = 'confirmed';
+    } else if (activeCriticalFailures.length > 0) {
+      ruleUsed = 'caution_failed_confirmation';
+      confirmationState = 'failed_confirmation';
+    } else if (hasPartialProgress) {
+      ruleUsed = 'caution_partially_confirmed';
+      confirmationState = 'partially_confirmed';
+    } else {
+      ruleUsed = 'caution_waiting_for_confirmation';
+      confirmationState = 'waiting_for_confirmation';
+    }
+    nextBestStateIfConfirmed = 'constructive_caution';
+  } else {
+    ruleUsed = 'neutral_waiting_for_confirmation';
+    confirmationState = 'waiting_for_confirmation';
+    nextBestStateIfConfirmed = fullConstructiveConfirmation ? 'early_reversal_watch' : 'none';
+  }
+
+  const triggerCodes = confirmationTriggers.filter((item) => item.met === true).map((item) => item.code);
+  const activeFailureCodes = confirmationFailures.filter((item) => item.active === true).map((item) => item.code);
+  const triggerSummaryLine = triggerCodes.length > 0
+    ? `Confirmation triggers met (${triggerCodes.length}/${confirmationTriggers.length}): ${triggerCodes.join(', ')}.`
+    : `Confirmation triggers met (0/${confirmationTriggers.length}); waiting for constructive structure/actionability.`;
+  const failureSummaryLine = activeFailureCodes.length > 0
+    ? `Confirmation failures active (${activeFailureCodes.length}): ${activeFailureCodes.join(', ')}.`
+    : 'No active confirmation failures.';
+
+  let summaryLine = `Confirmation ${confirmationState.replace(/_/g, ' ')} for ${currentActionStance.replace(/_/g, ' ')}.`;
+  if (confirmationState === 'waiting_for_confirmation') {
+    summaryLine = `Waiting for confirmation: need ${unmetCriticalTriggers.join(' + ') || 'constructive structure/actionability'}.`;
+  } else if (confirmationState === 'partially_confirmed') {
+    summaryLine = `Partial confirmation: progress visible, still missing ${unmetCriticalTriggers.join(' + ') || 'full constructive confirmation'}.`;
+  } else if (confirmationState === 'confirmed') {
+    summaryLine = `Confirmed: constructive structure and actionability are in place.`;
+  } else if (confirmationState === 'failed_confirmation') {
+    summaryLine = `Failed confirmation: ${activeFailureCodes.join(', ') || 'critical failures active'}.`;
+  } else if (confirmationState === 'not_needed') {
+    summaryLine = 'Confirmation not needed for current stance.';
+  }
+  if (statusIsContextOnly && !structureConstructiveNow) {
+    summaryLine = `${summaryLine} Context-only improvement is not enough without constructive structure/actionability.`;
+  }
+  if (!insideApprovedActionWindow && (currentActionStance === 'stabilization_watch' || currentActionStance === 'early_reversal_watch')) {
+    summaryLine = `${summaryLine} Outside approved action window; confirmation remains advisory.`;
+  }
+
+  return {
+    modeUsed,
+    currentActionStance,
+    confirmationState,
+    confirmationTriggers,
+    confirmationFailures,
+    triggerSummaryLine,
+    failureSummaryLine,
+    nextBestStateIfConfirmed,
+    summaryLine,
+    ruleUsed,
+    triggerCount,
+    failureCount,
+    unmetCriticalTriggers,
+    activeCriticalFailures,
+    advisoryOnly: true,
+  };
+}
+
+function buildLiveCandidateHistoryConfirmationGuideAudit(input = {}) {
+  const guide = input?.liveCandidateHistoryConfirmationGuide
+    && typeof input.liveCandidateHistoryConfirmationGuide === 'object'
+    ? input.liveCandidateHistoryConfirmationGuide
+    : {};
+  const interpretation = input?.liveCandidateHistoryActionInterpretation
+    && typeof input.liveCandidateHistoryActionInterpretation === 'object'
+    ? input.liveCandidateHistoryActionInterpretation
+    : {};
+  const judgment = input?.liveCandidateHistoryJudgment && typeof input.liveCandidateHistoryJudgment === 'object'
+    ? input.liveCandidateHistoryJudgment
+    : {};
+
+  const inputsUsed = {
+    modeUsed: String(guide?.modeUsed || interpretation?.modeUsed || judgment?.modeUsed || 'loop_only').trim() || 'loop_only',
+    currentActionStance: String(guide?.currentActionStance || interpretation?.actionStance || 'neutral_wait').trim().toLowerCase() || 'neutral_wait',
+    overallHistoryJudgment: String(judgment?.judgment || interpretation?.overallHistoryJudgment || 'sparse').trim().toLowerCase() || 'sparse',
+    recentTransitionBias: String(judgment?.recentTransitionBias || interpretation?.recentTransitionBias || 'insufficient_history').trim().toLowerCase() || 'insufficient_history',
+    directionVsTransitionTension: judgment?.directionVsTransitionTension === true || interpretation?.directionVsTransitionTension === true,
+    sparseHistory: judgment?.sparseHistory === true,
+    sparseReason: String(judgment?.sparseReason || '').trim() || null,
+    requiresFreshConfirmation: interpretation?.requiresFreshConfirmation === true,
+  };
+  const ruleUsed = String(guide?.ruleUsed || 'sparse_waiting_for_confirmation').trim() || 'sparse_waiting_for_confirmation';
+  const triggerCount = Number(guide?.triggerCount || 0);
+  const failureCount = Number(guide?.failureCount || 0);
+  const unmetCriticalTriggers = Array.isArray(guide?.unmetCriticalTriggers)
+    ? guide.unmetCriticalTriggers
+    : [];
+  const summaryLine = `Confirmation guide audit: ${ruleUsed} with ${triggerCount} trigger(s) and ${failureCount} failure(s).`;
+
+  return {
+    ruleUsed,
+    inputsUsed,
+    triggerCount,
+    failureCount,
+    unmetCriticalTriggers,
     summaryLine,
     advisoryOnly: true,
   };
@@ -5808,6 +6233,20 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryJudgment,
     liveCandidateHistoryActionInterpretation,
   });
+  const liveCandidateHistoryConfirmationGuide = buildLiveCandidateHistoryConfirmationGuide({
+    liveCandidateHistoryActionInterpretation,
+    liveCandidateHistoryJudgment,
+    liveCandidateHistoryJudgmentAudit,
+    liveCandidateStateMonitor,
+    liveCandidateTransitionHistory,
+    liveOpportunityCandidates,
+    liveCandidateHistoryStatusCalibration,
+  });
+  const liveCandidateHistoryConfirmationGuideAudit = buildLiveCandidateHistoryConfirmationGuideAudit({
+    liveCandidateHistoryConfirmationGuide,
+    liveCandidateHistoryActionInterpretation,
+    liveCandidateHistoryJudgment,
+  });
   const strategyCandidateOpportunityBridge = buildStrategyCandidateBridge({
     opportunityScoring,
     liveOpportunityCandidates,
@@ -6041,6 +6480,14 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryActionInterpretationAudit,
     liveCandidateHistoryActionInterpretationAudit
   );
+  todayRecommendation.liveCandidateHistoryConfirmationGuide = cloneData(
+    liveCandidateHistoryConfirmationGuide,
+    liveCandidateHistoryConfirmationGuide
+  );
+  todayRecommendation.liveCandidateHistoryConfirmationGuideAudit = cloneData(
+    liveCandidateHistoryConfirmationGuideAudit,
+    liveCandidateHistoryConfirmationGuideAudit
+  );
   todayRecommendation.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
     strategyCandidateOpportunityBridge
@@ -6106,6 +6553,14 @@ function buildCommandCenterPanels(input = {}) {
   decisionBoard.liveCandidateHistoryActionInterpretationAudit = cloneData(
     liveCandidateHistoryActionInterpretationAudit,
     liveCandidateHistoryActionInterpretationAudit
+  );
+  decisionBoard.liveCandidateHistoryConfirmationGuide = cloneData(
+    liveCandidateHistoryConfirmationGuide,
+    liveCandidateHistoryConfirmationGuide
+  );
+  decisionBoard.liveCandidateHistoryConfirmationGuideAudit = cloneData(
+    liveCandidateHistoryConfirmationGuideAudit,
+    liveCandidateHistoryConfirmationGuideAudit
   );
   decisionBoard.strategyCandidateOpportunityBridge = cloneData(
     strategyCandidateOpportunityBridge,
@@ -6173,6 +6628,14 @@ function buildCommandCenterPanels(input = {}) {
     liveCandidateHistoryActionInterpretationAudit: cloneData(
       liveCandidateHistoryActionInterpretationAudit,
       liveCandidateHistoryActionInterpretationAudit
+    ),
+    liveCandidateHistoryConfirmationGuide: cloneData(
+      liveCandidateHistoryConfirmationGuide,
+      liveCandidateHistoryConfirmationGuide
+    ),
+    liveCandidateHistoryConfirmationGuideAudit: cloneData(
+      liveCandidateHistoryConfirmationGuideAudit,
+      liveCandidateHistoryConfirmationGuideAudit
     ),
     strategyCandidateOpportunityBridge: cloneData(
       strategyCandidateOpportunityBridge,
@@ -6330,5 +6793,7 @@ module.exports = {
   buildLiveCandidateHistoryStatusCalibrationDiagnostics,
   buildLiveCandidateHistoryActionInterpretation,
   buildLiveCandidateHistoryActionInterpretationAudit,
+  buildLiveCandidateHistoryConfirmationGuide,
+  buildLiveCandidateHistoryConfirmationGuideAudit,
   buildPineScriptForStrategy,
 };
