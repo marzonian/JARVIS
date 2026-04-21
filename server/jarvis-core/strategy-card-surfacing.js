@@ -39,7 +39,7 @@ function normalizeCardRow(input = {}, defaults = {}) {
     slot: asLowerText(defaults.slot || row.slot || row.tier || row.layer || ''),
     title: asNullableText(defaults.title || row.title || ''),
     strategyName: asNullableText(row.name || defaults.name || ''),
-    key: asNullableText(row.key || defaults.key || ''),
+    key: asNullableText(row.key || defaults.key || defaults.slot || row.slot || row.tier || ''),
     layer: asNullableText(row.layer || defaults.layer || ''),
     suitability: toRoundedOrNull(row.suitability),
     score: toRoundedOrNull(row.score),
