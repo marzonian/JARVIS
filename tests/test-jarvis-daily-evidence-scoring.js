@@ -2345,7 +2345,7 @@ async function runIntegrationChecks() {
   });
 
   try {
-    const statusOut = await getJson(server.baseUrl, '/api/jarvis/evidence/daily-scoring?force=1');
+    let statusOut = await getJson(server.baseUrl, '/api/jarvis/evidence/daily-scoring?force=1');
     assert(statusOut?.status === 'ok', 'daily scoring status endpoint should return ok');
     assert(statusOut?.dailyEvidenceScoringStatus && typeof statusOut.dailyEvidenceScoringStatus === 'object', 'dailyEvidenceScoringStatus missing');
     assert(DAILY_SCORING_RUN_ORIGIN_ENUM.includes(String(statusOut.dailyEvidenceScoringStatus.runOrigin || '')), 'daily scoring status endpoint invalid runOrigin');
@@ -2935,6 +2935,13 @@ async function runIntegrationChecks() {
 
     const centerOut = await getJson(server.baseUrl, '/api/jarvis/command-center?windowSessions=120&performanceSource=all&force=1');
     assert(centerOut?.status === 'ok', 'command-center endpoint should return ok');
+    // Re-read the daily-scoring status without force=1 so it hits the same cached
+    // snapshot command-center just computed. Otherwise statusOut is stale (captured
+    // before the POST /run and the centerOut force=1 recompute), and parity asserts
+    // compare run IDs from different scoring passes.
+    statusOut = await getJson(server.baseUrl, '/api/jarvis/evidence/daily-scoring');
+    assert(statusOut?.status === 'ok', 'daily scoring status refresh should return ok');
+    assert(statusOut?.dailyEvidenceScoringStatus && typeof statusOut.dailyEvidenceScoringStatus === 'object', 'refreshed dailyEvidenceScoringStatus missing');
     const center = centerOut?.commandCenter && typeof centerOut.commandCenter === 'object' ? centerOut.commandCenter : {};
     assert(Number.isFinite(Number(center?.naturalPreferredOwnerWinsLast5d)), 'command-center missing naturalPreferredOwnerWinsLast5d');
     assert(Number.isFinite(Number(center?.naturalPreferredOwnerWinsTotal)), 'command-center missing naturalPreferredOwnerWinsTotal');
