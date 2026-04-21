@@ -255,8 +255,9 @@ function buildContextualMechanicsRecommendation(input = {}) {
   const recommend = input?.deps?.buildMechanicsRecommendation;
 
   if (!records.length || typeof aggregate !== 'function' || typeof rank !== 'function' || typeof recommend !== 'function') {
+    const globalFallbackMode = input?.globalSummary?.recommendedTpMode || null;
     return {
-      contextUsed: null,
+      contextUsed: { date: null, time: null, weekday: null, timeBucket: null, regime: null },
       fallbackLevel: 'global',
       sampleSize: 0,
       confidenceScore: 0,
@@ -264,8 +265,10 @@ function buildContextualMechanicsRecommendation(input = {}) {
       bestTpModeContext: null,
       bestTpModeContextWinRate: null,
       bestTpModeContextPF: null,
-      contextualRecommendedTpMode: null,
-      contextualRecommendationReason: 'Contextual mechanics recommendation is unavailable due to missing inputs.',
+      contextualRecommendedTpMode: globalFallbackMode,
+      contextualRecommendationReason: globalFallbackMode
+        ? `No contextual data available — falling back to global recommendation: ${globalFallbackMode}.`
+        : 'Contextual mechanics recommendation is unavailable due to missing inputs.',
       contextVariantTable: [],
       advisoryOnly: true,
       warnings: ['contextual_inputs_missing'],

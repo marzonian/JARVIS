@@ -6617,13 +6617,15 @@ function buildCommandCenterPanels(input = {}) {
   const mechanicsInsight = (() => {
     if (!mechanicsResearchSummary || !Array.isArray(mechanicsResearchSummary.mechanicsVariantTable)
       || mechanicsResearchSummary.mechanicsVariantTable.length === 0) {
-      return null;
+      return `Mechanics research is unavailable — no eligible trades in the analysis window. Baseline plan: ${mechanicsResearchSummary?.originalPlanTpMode || 'Skip 2'}.`;
     }
     const windowSize = Number(mechanicsResearchSummary.windowSize || 0);
     const recent = String(mechanicsResearchSummary.bestTpModeRecent || '').trim();
     const pfLeader = String(mechanicsResearchSummary.bestTpModeByProfitFactor || '').trim();
     const wrLeader = String(mechanicsResearchSummary.bestTpModeByWinRate || '').trim();
-    if (!recent && !pfLeader && !wrLeader) return null;
+    if (!recent && !pfLeader && !wrLeader) {
+      return `Mechanics research (${mechanicsResearchSummary.eligibleTradeCount ?? 0} eligible trades): insufficient data to rank TP modes. Baseline plan: ${mechanicsResearchSummary.originalPlanTpMode || 'Skip 2'}.`;
+    }
     const scope = Number.isFinite(windowSize) && windowSize > 0
       ? `last ${windowSize} eligible trades`
       : 'recent eligible trades';

@@ -10309,8 +10309,7 @@ async function buildStrategyLayerSnapshotPayload(options = {}) {
     meta: sessionRefreshMeta,
   });
   const dates = Object.keys(sessions).sort();
-  if (dates.length === 0) return null;
-  const latestDate = dates[dates.length - 1];
+  const latestDate = dates.length > 0 ? dates[dates.length - 1] : null;
   const nowEt = (() => {
     const override = String(options.nowEtOverride || '').trim();
     const m = override.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
@@ -36410,8 +36409,31 @@ app.get('/api/jarvis/strategy/layers', async (req, res) => {
     });
     if (!payload) {
       return res.json({
-        status: 'no_data',
-        message: 'Import strategy data first.',
+        status: 'ok',
+        noData: true,
+        strategyLayers: {
+          mechanicsSummary: {
+            bestTpModeRecent: null,
+            bestTpModeByWinRate: null,
+            bestTpModeByProfitFactor: null,
+            recommendedTpMode: 'Skip 2',
+            recommendedTpModeReason: 'No data — using baseline recommendation.',
+            evidenceWindowTrades: 0,
+            tpModeComparisonAvailable: false,
+            sampleQuality: 'none',
+            originalPlanTpMode: 'Skip 2',
+            originalPlanStopMode: 'rr_1_to_1_from_tp',
+            advisoryOnly: true,
+            contextualTpRecommendation: null,
+            contextConfidence: 'low',
+            contextSampleSize: 0,
+          },
+        },
+        strategyTracking: null,
+        strategyPortfolio: null,
+        strategyExperiments: null,
+        strategyLearning: null,
+        regimeAwareLearning: null,
       });
     }
     res.json({
@@ -36528,8 +36550,34 @@ app.get('/api/jarvis/command-center', async (req, res) => {
     });
     if (!payload) {
       return res.json({
-        status: 'no_data',
-        message: 'Import strategy data first.',
+        status: 'ok',
+        noData: true,
+        commandCenter: {
+          mechanicsInsight: 'No trade data available — import data to enable mechanics analysis.',
+          contextualMechanicsInsight: 'No contextual data available — import data to enable contextual mechanics analysis.',
+          contextualMechanicsConfidence: 'low',
+          todayRecommendation: {
+            posture: 'stand_down',
+            recommendedStrategy: 'No data available — import trade data to unlock recommendations.',
+            recommendedTpMode: 'Skip 2',
+            confidenceLabel: 'low',
+            advisoryOnly: true,
+          },
+        },
+        mechanicsResearchSummary: {
+          recommendedTpMode: 'Skip 2',
+          advisoryOnly: true,
+          contextualRecommendation: {
+            contextUsed: { date: null, time: null, weekday: null, timeBucket: null, regime: null },
+            fallbackLevel: 'global',
+            sampleSize: 0,
+            confidenceScore: 0,
+            confidenceLabel: 'low',
+            contextualRecommendedTpMode: 'Skip 2',
+          },
+        },
+        strategyLayers: null,
+        strategyLayerSnapshot: null,
       });
     }
     const strategyLayerSnapshot = buildStrategyLayerSnapshotContract(payload);
