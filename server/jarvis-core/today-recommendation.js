@@ -5,6 +5,7 @@ function toText(value) {
 }
 
 function toNumber(value, fallback = null) {
+  if (value == null) return fallback;
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }

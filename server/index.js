@@ -10185,6 +10185,7 @@ function buildPerDateStrategySnapshotForScoring(date, sessions = {}) {
 }
 
 function buildBackfillRecommendationContextForDate(options = {}) {
+  function toText(v) { return String(v == null ? '' : v).replace(/\s+/g, ' ').trim(); }
   const date = String(options.date || '').trim();
   const sessionsBeforeDate = options.sessionsBeforeDate && typeof options.sessionsBeforeDate === 'object'
     ? options.sessionsBeforeDate
