@@ -5232,6 +5232,15 @@ function buildUnifiedExecutionDecision({ plan, elite, panel, opportunities = [] 
     'TOPSTEP_MANUAL_CONFIRM_REQUIRED',
     'TOPSTEP_AUTOMATION_DISABLED',
     'TOPSTEP_MANUAL_CONFIRMATION_ONLY',
+    // Automation-control flags: execution is in advisory/manual mode by default.
+    // These indicate Jarvis cannot auto-execute, NOT that the trade setup is poor.
+    // They must not override the recommendation posture derived from signal quality.
+    'EXECUTION_DISABLED',
+    'KILL_SWITCH_ACTIVE',
+    // Topstep connectivity issue: when Topstep is unconfigured (no API key) or in
+    // advisory mode, the live sync is always "unhealthy". Treat as advisory so it
+    // does not suppress the recommendation posture on unconfigured setups.
+    'TOPSTEP_LIVE_SYNC_UNHEALTHY',
   ]);
   const liveBlockedHard = [];
   for (const b of liveBlocked) {
