@@ -10237,6 +10237,37 @@ function buildBackfillRecommendationContextForDate(options = {}) {
     },
     mechanicsSummary,
   });
+  // Derive a per-date projected win chance from historical mechanics data.
+  // Without this, `buildCommandCenterPanels` reads `commandSnapshot?.elite?.winModel`
+  // (null here) and falls back to a hardcoded 50% — which makes every backfill day
+  // produce the same `trade_selectively` posture. We prefer the contextual
+  // (weekday × time-bucket × regime) win rate because it varies per date as the
+  // bounded session window shifts. Fall back to the best-by-win-rate TP mode's
+  // rate from the global variant table, then to null (classifyPosture default of 50).
+  const backfillWinChance = (() => {
+    const ctxWr = Number(mechanicsResearchSummary?.contextualRecommendation?.bestTpModeContextWinRate);
+    if (Number.isFinite(ctxWr) && ctxWr > 0) return ctxWr;
+    const bestWrMode = toText(mechanicsResearchSummary?.bestTpModeByWinRate || '');
+    const variantTable = Array.isArray(mechanicsResearchSummary?.mechanicsVariantTable)
+      ? mechanicsResearchSummary.mechanicsVariantTable
+      : [];
+    const bestRow = bestWrMode
+      ? variantTable.find((r) => toText(r?.tpMode) === bestWrMode)
+      : null;
+    const globalWr = Number(bestRow?.winRatePct);
+    if (Number.isFinite(globalWr) && globalWr > 0) return globalWr;
+    return null;
+  })();
+  const backfillContextSampleSize = Number(
+    mechanicsResearchSummary?.contextualRecommendation?.sampleSize || 0
+  );
+  // Require a minimum sample size to treat the contextual win rate as reliable.
+  // Below that, leave winModel null so classifyPosture falls back to its own default
+  // (50% → trade_selectively) rather than emitting a noisy signal from thin data.
+  const MIN_BACKFILL_CONTEXT_SAMPLE = 15;
+  const backfillWinChanceReliable = Number.isFinite(backfillWinChance)
+    && backfillContextSampleSize >= MIN_BACKFILL_CONTEXT_SAMPLE;
+
   const commandCenter = buildCommandCenterPanels({
     strategyLayers,
     decision: null,
@@ -10252,6 +10283,9 @@ function buildBackfillRecommendationContextForDate(options = {}) {
       trend: latestRegime?.regime_trend || latestRegime?.trend || 'unknown',
       volatility: latestRegime?.vol || latestRegime?.volatility || 'unknown',
       historicalBehaviorHint: strategyLayers?.recommendation?.reason || null,
+      winModel: backfillWinChanceReliable
+        ? { point: backfillWinChance, source: 'backfill_contextual_mechanics', sampleSize: backfillContextSampleSize }
+        : null,
     },
     mechanicsResearchSummary,
   });
