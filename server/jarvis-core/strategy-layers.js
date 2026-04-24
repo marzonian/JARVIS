@@ -5200,6 +5200,68 @@ function buildStrategyCandidateBridge({ opportunityScoring = null, liveOpportuni
   };
 }
 
+// Minimum sample size a non-original strategy must show in its backtest
+// before it is allowed to displace the original plan. Below this, composite
+// WR/PF scores are noisy and routinely flip to variants that ultimately
+// underperform on real P&L. Calibrated from 78-session evidence where
+// variant_nearest_tp temporarily outscored original on early windows but
+// netted $392 vs original's $1,019 over the full window.
+const BASELINE_GUARD_MIN_TRADES = 10;
+
+// Minimum total-dollar P&L margin a variant must clear above original before
+// it is promoted. A tie on WR/PF is not sufficient — the variant must be
+// strictly dollar-superior in the current backtest.
+const BASELINE_GUARD_MIN_PNL_MARGIN_DOLLARS = 0.01;
+
+function baselineGuardEvaluation(top, original) {
+  // Original plan is always allowed to be the recommendation.
+  if (!top || !original || top === original) {
+    return { applied: false, enforced: false, reason: null };
+  }
+  const topLayer = String(top.layer || '').toLowerCase();
+  if (topLayer === 'original' || top.key === original.key) {
+    return { applied: false, enforced: false, reason: null };
+  }
+
+  const topPnl = Number(top.metrics?.totalPnlDollars);
+  const origPnl = Number(original.metrics?.totalPnlDollars);
+  const topTrades = Number(top.metrics?.totalTrades || 0);
+  const pnlDelta = (Number.isFinite(topPnl) && Number.isFinite(origPnl))
+    ? round2(topPnl - origPnl)
+    : null;
+
+  // Guard 1: variant must have enough trades for its metrics to be credible.
+  if (!Number.isFinite(topTrades) || topTrades < BASELINE_GUARD_MIN_TRADES) {
+    return {
+      applied: true,
+      enforced: true,
+      reason: `Baseline guard: ${top.name || top.key} has only ${topTrades || 0} backtested trades — need at least ${BASELINE_GUARD_MIN_TRADES} to displace the original plan.`,
+      pnlDelta,
+      topTrades,
+    };
+  }
+
+  // Guard 2: variant must beat original on total dollar P&L, not just WR/PF.
+  if (!Number.isFinite(topPnl) || !Number.isFinite(origPnl)
+    || (topPnl - origPnl) < BASELINE_GUARD_MIN_PNL_MARGIN_DOLLARS) {
+    return {
+      applied: true,
+      enforced: true,
+      reason: `Baseline guard: ${top.name || top.key} nets $${Number.isFinite(topPnl) ? round2(topPnl) : '?'} vs original $${Number.isFinite(origPnl) ? round2(origPnl) : '?'} in backtest — composite WR/PF rank is not enough to promote a lower-dollar strategy.`,
+      pnlDelta,
+      topTrades,
+    };
+  }
+
+  return {
+    applied: true,
+    enforced: false,
+    reason: `Baseline guard clear: ${top.name || top.key} nets +$${round2(topPnl - origPnl)} above original over ${topTrades} trades.`,
+    pnlDelta,
+    topTrades,
+  };
+}
+
 function chooseRecommendedStrategy({ original, bestVariant, bestDiscovery, context = {} }) {
   const candidates = [original, bestVariant, bestDiscovery].filter(Boolean).map((entry) => ({
     ...entry,
@@ -5207,13 +5269,29 @@ function chooseRecommendedStrategy({ original, bestVariant, bestDiscovery, conte
     recommendationPriority: computeRecommendationPriority(entry, context),
   }));
   candidates.sort((a, b) => Number(b.recommendationPriority?.composite || 0) - Number(a.recommendationPriority?.composite || 0));
-  const top = candidates[0] || null;
+  let top = candidates[0] || null;
   if (!top) return null;
+
+  // Evidence-based safeguard: a non-original strategy can only displace the
+  // original plan if it clears a sample-size threshold AND has strictly higher
+  // total-dollar P&L in the current backtest. Prevents short-window noise
+  // (where a thin variant's WR/PF temporarily exceeds original's) from
+  // recommending a real-dollar underperformer.
+  const guard = baselineGuardEvaluation(top, original);
+  if (guard.enforced && original) {
+    top = {
+      ...original,
+      suitability: buildSuitabilityScore(original, context),
+      recommendationPriority: computeRecommendationPriority(original, context),
+    };
+  }
+
   const wr = Number(top.metrics?.winRate || 0);
   const pf = Number(top.metrics?.profitFactor || 0);
   let reason = `Ranked highest on win-rate-first scoring (${round2(wr)}% WR, PF ${round2(pf)}).`;
   if (top.layer === 'variant') reason = `Learned overlay leads today on WR/PF practicality balance (${round2(wr)}% WR, PF ${round2(pf)}).`;
   if (top.layer === 'discovery') reason = `Alternative strategy currently leads WR/PF score for this regime (${round2(wr)}% WR, PF ${round2(pf)}).`;
+  if (guard.enforced) reason = guard.reason;
   return {
     strategyKey: top.key,
     layer: top.layer,
@@ -5222,6 +5300,14 @@ function chooseRecommendedStrategy({ original, bestVariant, bestDiscovery, conte
     recommendationScore: round2(top.recommendationPriority?.composite || top.suitability || 0),
     rankingComponents: top.recommendationPriority?.components || null,
     reason,
+    baselineGuard: {
+      applied: guard.applied,
+      enforced: guard.enforced,
+      reason: guard.reason,
+      pnlDeltaVsOriginal: guard.pnlDelta ?? null,
+      topStrategyTrades: guard.topTrades ?? null,
+      minTradesThreshold: BASELINE_GUARD_MIN_TRADES,
+    },
   };
 }
 
@@ -5401,6 +5487,7 @@ function buildStrategyLayerSnapshot(sessions = {}, options = {}) {
     recommendedStrategyName: recommendation?.name || originalPlan?.name || null,
     rationale: recommendation?.reason || 'Baseline recommendation.',
     isOriginalPlanRecommendation: recommendationLayer === 'original' || !recommendationLayer,
+    baselineGuard: recommendation?.baselineGuard || null,
   };
 
   const mechanicsSummaryInput = options?.mechanicsSummary && typeof options.mechanicsSummary === 'object'
@@ -6772,6 +6859,25 @@ function buildCommandCenterPanels(input = {}) {
   }
   todayRecommendation.assistantDecisionBrief = assistantDecisionBrief;
   todayRecommendation.assistantDecisionBriefText = assistantDecisionBrief.assistantText;
+  // Surface the baseline guard to the UI so users can see whether the recommended
+  // strategy was promoted or whether a would-be variant/discovery leader was
+  // rejected for insufficient dollar-P&L margin or thin sample size. Without this
+  // the dashboard can't explain why original was retained even when a variant's
+  // WR/PF looks flashier.
+  todayRecommendation.baselineGuard = (recommendation && recommendation.baselineGuard)
+    ? { ...recommendation.baselineGuard }
+    : null;
+  todayRecommendation.recommendationBasisDetail = recommendationBasis
+    ? {
+      basisType: recommendationBasis.basisType,
+      recommendedLayer: recommendationBasis.recommendedLayer,
+      recommendedStrategyKey: recommendationBasis.recommendedStrategyKey,
+      recommendedStrategyName: recommendationBasis.recommendedStrategyName,
+      rationale: recommendationBasis.rationale,
+      isOriginalPlanRecommendation: recommendationBasis.isOriginalPlanRecommendation,
+      baselineGuard: recommendationBasis.baselineGuard || null,
+    }
+    : null;
   const decisionQualityCard = buildDecisionQualityCard({
     decision,
     todayRecommendation,
@@ -7164,6 +7270,10 @@ module.exports = {
   buildVariantReports,
   buildDiscoveryLayer,
   buildStrategyLayerSnapshot,
+  chooseRecommendedStrategy,
+  baselineGuardEvaluation,
+  BASELINE_GUARD_MIN_TRADES,
+  BASELINE_GUARD_MIN_PNL_MARGIN_DOLLARS,
   buildReplayVariantAssessment,
   buildCommandCenterPanels,
   buildAssistantDecisionBrief,

@@ -4940,6 +4940,32 @@ function Briefing({ strategy }) {
     || null
   );
   const recommendationContextSource = 'jarvis_command_center.todayRecommendation';
+  // Baseline guard: a non-original strategy can only displace the original plan
+  // if it clears a sample-size threshold AND strictly higher dollar P&L. Surface
+  // the evaluation so users can see *why* the recommendation either stayed on
+  // original or promoted a variant — not just the name of the chosen strategy.
+  const baselineGuard = commandCenterTodayRecommendation.baselineGuard || null;
+  const recommendationBasisDetail = commandCenterTodayRecommendation.recommendationBasisDetail || null;
+  const baselineGuardEnforced = baselineGuard?.enforced === true;
+  const baselineGuardApplied = baselineGuard?.applied === true;
+  const baselineGuardPnlDelta = Number.isFinite(Number(baselineGuard?.pnlDeltaVsOriginal))
+    ? Number(baselineGuard.pnlDeltaVsOriginal)
+    : null;
+  const baselineGuardTrades = Number.isFinite(Number(baselineGuard?.topStrategyTrades))
+    ? Number(baselineGuard.topStrategyTrades)
+    : null;
+  const baselineGuardMinTrades = Number.isFinite(Number(baselineGuard?.minTradesThreshold))
+    ? Number(baselineGuard.minTradesThreshold)
+    : null;
+  const baselineGuardReason = String(baselineGuard?.reason || '').trim();
+  const baselineGuardStatusLabel = baselineGuardEnforced
+    ? 'Variant rejected — original retained'
+    : (baselineGuardApplied
+      ? 'Variant cleared guard — promoted'
+      : 'No variant challenger');
+  const baselineGuardStatusTone = baselineGuardEnforced
+    ? 'positive'
+    : (baselineGuardApplied ? 'neutral' : 'neutral');
   const recommendationPostureBlocksTrade = /stand[\s_]?down|no[\s_]?trade|wait/.test(String(decisionMomentPosture || '').toLowerCase());
   const recommendationPostureFavorsTrade = !recommendationPostureBlocksTrade;
   const decisionLayerDivergent = (
@@ -5258,6 +5284,63 @@ function Briefing({ strategy }) {
           <div className="dim" style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 6 }}>
             Why this call: {decisionMomentWhy || 'Signal generated from current guardrails.'}
           </div>
+          {(baselineGuardApplied || recommendationBasisDetail) && (
+            <div
+              className="card"
+              style={{
+                marginTop: 10,
+                borderLeft: baselineGuardEnforced
+                  ? '3px solid var(--green)'
+                  : (baselineGuardApplied ? '3px solid var(--cyan)' : '3px solid var(--text-3)'),
+                padding: 10,
+                background: 'var(--bg-2)',
+              }}
+            >
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, color: 'var(--text-1)', marginBottom: 6 }}>
+                Baseline Guard · {baselineGuardStatusLabel}
+              </div>
+              <div className="grid grid-3" style={{ marginBottom: 6 }}>
+                <Metric
+                  label="Chosen Layer"
+                  value={String(recommendationBasisDetail?.recommendedLayer || 'original').toUpperCase()}
+                  tone={String(recommendationBasisDetail?.recommendedLayer || 'original') === 'original' ? 'positive' : 'neutral'}
+                />
+                <Metric
+                  label="Variant $ vs Original"
+                  value={baselineGuardPnlDelta != null
+                    ? `${baselineGuardPnlDelta >= 0 ? '+' : ''}$${baselineGuardPnlDelta.toFixed(2)}`
+                    : '—'}
+                  tone={baselineGuardPnlDelta == null
+                    ? 'neutral'
+                    : (baselineGuardPnlDelta >= 0 ? 'positive' : 'negative')}
+                />
+                <Metric
+                  label="Variant Trades"
+                  value={baselineGuardTrades != null
+                    ? `${baselineGuardTrades}${baselineGuardMinTrades != null ? ` / min ${baselineGuardMinTrades}` : ''}`
+                    : '—'}
+                  tone={baselineGuardTrades == null
+                    ? 'neutral'
+                    : (baselineGuardMinTrades != null && baselineGuardTrades >= baselineGuardMinTrades
+                      ? 'positive'
+                      : 'negative')}
+                />
+              </div>
+              {baselineGuardReason && (
+                <div className="dim" style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                  {baselineGuardReason}
+                </div>
+              )}
+              {!baselineGuardApplied && recommendationBasisDetail?.rationale && (
+                <div className="dim" style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                  {recommendationBasisDetail.rationale}
+                </div>
+              )}
+              <div className="dim" style={{ fontFamily: 'var(--font-mono)', fontSize: 9, marginTop: 4, color: 'var(--text-3)' }}>
+                Guard rule: a variant must have ≥{baselineGuardMinTrades ?? 10} trades AND net higher dollar P&amp;L than original to displace it.
+              </div>
+            </div>
+          )}
           {decisionMomentTrustLine && (
             <div className="dim" style={{ fontFamily: 'var(--font-mono)', fontSize: 10, marginTop: 6, color: 'var(--yellow)' }}>
               Trust: {decisionMomentTrustLine}
