@@ -39945,6 +39945,18 @@ async function runLiveAutonomyExecutionCycle(options = {}) {
       result.reason = 'topstep_account_unavailable';
       return result;
     }
+    // Hard denylist runs FIRST — even if regex/practice flags somehow pass,
+    // a denied account never gets touched. Default-includes EXPRESS-V2 per
+    // explicit user directive 2026-04-25.
+    {
+      const denylist = Array.isArray(autoCfg.accountDenylist) ? autoCfg.accountDenylist : [];
+      const acctId = String(account.accountId || '');
+      const acctName = String(account.accountName || '');
+      if (denylist.length && (denylist.includes(acctId) || denylist.includes(acctName))) {
+        result.reason = 'account_explicitly_denied';
+        return result;
+      }
+    }
     if (autoCfg.requirePracticeAccount) {
       let accountAllowed = false;
       try {

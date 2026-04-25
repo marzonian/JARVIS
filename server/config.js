@@ -223,6 +223,15 @@ module.exports = {
       liveEnabled: parseBooleanEnv(process.env.TOPSTEP_AUTONOMY_LIVE_ENABLED, false),
       requirePracticeAccount: parseBooleanEnv(process.env.TOPSTEP_AUTONOMY_REQUIRE_PRACTICE_ACCOUNT, true),
       allowedAccountRegex: process.env.TOPSTEP_AUTONOMY_ALLOWED_ACCOUNT_REGEX || '^(PRAC|50KTC)-',
+      // Hard denylist — checked BEFORE the allowedAccountRegex.
+      // Built-in default protects EXPRESS-V2-203333-85600180 (acct id 19108624) which
+      // the user explicitly told us never to touch (2026-04-25). Env var EXTENDS the
+      // built-in list; the defaults always remain in effect.
+      accountDenylist: ([
+        '19108624',
+        'EXPRESS-V2-203333-85600180',
+        ...((process.env.TOPSTEP_AUTONOMY_ACCOUNT_DENYLIST || '').split(',').map(s => s.trim()).filter(Boolean)),
+      ]),
       signalMaxAgeMinutes: Math.max(1, Math.min(30, parseInt(process.env.TOPSTEP_AUTONOMY_SIGNAL_MAX_AGE_MINUTES || '8', 10))),
       barLookbackDays: Math.max(1, Math.min(7, parseInt(process.env.TOPSTEP_AUTONOMY_BAR_LOOKBACK_DAYS || '3', 10))),
       defaultSymbol: String(process.env.TOPSTEP_AUTONOMY_SYMBOL || 'MNQ').toUpperCase(),
