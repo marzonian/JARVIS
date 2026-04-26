@@ -33,6 +33,33 @@ const ORIGINAL_PLAN_SPEC = Object.freeze({
   }),
 });
 
+// 2026-04-25 — JARVIS Autonomy spec (independent track from user's UI guidance).
+// Per user directive: JARVIS's own trades on PRAC-V2 use Skip2 TP (data-backed
+// in 5y backtest at +$3,755 / PF 1.13). User continues trading Nearest TP via
+// UI guidance from ORIGINAL_PLAN_SPEC. L4 logs both decisions on every live
+// trade so we get a real, parallel A/B comparison in the current regime.
+//
+// Same filters and entry logic as ORIGINAL_PLAN_SPEC — only tpMode differs.
+// This spec is consumed by the live autonomy loop in index.js
+// (runLiveAutonomyExecutionCycle) to override TP/SL ticks at order placement.
+const JARVIS_AUTONOMY_SPEC = Object.freeze({
+  key: 'jarvis_autonomy_skip2_v1',
+  layer: 'autonomy',
+  name: 'JARVIS Autonomy Skip2 (v1, 2026-04-25)',
+  description: 'JARVIS\'s own live-trading spec on PRAC-V2. Skip2 TP per 5y backtest data. Same entry logic and filters as user-method spec; differs only in TP/SL distance.',
+  engineOptions: Object.freeze({
+    longOnly: false,
+    skipMonday: false,
+    maxEntryHour: null,
+    tpMode: 'skip2',         // <-- THIS is what differs from ORIGINAL_PLAN_SPEC
+  }),
+  filters: Object.freeze({
+    orbRange: Object.freeze({ min: 140, max: 360 }),
+    skipWednesday: true,
+    skipHoliday: true,
+  }),
+});
+
 // Legacy spec kept available for A/B comparison and historical reference.
 // Not used as live default. If a backtest needs to recreate pre-2026-04-25 behavior:
 //   const { LEGACY_V0_SPEC } = require('./strategy-layers');
@@ -7309,6 +7336,7 @@ function buildCommandCenterPanels(input = {}) {
 
 module.exports = {
   ORIGINAL_PLAN_SPEC,
+  JARVIS_AUTONOMY_SPEC,
   LEGACY_V0_SPEC,
   DEFAULT_VARIANT_SPECS,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY,

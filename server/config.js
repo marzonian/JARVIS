@@ -237,6 +237,15 @@ module.exports = {
       defaultSymbol: String(process.env.TOPSTEP_AUTONOMY_SYMBOL || 'MNQ').toUpperCase(),
       testOverrideEnabled: parseBooleanEnv(process.env.TOPSTEP_AUTONOMY_TEST_OVERRIDE_ENABLED, false),
       testOverrideDate: process.env.TOPSTEP_AUTONOMY_TEST_OVERRIDE_DATE || null,
+      // 2026-04-25 — Two-track architecture flag.
+      // 'follow_recommendation' (or empty) = autonomy uses whatever TP/SL the
+      // UI recommendation produces (i.e., user's Nearest method).
+      // 'skip2' = autonomy overrides at order-placement time to use Skip2 TP
+      // (one psych level past Nearest) — this is JARVIS's data-backed belief
+      // tested independently on PRAC-V2 while the user trades Nearest manually.
+      // 'default' = explicit Nearest override (mostly useful for parity testing).
+      // Driven by env TOPSTEP_AUTONOMY_EXECUTION_TP_MODE; defaults to skip2.
+      executionTpMode: String(process.env.TOPSTEP_AUTONOMY_EXECUTION_TP_MODE || 'skip2').toLowerCase(),
     },
   },
 

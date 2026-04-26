@@ -84,6 +84,7 @@ const {
   buildCommandCenterPanels,
   buildPineScriptForStrategy,
 } = require('./jarvis-core/strategy-layers');
+const l4Learning = require('./jarvis-core/l4-learning');
 const {
   createLiveCandidateObservationLoop,
 } = require('./jarvis-core/live-candidate-observation-loop');
@@ -40129,8 +40130,55 @@ async function runLiveAutonomyExecutionCycle(options = {}) {
       testOverride,
     });
 
-    const tpTicks = Math.max(1, Number(resolvedRules.rules.tpTicks || 120));
-    const slTicks = Math.max(1, Number(resolvedRules.rules.slTicks || 90));
+    // Per-recommendation TP/SL ticks (these reflect the user-facing spec, e.g. Nearest)
+    const recommendationTpTicks = Math.max(1, Number(resolvedRules.rules.tpTicks || 120));
+    const recommendationSlTicks = Math.max(1, Number(resolvedRules.rules.slTicks || 90));
+
+    // 2026-04-25 — Two-track architecture: the LIVE order may use a different
+    // TP/SL bracket than what the UI recommended. User's UI shows Nearest TP
+    // (their actual method); JARVIS autonomy can place Skip2 TP orders to
+    // independently test its own data-backed belief on PRAC-V2. L4 will record
+    // BOTH so we can compare empirically over time.
+    let tpTicks = recommendationTpTicks;
+    let slTicks = recommendationSlTicks;
+    let autonomyBracketDecision = {
+      mode: 'follow_recommendation',
+      recommendationTpTicks,
+      recommendationSlTicks,
+      autonomyTpTicks: recommendationTpTicks,
+      autonomySlTicks: recommendationSlTicks,
+      tpMode: resolvedRules.rules?.tpMode || null,
+    };
+    const autonomyTpMode = String(autoCfg.executionTpMode || '').trim().toLowerCase();
+    const liveEntryPrice = Number(signal?.entry);
+    if (autonomyTpMode && autonomyTpMode !== 'follow_recommendation' && Number.isFinite(liveEntryPrice) && liveEntryPrice > 0) {
+      try {
+        const tpsl = calcTPSL(liveEntryPrice, side, {
+          tpMode: autonomyTpMode,
+          skipLevels: autonomyTpMode === 'skip2' ? 2 : 0,
+        });
+        const overrideTp = Math.max(1, Math.round(Number(tpsl?.tp?.distanceTicks || 0)));
+        const overrideSl = Math.max(1, Math.round(Number(tpsl?.sl?.distanceTicks || 0)));
+        if (overrideTp > 0 && overrideSl > 0) {
+          tpTicks = overrideTp;
+          slTicks = overrideSl;
+          autonomyBracketDecision = {
+            mode: 'autonomy_override',
+            recommendationTpTicks,
+            recommendationSlTicks,
+            autonomyTpTicks: overrideTp,
+            autonomySlTicks: overrideSl,
+            tpMode: autonomyTpMode,
+            tpPriceComputed: tpsl?.tp?.price ?? null,
+            slPriceComputed: tpsl?.sl?.price ?? null,
+          };
+        }
+      } catch (e) {
+        // Fall back to recommendation ticks if calcTPSL throws (e.g., entry too far from any psych level)
+        autonomyBracketDecision.fallbackReason = String(e?.message || 'calcTPSL_threw');
+      }
+    }
+
     const compactSetupTag = String(setupId || 'setup')
       .replace(/[^a-z0-9]/gi, '')
       .toLowerCase()
@@ -40154,6 +40202,7 @@ async function runLiveAutonomyExecutionCycle(options = {}) {
         brokerSubmit: 'failed',
         brokerError: errText,
         brokerPayload: placed.payload || null,
+        autonomyBracket: autonomyBracketDecision,
       });
       db.prepare('UPDATE execution_order_intents SET status = ? WHERE id = ?')
         .run('rejected', intentId);
@@ -40222,7 +40271,56 @@ async function runLiveAutonomyExecutionCycle(options = {}) {
       contractName: contract.contract.name || null,
       tpTicks,
       slTicks,
+      autonomyBracket: autonomyBracketDecision,
     });
+
+    // L4: record this trade with both the UI recommendation (Nearest) and the
+    // actual order placed (Skip2 if autonomy override took effect). Outcome
+    // gets filled in by recordTradeOutcome when fills resolve.
+    try {
+      l4Learning.ensureL4Tables(db);
+      const dirNorm = side === 'sell' ? 'short' : 'long';
+      const tickSize = 0.25; // MNQ tick size in points
+      const recTpPrice = Number.isFinite(Number(signal?.entry)) && Number.isFinite(Number(recommendationTpTicks))
+        ? (dirNorm === 'long' ? Number(signal.entry) + Number(recommendationTpTicks) * tickSize : Number(signal.entry) - Number(recommendationTpTicks) * tickSize)
+        : null;
+      const recSlPrice = Number.isFinite(Number(signal?.entry)) && Number.isFinite(Number(recommendationSlTicks))
+        ? (dirNorm === 'long' ? Number(signal.entry) - Number(recommendationSlTicks) * tickSize : Number(signal.entry) + Number(recommendationSlTicks) * tickSize)
+        : null;
+      l4Learning.recordTradeIntent(db, {
+        tradeDate: now.date,
+        symbol,
+        accountId: account.accountId,
+        accountName: account.accountName,
+        intentId,
+        brokerOrderId,
+        setupId,
+        setupName,
+        direction: dirNorm,
+        qty,
+        recSpecKey: 'original_plan_orb_3130',
+        recTpMode: resolvedRules.rules?.tpMode || 'default',
+        recTpPrice,
+        recSlPrice,
+        recTpTicks: recommendationTpTicks,
+        recSlTicks: recommendationSlTicks,
+        recPredictedPnlDollars: null,
+        autonomySpecKey: autonomyBracketDecision.mode === 'autonomy_override' ? 'jarvis_autonomy_skip2_v1' : 'original_plan_orb_3130',
+        autonomyTpMode: autonomyBracketDecision.tpMode || (resolvedRules.rules?.tpMode || 'default'),
+        autonomyBracketMode: autonomyBracketDecision.mode,
+        autonomyTpPrice: autonomyBracketDecision.tpPriceComputed ?? recTpPrice,
+        autonomySlPrice: autonomyBracketDecision.slPriceComputed ?? recSlPrice,
+        autonomyTpTicks: autonomyBracketDecision.autonomyTpTicks,
+        autonomySlTicks: autonomyBracketDecision.autonomySlTicks,
+        rawIntentMeta: { signature, signalEntryTime: signal.entry_time, signalEntryPrice: Number(signal.entry) },
+      });
+    } catch (e) {
+      logAutonomyEvent('autonomy_warn', 'warning', {
+        scope: 'l4_record_intent_failed',
+        intentId,
+        error: String(e?.message || e),
+      });
+    }
     const bump = bumpPaperAutonomyCounter(now.date);
     saveLiveTradeState({
       asOf: new Date().toISOString(),
@@ -41318,6 +41416,56 @@ app.get('/api/topstep/live', (req, res) => {
     res.json({ status: 'ok', live });
   } catch (err) {
     res.status(500).json({ status: 'error', error: err.message || 'topstep_live_snapshot_failed' });
+  }
+});
+
+// L4 — JARVIS Self-Critique / Learning Loop
+//   GET  /api/jarvis/l4/recent  — last N daily learning rows + rolling totals
+//   GET  /api/jarvis/l4/postmortems?date=YYYY-MM-DD  — per-trade postmortems
+//   POST /api/jarvis/l4/aggregate {date} — manually run EOD aggregator (also runs nightly)
+app.get('/api/jarvis/l4/recent', (req, res) => {
+  try {
+    const db = getDB();
+    l4Learning.ensureL4Tables(db);
+    const n = Math.max(1, Math.min(365, parseInt(req.query.n || '30', 10)));
+    const out = l4Learning.readRecentLearningRows(db, n);
+    res.json({ status: 'ok', ...out });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'l4_recent_failed' });
+  }
+});
+
+app.get('/api/jarvis/l4/postmortems', (req, res) => {
+  try {
+    const db = getDB();
+    l4Learning.ensureL4Tables(db);
+    const date = String(req.query.date || '').trim();
+    let rows;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      rows = db.prepare(`SELECT * FROM l4_trade_postmortem WHERE trade_date=? ORDER BY id ASC`).all(date);
+    } else {
+      const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || '50', 10)));
+      rows = db.prepare(`SELECT * FROM l4_trade_postmortem ORDER BY id DESC LIMIT ?`).all(limit);
+    }
+    res.json({ status: 'ok', count: rows.length, rows });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'l4_postmortems_failed' });
+  }
+});
+
+app.post('/api/jarvis/l4/aggregate', (req, res) => {
+  try {
+    const db = getDB();
+    l4Learning.ensureL4Tables(db);
+    const date = String((req.body && req.body.date) || req.query.date || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ status: 'error', error: 'date_required_yyyy_mm_dd' });
+    }
+    const id = l4Learning.aggregateDailyLearning(db, date);
+    const row = db.prepare('SELECT * FROM l4_daily_learning_row WHERE id=?').get(id);
+    res.json({ status: 'ok', rowId: id, row });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'l4_aggregate_failed' });
   }
 });
 
