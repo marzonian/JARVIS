@@ -31,11 +31,19 @@ const TOPSTEP_CLOSE = '16:00';
 const COMMISSION_PER_TRADE = 4.50;
 // Slippage assumption: 1 tick per side (entry + exit)
 const SLIPPAGE_TICKS = 2;
+// Defaults updated 2026-04-25 to match user methodology spec.
+// Old defaults (longOnly, skipMonday, maxEntryHour 11, tpMode skip2) were
+// JARVIS-invented filters not in the user's actual method. New defaults:
+//   - both directions traded equally
+//   - no Monday skip (user has no such rule)
+//   - no max-entry-hour (only Topstep flat-by 15:10 CT matters)
+//   - tpMode 'default' = Nearest psych level ≥110 ticks (user's "next sensible level")
+// Per-spec engineOptions in strategy-layers.js can still override these.
 const V5_DEFAULTS = {
-  longOnly: true,
-  skipMonday: true,
-  maxEntryHour: 11, // only entries before 11:00
-  tpMode: 'skip2',  // target 3rd psych level past entry
+  longOnly: false,
+  skipMonday: false,
+  maxEntryHour: null, // null = no time gate; only Topstep cutoff applies
+  tpMode: 'default',  // Nearest psych level (matches user's "next sensible level")
 };
 
 // ============================================================
@@ -262,7 +270,10 @@ function findRetest(candles, orb, direction) {
 function findConfirmation(candles, orb, breakout, direction, settings = {}) {
   for (const candle of candles) {
     const t = parseTime(candle.timestamp);
-    if (typeof settings.maxEntryHour === 'number' && t.hour >= settings.maxEntryHour) {
+    // maxEntryHour is now optional — null/undefined disables the gate.
+    // User method has no time cutoff; only Topstep flat-by enforces close.
+    const maxHour = settings.maxEntryHour;
+    if (Number.isFinite(maxHour) && maxHour > 0 && t.hour >= maxHour) {
       return { confirmation: null, invalidation: null, timeout: true };
     }
 
@@ -559,6 +570,13 @@ function processSession(candles, options = {}) {
         breakout_candle_high: signal.breakout.high,
         breakout_candle_low: signal.breakout.low,
         breakout_candle_close: signal.breakout.close,
+        // 2026-04-25: break candle (last bullish/bearish before retest) is now
+        // distinct from the initial breakout candle. May be the same in fast
+        // setups; differs when the break-leg has multiple post-break candles.
+        break_candle_time: signal.breakCandle ? signal.breakCandle.time : signal.breakout.time,
+        break_candle_close: signal.breakCandle ? signal.breakCandle.close : signal.breakout.close,
+        break_candle_high: signal.breakCandle ? signal.breakCandle.high : signal.breakout.high,
+        break_candle_low: signal.breakCandle ? signal.breakCandle.low : signal.breakout.low,
         retest_time: signal.retest.time,
         confirmation_time: signal.confirmation.time,
         entry_price: signal.entry.price,
@@ -602,21 +620,59 @@ function processSession(candles, options = {}) {
 }
 
 /**
+ * Find the "break candle" for confirmation purposes — per user spec:
+ *   "Whatever is the last bullish candle before reversing to retest the ORB
+ *    high (in a long situation) is the break candle for me."
+ *
+ * Implementation: among the candles between the initial breakout and the retest,
+ * find the LATEST bullish candle (close > open) with the HIGHEST close.
+ * This becomes the confirmation threshold instead of the first breakout candle.
+ *
+ * Falls back to the initial breakout candle itself when no superior bullish
+ * candle exists in the break leg.
+ *
+ * For shorts: latest bearish candle (close < open) with the LOWEST close.
+ */
+function findBreakLegBreakCandle(breakLegCandles, initialBreakoutCandle, direction) {
+  let breakCandle = initialBreakoutCandle;
+  let breakClose = initialBreakoutCandle.close;
+  for (const c of breakLegCandles) {
+    const isBullish = c.close > c.open;
+    const isBearish = c.close < c.open;
+    if (direction === 'long' && isBullish && c.close >= breakClose) {
+      breakCandle = c;
+      breakClose = c.close;
+    } else if (direction === 'short' && isBearish && c.close <= breakClose) {
+      breakCandle = c;
+      breakClose = c.close;
+    }
+  }
+  return breakCandle;
+}
+
+/**
  * Process a single signal chain attempt.
  * Returns breakout → retest → confirmation sequence,
  * or stops at the point of failure/invalidation.
+ *
+ * Updated 2026-04-25 per user methodology:
+ *   - "Break candle" used for confirmation is the LAST BULLISH (long) /
+ *     LAST BEARISH (short) candle BEFORE the retest, not necessarily the
+ *     first candle that closed beyond the ORB.
+ *   - Setup invalidation = close beyond OPPOSITE ORB boundary (already correct).
  */
 function processSignalChain(candles, orb, settings = {}) {
   const signal = {
     direction: null,
     breakout: null,
+    breakCandle: null,
     retest: null,
     confirmation: null,
     entry: null,
     invalidation: null,
   };
 
-  // Step 1: Find breakout
+  // Step 1: Find INITIAL breakout (first candle to close beyond ORB)
   const breakout = findBreakout(candles, orb, settings);
   if (!breakout) return signal;
 
@@ -641,14 +697,34 @@ function processSignalChain(candles, orb, settings = {}) {
   if (!retest) return signal;
   signal.retest = retest;
 
-  // Step 3: Find confirmation (candles from retest onward — same candle can retest AND confirm)
+  // Step 2b: Identify the "break candle" — the last bullish candle (long) or
+  // last bearish candle (short) BEFORE the retest, with the most extreme close.
+  // This is the threshold the confirmation candle must close beyond.
   const retestIndex = postBreakout.findIndex(c => c.timestamp === retest.time);
-  const postRetest = postBreakout.slice(retestIndex);
+  const breakLegCandles = postBreakout.slice(0, retestIndex); // pre-retest candles only
+  const breakCandle = findBreakLegBreakCandle(
+    breakLegCandles, breakout.candle, breakout.direction
+  );
+  signal.breakCandle = {
+    candle: breakCandle,
+    close: breakCandle.close,
+    high: breakCandle.high,
+    low: breakCandle.low,
+    time: breakCandle.timestamp,
+  };
 
+  // Step 3: Find confirmation — close must beat the break candle's close
+  // (not the initial breakout candle's close).
+  const postRetest = postBreakout.slice(retestIndex);
   if (postRetest.length === 0) return signal;
 
+  const confirmationThreshold = {
+    close: breakCandle.close,
+    high: breakCandle.high,
+    low: breakCandle.low,
+  };
   const { confirmation, invalidation: confInvalidation, timeout } = findConfirmation(
-    postRetest, orb, breakout, breakout.direction, settings
+    postRetest, orb, confirmationThreshold, breakout.direction, settings
   );
 
   if (confInvalidation) {

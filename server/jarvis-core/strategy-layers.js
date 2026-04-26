@@ -5,12 +5,42 @@ const { calcMetrics, calcDrawdown } = require('../engine/stats');
 const { runDiscovery } = require('../engine/discovery');
 const { buildTodayRecommendation } = require('./today-recommendation');
 const { buildDecisionBoard } = require('./decision-board');
+const { isUSMarketHoliday, calendarLatestYear } = require('../engine/us-market-holidays');
 
+// 2026-04-25 — User-method spec replaces the legacy "Original Plan".
+// All engineOptions now reflect the user's actual ORB methodology
+// (verified through Q&A; no JARVIS-invented filters retained).
+// Filters are data-backed only:
+//   - orbRange 140-360 ticks: empirically validated (469-trade backtest,
+//     bucket avg P&L flips negative outside this range)
+//   - skipWednesday: empirically validated (Wed PF=0.76, -$2046 across 123 trades)
+//   - skipHoliday: user mandate ("never trade holidays")
 const ORIGINAL_PLAN_SPEC = Object.freeze({
   key: 'original_plan_orb_3130',
   layer: 'original',
-  name: 'Original Trading Plan',
-  description: 'Actual live ORB plan (no Monday skip and no ORB size filter).',
+  name: 'User Method ORB 3130 (v1, 2026-04-25)',
+  description: 'User\'s actual ORB methodology with data-backed filters only. Legacy JARVIS-invented filters (longOnly, maxEntryHour 11, tpMode skip2, ORB 70-220) all removed.',
+  engineOptions: Object.freeze({
+    longOnly: false,         // user trades both directions equally
+    skipMonday: false,       // user has no Monday rule
+    maxEntryHour: null,      // no time gate; only Topstep flat-by 15:10 CT applies
+    tpMode: 'default',       // Nearest psych level (matches user "next sensible level")
+  }),
+  filters: Object.freeze({
+    orbRange: Object.freeze({ min: 140, max: 360 }),  // data-backed window
+    skipWednesday: true,                              // empirical loser day
+    skipHoliday: true,                                // user mandate
+  }),
+});
+
+// Legacy spec kept available for A/B comparison and historical reference.
+// Not used as live default. If a backtest needs to recreate pre-2026-04-25 behavior:
+//   const { LEGACY_V0_SPEC } = require('./strategy-layers');
+const LEGACY_V0_SPEC = Object.freeze({
+  key: 'legacy_v0_pre_audit',
+  layer: 'legacy',
+  name: 'Legacy v0 (pre 2026-04-25 audit)',
+  description: 'Preserves the JARVIS-invented filter set from before the rule audit. For historical comparison only.',
   engineOptions: Object.freeze({
     longOnly: true,
     skipMonday: false,
@@ -239,9 +269,26 @@ function applyPlanFilters({ date, sessionResult, spec }) {
   const filters = spec?.filters && typeof spec.filters === 'object' ? spec.filters : {};
   const blocked = [];
   const orbTicks = Number(sessionResult?.orb?.range_ticks);
+  const dayName = getEtDayName(date).toLowerCase();
 
-  if (filters.skipMonday === true && getEtDayName(date).toLowerCase() === 'monday') {
+  if (filters.skipMonday === true && dayName === 'monday') {
     blocked.push('skip_monday');
+  }
+  // 2026-04-25 — added Wednesday skip (data-backed: PF 0.76 across 123 trades)
+  if (filters.skipWednesday === true && dayName === 'wednesday') {
+    blocked.push('skip_wednesday');
+  }
+  // 2026-04-25 — added US market holiday skip (user mandate)
+  if (filters.skipHoliday === true && typeof date === 'string') {
+    if (isUSMarketHoliday(date)) {
+      blocked.push('skip_holiday');
+    } else {
+      // Soft warning when checking dates beyond the static calendar's coverage.
+      const yr = parseInt(date.slice(0, 4), 10);
+      if (Number.isFinite(yr) && yr > calendarLatestYear()) {
+        blocked.push('holiday_calendar_stale');
+      }
+    }
   }
   if (filters.orbRange && Number.isFinite(orbTicks)) {
     const min = Number(filters.orbRange.min);
@@ -7262,6 +7309,7 @@ function buildCommandCenterPanels(input = {}) {
 
 module.exports = {
   ORIGINAL_PLAN_SPEC,
+  LEGACY_V0_SPEC,
   DEFAULT_VARIANT_SPECS,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
