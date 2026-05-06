@@ -41419,6 +41419,37 @@ app.get('/api/topstep/live', (req, res) => {
   }
 });
 
+// Manually trigger a Topstep bars fetch + persist. Usually the cron
+// (*/2 8-16 * * 1-5 ET) runs this; this endpoint is for ad-hoc backfills
+// or health checks. Persists 1m + aggregated 5m candles into `candles`.
+app.post('/api/topstep/bars/fetch', async (req, res) => {
+  try {
+    const symbol = String(req.body?.symbol || config.topstep?.autonomy?.defaultSymbol || 'MNQ').toUpperCase();
+    const lookbackMinutes = Math.max(30, Math.min(1440, Number(req.body?.lookbackMinutes || 180)));
+    const unitNumber = Math.max(1, Math.min(60, Number(req.body?.unitNumber || 1)));
+    const snap = await getLiveBarsSnapshot({
+      symbol,
+      unitNumber,
+      lookbackMinutes,
+      forceFresh: true,
+      triggerSource: 'api_manual_bars_fetch',
+    });
+    res.json({
+      status: snap?.ok ? 'ok' : 'error',
+      symbol,
+      barCount: snap?.barCount || 0,
+      lastBarTime: snap?.lastBarTime || null,
+      lastClose: snap?.lastClose || null,
+      contractId: snap?.contractId || null,
+      contractName: snap?.contractName || null,
+      persisted: snap?.persisted || null,
+      error: snap?.error || null,
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'topstep_bars_fetch_failed' });
+  }
+});
+
 // L4 — JARVIS Self-Critique / Learning Loop
 //   GET  /api/jarvis/l4/recent  — last N daily learning rows + rolling totals
 //   GET  /api/jarvis/l4/postmortems?date=YYYY-MM-DD  — per-trade postmortems
@@ -43156,6 +43187,36 @@ cron.schedule('*/2 * * * 1-5', () => {
     console.error('[Autonomy] Paper cycle failed:', err.message);
     triggerAutoHeal('autonomy_paper_cycle_failed', { error: err.message || 'autonomy_paper_cycle_failed' });
   });
+}, { timezone: 'America/New_York' });
+
+// 2026-05-06 — Topstep bar feed as PRIMARY candle source (replaces databento
+// for live trading). Databento's recent-data tier returns http_422 for T-1
+// dates which left JARVIS blind on most days post-arming. Topstep's
+// retrieveBars endpoint serves real-time MNQ bars on the same account we
+// trade on, so it eliminates the data-gap as a single point of failure.
+//
+// Schedule: every 2 minutes between 8:00 AM ET and 4:30 PM ET on weekdays.
+// Pulls 180 minutes lookback so any gap from a brief outage auto-fills.
+// getLiveBarsSnapshot persists 1m + 5m candles into the candles table that
+// the strategy engine reads from.
+cron.schedule('*/2 8-16 * * 1-5', () => {
+  (async () => {
+    try {
+      const snap = await getLiveBarsSnapshot({
+        symbol: config.topstep?.autonomy?.defaultSymbol || 'MNQ',
+        unitNumber: 1,
+        lookbackMinutes: 180,
+        forceFresh: true,
+        triggerSource: 'cron_topstep_bars_primary_2min',
+      });
+      if (!snap?.ok && snap?.error) {
+        console.warn('[Bar Feed] Topstep bars fetch error:', snap.error);
+      }
+    } catch (err) {
+      console.error('[Bar Feed] Topstep bars cron failed:', err.message);
+      triggerAutoHeal('topstep_bars_cron_failed', { error: err.message || 'topstep_bars_cron_failed' });
+    }
+  })();
 }, { timezone: 'America/New_York' });
 cron.schedule('50 9 * * 1-5', () => runProactiveInitiative('post_orb_guidance'), { timezone: 'America/New_York' });
 cron.schedule('15 12 * * 1-5', () => runProactiveInitiative('midday_adjustment'), { timezone: 'America/New_York' });
