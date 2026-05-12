@@ -42794,7 +42794,24 @@ try {
   process.exit(1);
 }
 
-const server = app.listen(config.port, config.host, () => {
+// 2026-05-12 — Graceful EADDRINUSE handling.
+// Previously this server would crash on EADDRINUSE which, combined with
+// launchd KeepAlive=true and no ThrottleInterval, produced ~340 crash-loops
+// per hour (8,160/day) on 5/7. Now we log diagnostic info and exit cleanly
+// so the launchd respawn (now with ThrottleInterval=60s) gets a clean
+// retry window for the kernel to release the port.
+const server = app.listen(config.port, config.host);
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.error(`[3130] Port ${config.port} is in use. Likely another instance is running or the prior process has not released the socket yet.`);
+    console.error(`[3130] Diagnostic: \`lsof -nP -iTCP:${config.port} -sTCP:LISTEN\` to see what's holding it.`);
+    console.error('[3130] Exiting cleanly. launchd ThrottleInterval=60 will retry in 60s, giving the kernel time to release the port.');
+    process.exit(75); // EX_TEMPFAIL
+  }
+  console.error('[3130] Server listen error:', err);
+  process.exit(1);
+});
+server.on('listening', () => {
   console.log('');
   console.log('═══════════════════════════════════════');
   console.log('  McNAIR MINDSET by 3130');
