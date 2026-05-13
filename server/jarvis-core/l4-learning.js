@@ -153,6 +153,40 @@ function ensureL4Tables(db) {
   safeAddColumn(`ALTER TABLE l4_daily_learning_row ADD COLUMN day_of_week INTEGER`);
   safeAddColumn(`ALTER TABLE l4_daily_learning_row ADD COLUMN orb_range_ticks INTEGER`);
 
+  // Phase 3.1 — multi-spec shadow tracking. One row per (date, spec_key).
+  // Each row records what that spec's decision would have been on that day,
+  // and the counterfactual P&L computed against actual candles. The daily
+  // ranker reads this table to compare specs over rolling windows.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS l4_shadow_daily (
+      id                              INTEGER PRIMARY KEY AUTOINCREMENT,
+      trade_date                      TEXT NOT NULL,
+      spec_key                        TEXT NOT NULL,
+      spec_name                       TEXT,
+      data_source                     TEXT NOT NULL DEFAULT 'backfill',
+      would_trade                     INTEGER NOT NULL DEFAULT 0,
+      no_trade_reason                 TEXT,
+      blocked_by                      TEXT,                      -- comma-separated filter blocks
+      direction                       TEXT,
+      entry_price                     REAL,
+      tp_price                        REAL,
+      sl_price                        REAL,
+      counterfactual_pnl_dollars      REAL,
+      result                          TEXT,                      -- win|loss|breakeven|time_exit
+      regime_trend                    TEXT,
+      regime_vol                      TEXT,
+      regime_orb_size                 TEXT,
+      orb_range_ticks                 INTEGER,
+      created_at                      TEXT DEFAULT (datetime('now')),
+      updated_at                      TEXT DEFAULT (datetime('now')),
+      UNIQUE(trade_date, spec_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_l4_shadow_date
+      ON l4_shadow_daily(trade_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_l4_shadow_spec
+      ON l4_shadow_daily(spec_key, trade_date DESC);
+  `);
+
   // L4 daily briefing — what JARVIS plans / observes per day. Written by
   // morning brief job and evening recap job. Used as the body of Discord push
   // when token is available, and surfaced in /api/jarvis/l4/briefing.
@@ -879,6 +913,155 @@ function readRecentLearningRows(db, n = 90) {
 }
 
 /**
+ * Phase 3.1 — Run all SHADOW_SPECS on a given date and write l4_shadow_daily
+ * rows. Idempotent — re-runs overwrite existing shadow rows. Run nightly
+ * (or on-demand) to keep the multi-spec leaderboard current.
+ *
+ * @param db
+ * @param tradeDate ISO YYYY-MM-DD
+ * @param deps: { runPlanBacktest, SHADOW_SPECS, classifyRegimeFromCandles }
+ */
+function runShadowSpecsForDate(db, tradeDate, deps) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(tradeDate)) throw new Error('tradeDate must be YYYY-MM-DD');
+  if (!deps || !deps.runPlanBacktest || !Array.isArray(deps.SHADOW_SPECS)) {
+    throw new Error('runShadowSpecsForDate: deps.{runPlanBacktest, SHADOW_SPECS} required');
+  }
+  const candleRows = db.prepare(
+    "SELECT c.timestamp, c.open, c.high, c.low, c.close FROM candles c JOIN sessions s ON s.id=c.session_id WHERE s.date=? AND c.timeframe='5m' ORDER BY c.timestamp ASC"
+  ).all(tradeDate);
+  if (!candleRows.length) return { written: 0, reason: 'no_candles' };
+  const sessions = { [tradeDate]: candleRows.map(r => ({ ...r, date: tradeDate })) };
+
+  const regime = (deps.classifyRegimeFromCandles || classifyRegimeFromCandles)(sessions[tradeDate]);
+
+  const insert = db.prepare(`
+    INSERT INTO l4_shadow_daily (
+      trade_date, spec_key, spec_name, data_source, would_trade, no_trade_reason,
+      blocked_by, direction, entry_price, tp_price, sl_price,
+      counterfactual_pnl_dollars, result, regime_trend, regime_vol, regime_orb_size,
+      orb_range_ticks
+    ) VALUES (?, ?, ?, 'backfill', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(trade_date, spec_key) DO UPDATE SET
+      would_trade = excluded.would_trade,
+      no_trade_reason = excluded.no_trade_reason,
+      blocked_by = excluded.blocked_by,
+      direction = excluded.direction,
+      entry_price = excluded.entry_price,
+      tp_price = excluded.tp_price,
+      sl_price = excluded.sl_price,
+      counterfactual_pnl_dollars = excluded.counterfactual_pnl_dollars,
+      result = excluded.result,
+      regime_trend = excluded.regime_trend,
+      regime_vol = excluded.regime_vol,
+      regime_orb_size = excluded.regime_orb_size,
+      orb_range_ticks = excluded.orb_range_ticks,
+      updated_at = datetime('now')
+  `);
+
+  let written = 0;
+  for (const spec of deps.SHADOW_SPECS) {
+    const result = deps.runPlanBacktest(sessions, spec, { includePerDate: true });
+    const day = result.perDate?.[tradeDate] || null;
+    const orbTicks = Number(day?.orbRangeTicks || null);
+    const wouldTrade = day?.wouldTrade ? 1 : 0;
+    insert.run(
+      tradeDate, spec.key, spec.name || spec.key,
+      wouldTrade,
+      day?.noTradeReason || null,
+      Array.isArray(day?.blockedBy) ? day.blockedBy.join(',') : null,
+      day?.tradeDirection || null,
+      day?.tradeEntryPrice || null,
+      day?.tradeTargetPrice || null,
+      day?.tradeStopPrice || null,
+      wouldTrade ? Number(day.tradePnlDollars || 0) : null,
+      day?.tradeResult || null,
+      regime.regime_trend, regime.regime_vol, regime.regime_orb_size,
+      Number.isFinite(orbTicks) ? Math.round(orbTicks) : null
+    );
+    written += 1;
+  }
+  return { written, regime };
+}
+
+/**
+ * Backfill shadow specs across a window. Used to seed the leaderboard.
+ */
+function backfillShadowSpecsWindow(db, opts) {
+  const { startDate, endDate, deps } = opts;
+  const dates = db.prepare(
+    "SELECT s.date AS d FROM sessions s WHERE s.date >= ? AND s.date <= ? AND EXISTS (SELECT 1 FROM candles c WHERE c.session_id=s.id AND c.timeframe='5m') ORDER BY s.date ASC"
+  ).all(startDate, endDate);
+  let totalWritten = 0;
+  for (const { d } of dates) {
+    const r = runShadowSpecsForDate(db, d, deps);
+    totalWritten += (r.written || 0);
+  }
+  return { dates: dates.length, totalRowsWritten: totalWritten };
+}
+
+/**
+ * Phase 3 — Multi-spec leaderboard. Reads shadow_daily, computes recency-weighted
+ * P&L per spec over the window, returns ranked list with current leader.
+ *
+ * Used by the morning brief to surface "best-performing variant in recent regime"
+ * and by the operator decision-support flow.
+ */
+function rankShadowSpecs(db, opts = {}) {
+  const { n = 90, regime = null } = opts;
+  const limit = Math.max(7, Math.min(365, Number(n) || 90));
+  const wheres = ["trade_date >= date('now', '-" + (limit + 7) + " days')"];
+  const params = [];
+  if (regime?.regime_trend) { wheres.push('regime_trend = ?'); params.push(regime.regime_trend); }
+  if (regime?.regime_vol) { wheres.push('regime_vol = ?'); params.push(regime.regime_vol); }
+  if (regime?.regime_orb_size) { wheres.push('regime_orb_size = ?'); params.push(regime.regime_orb_size); }
+  const rows = db.prepare(`
+    SELECT * FROM l4_shadow_daily WHERE ${wheres.join(' AND ')} ORDER BY trade_date DESC LIMIT ?
+  `).all(...params, limit * 6); // 6 specs × N days
+
+  // Group by spec_key
+  const bySpec = new Map();
+  const HALF_LIFE_DAYS = 30;
+  const decayK = Math.log(2) / HALF_LIFE_DAYS;
+  const newestDate = rows.length > 0 ? new Date(`${rows[0].trade_date}T12:00:00Z`).getTime() : Date.now();
+  for (const r of rows) {
+    if (!bySpec.has(r.spec_key)) {
+      bySpec.set(r.spec_key, {
+        spec_key: r.spec_key, spec_name: r.spec_name,
+        nDays: 0, nTrades: 0, weightedPnl: 0, totalPnl: 0,
+        weightedWins: 0, weightedSamples: 0,
+      });
+    }
+    const s = bySpec.get(r.spec_key);
+    const rowDate = new Date(`${r.trade_date}T12:00:00Z`).getTime();
+    const daysAgo = Math.max(0, (newestDate - rowDate) / 86400000);
+    const w = Math.exp(-decayK * daysAgo);
+    s.nDays += 1;
+    if (r.would_trade) {
+      s.nTrades += 1;
+      const pnl = Number(r.counterfactual_pnl_dollars || 0);
+      s.totalPnl += pnl;
+      s.weightedPnl += pnl * w;
+      if (pnl > 0) s.weightedWins += w;
+      s.weightedSamples += w;
+    }
+  }
+
+  const ranked = Array.from(bySpec.values()).map(s => ({
+    ...s,
+    weightedPnl: Math.round(s.weightedPnl * 100) / 100,
+    totalPnl: Math.round(s.totalPnl * 100) / 100,
+    weightedWR: s.weightedSamples > 0 ? Math.round((s.weightedWins / s.weightedSamples) * 1000) / 10 : null,
+  })).sort((a, b) => b.weightedPnl - a.weightedPnl);
+
+  return {
+    regime: regime || { regime_trend: null, regime_vol: null, regime_orb_size: null },
+    window: { n: limit, sampleSpecs: ranked.length, sampleDays: rows.length > 0 ? new Set(rows.map(r => r.trade_date)).size : 0 },
+    leader: ranked[0] || null,
+    ranked,
+  };
+}
+
+/**
  * Phase 2.3 — Adaptive spec recommender.
  *
  * Reads L4 rolling stats (overall + regime-conditional for today's regime) and
@@ -1012,6 +1195,21 @@ function generateDailyBriefing(db, tradeDate, briefType = 'morning') {
       `_Note: recommend-only mode — autonomy still runs Skip2 until manual approval to flip._`,
     ].join('\n');
 
+    // Phase 3: include leaderboard in brief
+    let leaderboardBlock = '';
+    try {
+      const lb = rankShadowSpecs(db, { n: 90 });
+      if (lb.ranked.length > 0) {
+        leaderboardBlock = [
+          ``,
+          `**Spec leaderboard (last 90 days, recency-weighted):**`,
+          ...lb.ranked.map((s, i) => `${i+1}. ${s.spec_key}: $${s.weightedPnl} (WR ${s.weightedWR ?? '-'}%, ${s.nTrades} trades)`),
+          ``,
+          `_Live autonomy currently runs `+'`shadow_skip2`'+` (Skip2 + ORB 140-360 + skipWed). Leaderboard above suggests potential improvements but operator approval required before any spec change._`,
+        ].join('\n');
+      }
+    } catch (e) {}
+
     body = [
       `**JARVIS posture today:** ${r.recommendation.replace(/_/g,' ').toUpperCase()}`,
       `**Recent track (${recent.rows.length} days, effective n=${r.effectiveN}):**`,
@@ -1023,6 +1221,7 @@ function generateDailyBriefing(db, tradeDate, briefType = 'morning') {
       `**Engine recommendation:** ${recBlurb}${wedSkip}`,
       regimeBlock,
       adaptiveBlock,
+      leaderboardBlock,
     ].filter(Boolean).join('\n');
   } else if (briefType === 'evening') {
     const dailyRow = db.prepare('SELECT * FROM l4_daily_learning_row WHERE trade_date=?').get(tradeDate) || {};
@@ -1094,4 +1293,7 @@ module.exports = {
   generateDailyBriefing,
   classifyRegimeFromCandles,
   recommendAdaptiveSpec,
+  runShadowSpecsForDate,
+  backfillShadowSpecsWindow,
+  rankShadowSpecs,
 };

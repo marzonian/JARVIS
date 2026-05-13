@@ -160,12 +160,20 @@ function calcTPShortSkipLevels(entryPrice, skipLevels = 2) {
  * Calculate full TP/SL for a trade (1:1 R:R)
  */
 function calcTPSL(entryPrice, direction, options = {}) {
-  const { tpMode = 'default', skipLevels = 2 } = options;
+  // 2026-05-13: added 'skip1' as middle ground between 'default' (Nearest, first
+  // level satisfying MIN_TP_TICKS) and 'skip2' (two levels past nextPsychAbove).
+  // skip1 = one psych level past nextPsychAbove (regardless of MIN_TP_TICKS).
+  const { tpMode = 'default', skipLevels: explicitSkip } = options;
   let tp;
   if (tpMode === 'skip2') {
+    const sl = Number.isFinite(explicitSkip) ? explicitSkip : 2;
     tp = direction === 'long'
-      ? calcTPLongSkipLevels(entryPrice, skipLevels)
-      : calcTPShortSkipLevels(entryPrice, skipLevels);
+      ? calcTPLongSkipLevels(entryPrice, sl)
+      : calcTPShortSkipLevels(entryPrice, sl);
+  } else if (tpMode === 'skip1') {
+    tp = direction === 'long'
+      ? calcTPLongSkipLevels(entryPrice, 1)
+      : calcTPShortSkipLevels(entryPrice, 1);
   } else {
     tp = direction === 'long'
       ? calcTPLong(entryPrice)

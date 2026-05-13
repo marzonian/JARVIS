@@ -75,6 +75,7 @@ const {
   ORIGINAL_PLAN_SPEC,
   DEFAULT_VARIANT_SPECS,
   JARVIS_AUTONOMY_SPEC,
+  SHADOW_SPECS,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
@@ -41540,6 +41541,63 @@ app.get('/api/jarvis/l4/rolling', (req, res) => {
   }
 });
 
+// Phase 3 — Multi-spec shadow leaderboard.
+// POST /api/jarvis/l4/shadow/backfill {days=90}  → run SHADOW_SPECS across N days
+// GET  /api/jarvis/l4/shadow/leaderboard?n=90    → ranked specs
+// POST /api/jarvis/l4/shadow/run-day {date}      → re-run shadows for a single day
+app.post('/api/jarvis/l4/shadow/backfill', (req, res) => {
+  try {
+    const db = getDB();
+    l4Learning.ensureL4Tables(db);
+    const days = Math.max(7, Math.min(365, parseInt(req.body?.days || '90', 10)));
+    const today = new Date().toISOString().slice(0, 10);
+    const start = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    const out = l4Learning.backfillShadowSpecsWindow(db, {
+      startDate: start,
+      endDate: today,
+      deps: { runPlanBacktest, SHADOW_SPECS, classifyRegimeFromCandles: l4Learning.classifyRegimeFromCandles },
+    });
+    res.json({ status: 'ok', window: { startDate: start, endDate: today, days }, ...out });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'l4_shadow_backfill_failed' });
+  }
+});
+
+app.get('/api/jarvis/l4/shadow/leaderboard', (req, res) => {
+  try {
+    const db = getDB();
+    l4Learning.ensureL4Tables(db);
+    const n = Math.max(7, Math.min(365, parseInt(req.query.n || '90', 10)));
+    const regime = {
+      regime_trend: req.query.regime_trend || null,
+      regime_vol: req.query.regime_vol || null,
+      regime_orb_size: req.query.regime_orb_size || null,
+    };
+    const anyRegime = regime.regime_trend || regime.regime_vol || regime.regime_orb_size;
+    const out = l4Learning.rankShadowSpecs(db, { n, regime: anyRegime ? regime : null });
+    res.json({ status: 'ok', ...out });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'l4_leaderboard_failed' });
+  }
+});
+
+app.post('/api/jarvis/l4/shadow/run-day', (req, res) => {
+  try {
+    const db = getDB();
+    l4Learning.ensureL4Tables(db);
+    const date = String((req.body && req.body.date) || req.query.date || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ status: 'error', error: 'date_required_yyyy_mm_dd' });
+    }
+    const out = l4Learning.runShadowSpecsForDate(db, date, {
+      runPlanBacktest, SHADOW_SPECS, classifyRegimeFromCandles: l4Learning.classifyRegimeFromCandles,
+    });
+    res.json({ status: 'ok', date, ...out });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'l4_shadow_run_day_failed' });
+  }
+});
+
 // Daily briefing — morning preview, evening recap, weekly digest.
 // GET /api/jarvis/l4/briefing?date=YYYY-MM-DD&type=morning|evening|weekly
 app.get('/api/jarvis/l4/briefing', (req, res) => {
@@ -43328,6 +43386,12 @@ cron.schedule('0 17 * * 1-5', () => {
     l4Learning.ensureL4Tables(db);
     // Run aggregator first so daily row is fresh
     try { l4Learning.aggregateDailyLearning(db, today); } catch {}
+    // Phase 3: run shadow specs for today (so leaderboard stays current)
+    try {
+      l4Learning.runShadowSpecsForDate(db, today, {
+        runPlanBacktest, SHADOW_SPECS, classifyRegimeFromCandles: l4Learning.classifyRegimeFromCandles,
+      });
+    } catch (e) { console.warn('[L4] Shadow run for today failed:', e.message); }
     l4Learning.generateDailyBriefing(db, today, 'evening');
     // Weekly on Fridays
     const dow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short' });

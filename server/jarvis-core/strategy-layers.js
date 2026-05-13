@@ -60,6 +60,60 @@ const JARVIS_AUTONOMY_SPEC = Object.freeze({
   }),
 });
 
+// 2026-05-13 — Phase 3 shadow specs. Run in parallel with the live autonomy
+// spec on every day. None of these execute real orders; their P&L is
+// computed against actual candles (counterfactual). The multi-spec ranker
+// reads these alongside live data to suggest the strongest variant per
+// regime. This is the framework that lets the system EVOLVE its spec
+// without a developer manually editing parameters.
+const SHADOW_SPECS = Object.freeze([
+  // Nearest TP, all filters — matches user's stated method exactly
+  Object.freeze({
+    key: 'shadow_nearest',
+    layer: 'shadow',
+    name: 'Shadow: Nearest TP (user method)',
+    description: 'Track what user-method (Nearest psych TP, 1:1 R:R) would have netted each day.',
+    engineOptions: Object.freeze({ longOnly: false, skipMonday: false, maxEntryHour: null, tpMode: 'default' }),
+    filters: Object.freeze({ orbRange: Object.freeze({ min: 140, max: 360 }), skipWednesday: true, skipHoliday: true }),
+  }),
+  // Skip1 — middle ground between Nearest and Skip2 (one extra level past Nearest)
+  Object.freeze({
+    key: 'shadow_skip1',
+    layer: 'shadow',
+    name: 'Shadow: Skip1 TP',
+    description: 'Target one psych level past the Nearest minimum-distance pick.',
+    engineOptions: Object.freeze({ longOnly: false, skipMonday: false, maxEntryHour: null, tpMode: 'skip1' }),
+    filters: Object.freeze({ orbRange: Object.freeze({ min: 140, max: 360 }), skipWednesday: true, skipHoliday: true }),
+  }),
+  // Skip2 — what JARVIS autonomy actually places (mirrors JARVIS_AUTONOMY_SPEC)
+  Object.freeze({
+    key: 'shadow_skip2',
+    layer: 'shadow',
+    name: 'Shadow: Skip2 TP (autonomy default)',
+    description: 'Mirror of JARVIS autonomy spec — included for completeness and for daily comparison.',
+    engineOptions: Object.freeze({ longOnly: false, skipMonday: false, maxEntryHour: null, tpMode: 'skip2' }),
+    filters: Object.freeze({ orbRange: Object.freeze({ min: 140, max: 360 }), skipWednesday: true, skipHoliday: true }),
+  }),
+  // Wider ORB filter — tests whether 360-cap is too tight in trending regimes
+  Object.freeze({
+    key: 'shadow_skip2_wider_orb',
+    layer: 'shadow',
+    name: 'Shadow: Skip2 + ORB 100-500',
+    description: 'Skip2 with loosened ORB range bounds. Tests whether current 140-360 filter is too restrictive.',
+    engineOptions: Object.freeze({ longOnly: false, skipMonday: false, maxEntryHour: null, tpMode: 'skip2' }),
+    filters: Object.freeze({ orbRange: Object.freeze({ min: 100, max: 500 }), skipWednesday: true, skipHoliday: true }),
+  }),
+  // No Wednesday-skip — test if the Wed filter is still data-backed in current regime
+  Object.freeze({
+    key: 'shadow_skip2_no_wed',
+    layer: 'shadow',
+    name: 'Shadow: Skip2 (allow Wednesday)',
+    description: 'Skip2 without the Wednesday skip. Tests whether the Wed filter is still correct.',
+    engineOptions: Object.freeze({ longOnly: false, skipMonday: false, maxEntryHour: null, tpMode: 'skip2' }),
+    filters: Object.freeze({ orbRange: Object.freeze({ min: 140, max: 360 }), skipWednesday: false, skipHoliday: true }),
+  }),
+]);
+
 // Legacy spec kept available for A/B comparison and historical reference.
 // Not used as live default. If a backtest needs to recreate pre-2026-04-25 behavior:
 //   const { LEGACY_V0_SPEC } = require('./strategy-layers');
@@ -7337,6 +7391,7 @@ function buildCommandCenterPanels(input = {}) {
 module.exports = {
   ORIGINAL_PLAN_SPEC,
   JARVIS_AUTONOMY_SPEC,
+  SHADOW_SPECS,
   LEGACY_V0_SPEC,
   DEFAULT_VARIANT_SPECS,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY,
