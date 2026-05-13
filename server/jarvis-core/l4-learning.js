@@ -1195,17 +1195,24 @@ function generateDailyBriefing(db, tradeDate, briefType = 'morning') {
       `_Note: recommend-only mode — autonomy still runs Skip2 until manual approval to flip._`,
     ].join('\n');
 
-    // Phase 3: include leaderboard in brief
+    // Phase 3: include leaderboard in brief. The spec named "shadow_skip2"
+    // has IDENTICAL parameters to what JARVIS uses live on PRAC-V2
+    // (jarvis_autonomy_skip2_v1). We tag it explicitly in the brief so the
+    // operator never confuses "candidate alternatives we measure" with
+    // "what JARVIS is actually trading."
     let leaderboardBlock = '';
     try {
       const lb = rankShadowSpecs(db, { n: 90 });
       if (lb.ranked.length > 0) {
+        const LIVE_KEY = 'shadow_skip2'; // same params as JARVIS_AUTONOMY_SPEC
         leaderboardBlock = [
           ``,
-          `**Spec leaderboard (last 90 days, recency-weighted):**`,
-          ...lb.ranked.map((s, i) => `${i+1}. ${s.spec_key}: $${s.weightedPnl} (WR ${s.weightedWR ?? '-'}%, ${s.nTrades} trades)`),
-          ``,
-          `_Live autonomy currently runs `+'`shadow_skip2`'+` (Skip2 + ORB 140-360 + skipWed). Leaderboard above suggests potential improvements but operator approval required before any spec change._`,
+          `**Candidate spec leaderboard (last 90 days, recency-weighted):**`,
+          `_All candidates below are SIMULATED against historical candles. JARVIS is still placing REAL trades on PRAC-V2 using the spec tagged ★ LIVE below._`,
+          ...lb.ranked.map((s, i) => {
+            const liveTag = s.spec_key === LIVE_KEY ? ' ★ LIVE (placing real orders on PRAC-V2)' : '';
+            return `${i+1}. ${s.spec_key}: $${s.weightedPnl} (WR ${s.weightedWR ?? '-'}%, ${s.nTrades} trades)${liveTag}`;
+          }),
         ].join('\n');
       }
     } catch (e) {}
