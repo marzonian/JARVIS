@@ -293,45 +293,55 @@ function enrichLivePostmortems(db, tradeDate) {
     throw new Error('enrichLivePostmortems: tradeDate required as YYYY-MM-DD');
   }
   const rows = db.prepare(`
-    SELECT id, broker_order_id, intent_id, status
+    SELECT id, broker_order_id, intent_id, status, account_id, symbol
     FROM l4_trade_postmortem
     WHERE trade_date = ? AND status NOT IN ('closed','cancelled','error')
   `).all(tradeDate);
   let enriched = 0;
   for (const r of rows) {
     if (!r.broker_order_id) continue;
-    // Fetch all fills for this order — entry fill is the one with the
-    // earliest fill_time and realized_pnl=0; exit fill carries the pnl.
-    const fills = db.prepare(`
+    // Step 1: find the entry fill (matches our broker_order_id)
+    const entryFill = db.prepare(`
       SELECT * FROM topstep_fills
-      WHERE order_id = ?
-      ORDER BY fill_time ASC
-    `).all(String(r.broker_order_id));
-    if (!fills.length) continue;
+      WHERE order_id = ? ORDER BY fill_time ASC LIMIT 1
+    `).get(String(r.broker_order_id));
+    if (!entryFill) continue;
 
-    let entryPrice = null, entryTime = null;
-    let exitPrice = null, exitTime = null;
-    let pnl = 0;
-    for (const f of fills) {
-      const realized = Number(f.realized_pnl || 0);
-      if (entryPrice === null && realized === 0) {
-        entryPrice = Number(f.price);
-        entryTime = String(f.fill_time);
-      } else {
-        exitPrice = Number(f.price);
-        exitTime = String(f.fill_time);
-        pnl += realized;
+    // Step 2: find the exit fill. Topstep's auto-OCO creates a separate
+    // order ID for the TP/SL leg, so we can't match by order_id. Instead
+    // find the next fill on the same account+contract that closes our
+    // position (different side from entry).
+    const oppositeSide = entryFill.side === 'long' ? 'short' : 'long';
+    const exitFill = db.prepare(`
+      SELECT * FROM topstep_fills
+      WHERE account_id = ? AND symbol = ? AND side = ?
+        AND fill_time > ?
+      ORDER BY fill_time ASC LIMIT 1
+    `).get(
+      String(entryFill.account_id),
+      String(entryFill.symbol),
+      oppositeSide,
+      String(entryFill.fill_time)
+    );
+
+    const entryPrice = Number(entryFill.price);
+    const entryTime = String(entryFill.fill_time);
+    let exitPrice = null, exitTime = null, pnl = 0;
+    let exitReason = null;
+    if (exitFill) {
+      exitPrice = Number(exitFill.price);
+      exitTime = String(exitFill.fill_time);
+      pnl = Number(exitFill.realized_pnl || 0);
+      // Heuristic exit reason: if exit price is "near" the postmortem's
+      // autonomy_tp_price → 'tp', if near autonomy_sl_price → 'sl', else 'unknown'
+      const pm = db.prepare('SELECT autonomy_tp_price, autonomy_sl_price FROM l4_trade_postmortem WHERE id=?').get(r.id);
+      if (pm) {
+        const tpDist = Math.abs(exitPrice - Number(pm.autonomy_tp_price || 0));
+        const slDist = Math.abs(exitPrice - Number(pm.autonomy_sl_price || 0));
+        if (tpDist <= 1 && tpDist <= slDist) exitReason = 'tp';
+        else if (slDist <= 1) exitReason = 'sl';
+        else exitReason = 'other';
       }
-    }
-    // Fallback if all fills carry pnl (some brokers do that)
-    if (entryPrice === null && fills.length >= 1) {
-      entryPrice = Number(fills[0].price);
-      entryTime = String(fills[0].fill_time);
-      if (fills.length >= 2) {
-        exitPrice = Number(fills[fills.length - 1].price);
-        exitTime = String(fills[fills.length - 1].fill_time);
-      }
-      pnl = fills.reduce((s, f) => s + Number(f.realized_pnl || 0), 0);
     }
     if (entryPrice === null) continue;
 
@@ -341,14 +351,15 @@ function enrichLivePostmortems(db, tradeDate) {
           live_entry_price = COALESCE(live_entry_price, ?),
           live_exit_time = COALESCE(live_exit_time, ?),
           live_exit_price = COALESCE(live_exit_price, ?),
-          live_actual_pnl_dollars = COALESCE(live_actual_pnl_dollars, ?),
+          live_exit_reason = COALESCE(live_exit_reason, ?),
+          live_actual_pnl_dollars = CASE WHEN ? IS NOT NULL THEN ? ELSE live_actual_pnl_dollars END,
           status = CASE WHEN ? IS NOT NULL THEN 'closed' ELSE COALESCE(status,'placed') END,
           updated_at = datetime('now')
       WHERE id = ?
     `).run(
-      entryTime, entryPrice, exitTime, exitPrice,
-      Math.round(pnl * 100) / 100,
-      exitTime, // closes status only if we have an exit
+      entryTime, entryPrice, exitTime, exitPrice, exitReason,
+      exitTime, Math.round(pnl * 100) / 100,
+      exitTime,
       r.id
     );
     enriched += 1;
