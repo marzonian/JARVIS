@@ -74,6 +74,7 @@ const {
 const {
   ORIGINAL_PLAN_SPEC,
   DEFAULT_VARIANT_SPECS,
+  JARVIS_AUTONOMY_SPEC,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_READ_ONLY,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_LOOP_AUTO,
   LIVE_CANDIDATE_OBSERVATION_WRITE_SOURCE_ENDPOINT_DIAGNOSTIC,
@@ -41500,6 +41501,75 @@ app.post('/api/jarvis/l4/aggregate', (req, res) => {
   }
 });
 
+// Backfill historical Nearest-vs-Skip2 comparison into L4 daily rows.
+// Default: last 90 days. Idempotent (re-runs overwrite backfill rows;
+// preserves any rows tagged data_source='live').
+app.post('/api/jarvis/l4/backfill', (req, res) => {
+  try {
+    const db = getDB();
+    l4Learning.ensureL4Tables(db);
+    const days = Math.max(7, Math.min(365, parseInt(req.body?.days || '90', 10)));
+    const today = new Date().toISOString().slice(0, 10);
+    const start = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    const result = l4Learning.backfillHistoricalLearningRows(db, {
+      startDate: start,
+      endDate: today,
+      deps: {
+        runPlanBacktest,
+        ORIGINAL_PLAN_SPEC,
+        JARVIS_AUTONOMY_SPEC,
+      },
+    });
+    res.json({ status: 'ok', window: { startDate: start, endDate: today, days }, ...result });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'l4_backfill_failed' });
+  }
+});
+
+// Read recency-weighted rolling stats (what the recommendation engine sees).
+// GET /api/jarvis/l4/rolling?n=90
+app.get('/api/jarvis/l4/rolling', (req, res) => {
+  try {
+    const db = getDB();
+    l4Learning.ensureL4Tables(db);
+    const n = Math.max(1, Math.min(365, parseInt(req.query.n || '90', 10)));
+    const out = l4Learning.readRecentLearningRows(db, n);
+    res.json({ status: 'ok', ...out });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'l4_rolling_failed' });
+  }
+});
+
+// Daily briefing — morning preview, evening recap, weekly digest.
+// GET /api/jarvis/l4/briefing?date=YYYY-MM-DD&type=morning|evening|weekly
+app.get('/api/jarvis/l4/briefing', (req, res) => {
+  try {
+    const db = getDB();
+    l4Learning.ensureL4Tables(db);
+    const date = String(req.query.date || new Date().toISOString().slice(0, 10)).trim();
+    const type = String(req.query.type || 'morning').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ status: 'error', error: 'date_required_yyyy_mm_dd' });
+    }
+    if (!['morning', 'evening', 'weekly'].includes(type)) {
+      return res.status(400).json({ status: 'error', error: 'type must be morning|evening|weekly' });
+    }
+    // Check for cached row; if missing, generate it
+    let row = db.prepare(
+      'SELECT * FROM l4_daily_briefing WHERE trade_date=? AND brief_type=?'
+    ).get(date, type);
+    if (!row || req.query.fresh === '1') {
+      l4Learning.generateDailyBriefing(db, date, type);
+      row = db.prepare(
+        'SELECT * FROM l4_daily_briefing WHERE trade_date=? AND brief_type=?'
+      ).get(date, type);
+    }
+    res.json({ status: 'ok', briefing: row });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'l4_briefing_failed' });
+  }
+});
+
 app.get('/api/topstep/live/audit', async (req, res) => {
   try {
     const forceFresh = req.query.force === '1' || req.query.force === 'true';
@@ -43234,6 +43304,40 @@ cron.schedule('*/2 8-16 * * 1-5', () => {
       triggerAutoHeal('topstep_bars_cron_failed', { error: err.message || 'topstep_bars_cron_failed' });
     }
   })();
+}, { timezone: 'America/New_York' });
+
+// L4 Daily Briefing crons — morning (8:30 AM ET) and evening (5:00 PM ET)
+// Generates a markdown briefing per day, stored in l4_daily_briefing.
+// Push to Discord/email when token wired in Phase 1.x.
+cron.schedule('30 8 * * 1-5', () => {
+  try {
+    const db = getDB();
+    const today = new Date().toLocaleString('en-CA', { timeZone: 'America/New_York' }).slice(0, 10);
+    l4Learning.ensureL4Tables(db);
+    l4Learning.generateDailyBriefing(db, today, 'morning');
+    console.log(`[L4] Morning briefing generated for ${today}.`);
+  } catch (err) {
+    console.error('[L4] Morning briefing failed:', err.message);
+  }
+}, { timezone: 'America/New_York' });
+
+cron.schedule('0 17 * * 1-5', () => {
+  try {
+    const db = getDB();
+    const today = new Date().toLocaleString('en-CA', { timeZone: 'America/New_York' }).slice(0, 10);
+    l4Learning.ensureL4Tables(db);
+    // Run aggregator first so daily row is fresh
+    try { l4Learning.aggregateDailyLearning(db, today); } catch {}
+    l4Learning.generateDailyBriefing(db, today, 'evening');
+    // Weekly on Fridays
+    const dow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short' });
+    if (dow === 'Fri') {
+      l4Learning.generateDailyBriefing(db, today, 'weekly');
+    }
+    console.log(`[L4] Evening briefing generated for ${today}.`);
+  } catch (err) {
+    console.error('[L4] Evening briefing failed:', err.message);
+  }
 }, { timezone: 'America/New_York' });
 cron.schedule('50 9 * * 1-5', () => runProactiveInitiative('post_orb_guidance'), { timezone: 'America/New_York' });
 cron.schedule('15 12 * * 1-5', () => runProactiveInitiative('midday_adjustment'), { timezone: 'America/New_York' });

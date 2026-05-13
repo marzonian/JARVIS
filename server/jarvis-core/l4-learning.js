@@ -136,6 +136,41 @@ function ensureL4Tables(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_l4_daily_date
       ON l4_daily_learning_row(trade_date DESC);
+
+    -- 2026-05-13: Phase 1 additions for advanced learning loop.
+    -- data_source tags row origin (live = real PRAC-V2 trade, backfill = synthetic
+    -- from historical strategy backtest). Reader weights live heavier than backfill.
+    -- regime_* tags enable Phase 2 regime-conditional reading.
+  `);
+
+  // Add new columns idempotently (SQLite has no IF NOT EXISTS for ADD COLUMN
+  // pre-3.35; we wrap in try/catch and assume errors are "duplicate column").
+  const safeAddColumn = (sql) => { try { db.exec(sql); } catch (e) { /* column exists */ } };
+  safeAddColumn(`ALTER TABLE l4_daily_learning_row ADD COLUMN data_source TEXT NOT NULL DEFAULT 'live'`);
+  safeAddColumn(`ALTER TABLE l4_daily_learning_row ADD COLUMN regime_trend TEXT`);
+  safeAddColumn(`ALTER TABLE l4_daily_learning_row ADD COLUMN regime_vol TEXT`);
+  safeAddColumn(`ALTER TABLE l4_daily_learning_row ADD COLUMN regime_orb_size TEXT`);
+  safeAddColumn(`ALTER TABLE l4_daily_learning_row ADD COLUMN day_of_week INTEGER`);
+  safeAddColumn(`ALTER TABLE l4_daily_learning_row ADD COLUMN orb_range_ticks INTEGER`);
+
+  // L4 daily briefing — what JARVIS plans / observes per day. Written by
+  // morning brief job and evening recap job. Used as the body of Discord push
+  // when token is available, and surfaced in /api/jarvis/l4/briefing.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS l4_daily_briefing (
+      id                              INTEGER PRIMARY KEY AUTOINCREMENT,
+      trade_date                      TEXT NOT NULL,
+      brief_type                      TEXT NOT NULL CHECK(brief_type IN ('morning','evening','weekly')),
+      headline                        TEXT NOT NULL,
+      body_markdown                   TEXT NOT NULL,
+      decisions_json                  TEXT NOT NULL DEFAULT '{}',
+      sent_to_user                    INTEGER NOT NULL DEFAULT 0,
+      sent_at                         TEXT,
+      created_at                      TEXT DEFAULT (datetime('now')),
+      UNIQUE(trade_date, brief_type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_l4_briefing_date_type
+      ON l4_daily_briefing(trade_date DESC, brief_type);
   `);
 }
 
@@ -560,39 +595,291 @@ function aggregateDailyLearning(db, tradeDate, options = {}) {
 }
 
 /**
- * Reader for the next-morning recommendation engine to know "what did
- * yesterday's data say about us." Returns the most recent N daily learning
- * rows, with a rolling summary suitable for the engine to weight against.
+ * Backfill historical Nearest-vs-Skip2 comparison into L4 daily rows.
+ * Takes the candle history for each date in the window, runs BOTH specs
+ * (user's Nearest method and JARVIS's Skip2 autonomy) through the strategy
+ * engine, and writes a daily row with source='backfill'.
+ *
+ * This unlocks the recommendation engine to have meaningful comparison data
+ * BEFORE 10+ live trades accumulate. Live data gets weighted heavier by the
+ * reader, but backfill rows still contribute as a regime-anchored baseline.
+ *
+ * @param db
+ * @param options: { startDate, endDate, deps: { runPlanBacktest, ORIGINAL_PLAN_SPEC, JARVIS_AUTONOMY_SPEC, loadSession } }
  */
-function readRecentLearningRows(db, n = 30) {
+function backfillHistoricalLearningRows(db, options = {}) {
+  const { startDate, endDate, deps } = options;
+  if (!startDate || !endDate || !deps) {
+    throw new Error('backfillHistoricalLearningRows: { startDate, endDate, deps:{ runPlanBacktest, ORIGINAL_PLAN_SPEC, JARVIS_AUTONOMY_SPEC, loadSession } }');
+  }
+  const dates = db.prepare(`
+    SELECT s.date AS d
+    FROM sessions s
+    WHERE s.date >= ? AND s.date <= ?
+      AND EXISTS (SELECT 1 FROM candles c WHERE c.session_id = s.id AND c.timeframe='5m')
+    ORDER BY s.date ASC
+  `).all(startDate, endDate);
+
+  let written = 0;
+  let skippedLive = 0;
+  for (const { d } of dates) {
+    // Skip dates that already have a LIVE row — don't clobber real data
+    const existing = db.prepare(
+      "SELECT id, data_source FROM l4_daily_learning_row WHERE trade_date = ?"
+    ).get(d);
+    if (existing && existing.data_source === 'live') {
+      skippedLive += 1;
+      continue;
+    }
+
+    // Build a single-day sessions blob
+    const candleRows = db.prepare(
+      "SELECT c.timestamp, c.open, c.high, c.low, c.close FROM candles c JOIN sessions s ON s.id=c.session_id WHERE s.date=? AND c.timeframe='5m' ORDER BY c.timestamp ASC"
+    ).all(d);
+    if (!candleRows.length) continue;
+    const sessions = { [d]: candleRows.map(r => ({ ...r, date: d })) };
+
+    // Run both specs
+    const nearestResult = deps.runPlanBacktest(sessions, deps.ORIGINAL_PLAN_SPEC, { includePerDate: true });
+    const skip2Result = deps.runPlanBacktest(sessions, deps.JARVIS_AUTONOMY_SPEC, { includePerDate: true });
+
+    const nearestDay = nearestResult.perDate?.[d] || null;
+    const skip2Day = skip2Result.perDate?.[d] || null;
+
+    const nearestPnl = nearestDay?.wouldTrade ? Number(nearestDay.tradePnlDollars || 0) : 0;
+    const skip2Pnl = skip2Day?.wouldTrade ? Number(skip2Day.tradePnlDollars || 0) : 0;
+    const nLive = 0; // backfill is synthetic, not live
+    const orbTicks = Number(nearestDay?.orbRangeTicks ?? skip2Day?.orbRangeTicks ?? null);
+    const dow = (() => {
+      const x = new Date(`${d}T12:00:00Z`).getUTCDay();
+      return Number.isFinite(x) ? x : null;
+    })();
+    const summary = (nearestDay?.wouldTrade || skip2Day?.wouldTrade)
+      ? `BACKFILL ${d}: Nearest ${nearestDay?.wouldTrade ? `$${nearestPnl}` : 'skip'}; Skip2 ${skip2Day?.wouldTrade ? `$${skip2Pnl}` : 'skip'}.`
+      : `BACKFILL ${d}: both specs skipped.`;
+
+    db.prepare(`
+      INSERT INTO l4_daily_learning_row (
+        trade_date, data_source, n_live_trades, live_total_pnl_dollars,
+        nearest_total_pnl_dollars, skip2_total_pnl_dollars, autonomy_advantage_dollars,
+        orb_range_ticks, day_of_week, flags_json, summary_text
+      ) VALUES (?, 'backfill', 0, 0, ?, ?, ?, ?, ?, '["backfill"]', ?)
+      ON CONFLICT(trade_date) DO UPDATE SET
+        data_source = CASE WHEN data_source='live' THEN data_source ELSE 'backfill' END,
+        nearest_total_pnl_dollars = excluded.nearest_total_pnl_dollars,
+        skip2_total_pnl_dollars = excluded.skip2_total_pnl_dollars,
+        autonomy_advantage_dollars = excluded.autonomy_advantage_dollars,
+        orb_range_ticks = excluded.orb_range_ticks,
+        day_of_week = excluded.day_of_week,
+        summary_text = excluded.summary_text,
+        updated_at = datetime('now')
+    `).run(d, nearestPnl, skip2Pnl, Math.round((skip2Pnl - nearestPnl) * 100) / 100,
+           Number.isFinite(orbTicks) ? Math.round(orbTicks) : null, dow, summary);
+    written += 1;
+  }
+  return { written, skippedLive, totalDates: dates.length };
+}
+
+/**
+ * Reader for the recommendation engine. Returns recent rows + a
+ * recency-weighted summary that gives priority to:
+ *   - Live data over backfill (weight = 3.0 vs 1.0)
+ *   - Recent days over older ones (exponential decay, half-life = 30 days)
+ *
+ * The engine uses `rolling.weightedAutonomyAdvantage` to decide whether
+ * Skip2's edge is robust enough to keep running, or whether to fall back
+ * to Nearest. Sample size shown is the EFFECTIVE n after weighting.
+ */
+function readRecentLearningRows(db, n = 90) {
+  const limit = Math.max(1, Math.min(365, Number(n) || 90));
   const rows = db.prepare(`
     SELECT *
     FROM l4_daily_learning_row
-    WHERE n_live_trades > 0
     ORDER BY trade_date DESC
     LIMIT ?
-  `).all(Math.max(1, Math.min(365, Number(n) || 30)));
+  `).all(limit);
   if (rows.length === 0) {
-    return { rows: [], rolling: { sampleSize: 0, totalLivePnl: 0, totalNearestPnl: 0, totalSkip2Pnl: 0, autonomyAdvantage: 0, avgWR: null } };
+    return {
+      rows: [],
+      rolling: {
+        sampleSize: 0, effectiveN: 0, liveCount: 0, backfillCount: 0,
+        totalLivePnl: 0, weightedNearestPnl: 0, weightedSkip2Pnl: 0,
+        weightedAutonomyAdvantage: 0, avgWR: null,
+        decayHalfLifeDays: 30, liveWeight: 3.0, backfillWeight: 1.0,
+        recommendation: 'insufficient_data',
+      },
+    };
   }
-  let totalLive = 0, totalNear = 0, totalSkip = 0, wrSum = 0, wrN = 0;
+
+  // Recency weighting: exponential decay with 30-day half-life.
+  // weight = sourceMultiplier * exp(-ln(2) * daysAgo / 30)
+  const LIVE_WEIGHT = 3.0;
+  const BACKFILL_WEIGHT = 1.0;
+  const HALF_LIFE_DAYS = 30;
+  const decayK = Math.log(2) / HALF_LIFE_DAYS;
+
+  // Reference date = newest row's date (for stable decay even if reader
+  // runs at odd times)
+  const newestDate = new Date(`${rows[0].trade_date}T12:00:00Z`).getTime();
+
+  let weightSum = 0;
+  let livePnlSum = 0;
+  let weightedNearest = 0;
+  let weightedSkip2 = 0;
+  let wrWeightSum = 0;
+  let wrWeighted = 0;
+  let liveCount = 0;
+  let backfillCount = 0;
+
   for (const r of rows) {
-    totalLive += Number(r.live_total_pnl_dollars || 0);
-    totalNear += Number(r.nearest_total_pnl_dollars || 0);
-    totalSkip += Number(r.skip2_total_pnl_dollars || 0);
-    if (Number.isFinite(Number(r.live_winrate_pct))) { wrSum += Number(r.live_winrate_pct); wrN += 1; }
+    const isLive = r.data_source === 'live';
+    if (isLive) liveCount += 1; else backfillCount += 1;
+    const rowDate = new Date(`${r.trade_date}T12:00:00Z`).getTime();
+    const daysAgo = Math.max(0, (newestDate - rowDate) / 86400000);
+    const decay = Math.exp(-decayK * daysAgo);
+    const sourceWeight = isLive ? LIVE_WEIGHT : BACKFILL_WEIGHT;
+    const w = sourceWeight * decay;
+
+    weightSum += w;
+    livePnlSum += Number(r.live_total_pnl_dollars || 0);
+    weightedNearest += Number(r.nearest_total_pnl_dollars || 0) * w;
+    weightedSkip2 += Number(r.skip2_total_pnl_dollars || 0) * w;
+    if (Number.isFinite(Number(r.live_winrate_pct))) {
+      wrWeighted += Number(r.live_winrate_pct) * w;
+      wrWeightSum += w;
+    }
   }
+  const round2 = (x) => Math.round(x * 100) / 100;
+
+  // Recommendation logic (conservative defaults — gets refined in Phase 2):
+  //   - need at least 5 live trades OR 20 backfill days for any rec
+  //   - if weighted skip2 advantage > $50/day AND live trades show same direction → 'keep_skip2'
+  //   - if weighted skip2 advantage < -$50/day → 'fallback_to_nearest'
+  //   - else 'hold_steady'
+  const advantage = weightedSkip2 - weightedNearest;
+  const avgAdvPerWeightedDay = weightSum > 0 ? advantage / weightSum : 0;
+  let recommendation = 'hold_steady';
+  if (liveCount < 5 && backfillCount < 20) recommendation = 'insufficient_data';
+  else if (avgAdvPerWeightedDay > 50) recommendation = 'keep_skip2';
+  else if (avgAdvPerWeightedDay < -50) recommendation = 'fallback_to_nearest';
+
   return {
     rows,
     rolling: {
       sampleSize: rows.length,
-      totalLivePnl: Math.round(totalLive * 100) / 100,
-      totalNearestPnl: Math.round(totalNear * 100) / 100,
-      totalSkip2Pnl: Math.round(totalSkip * 100) / 100,
-      autonomyAdvantage: Math.round((totalSkip - totalNear) * 100) / 100,
-      avgWR: wrN > 0 ? Math.round((wrSum / wrN) * 10) / 10 : null,
+      effectiveN: Math.round(weightSum * 10) / 10,
+      liveCount,
+      backfillCount,
+      totalLivePnl: round2(livePnlSum),
+      weightedNearestPnl: round2(weightedNearest),
+      weightedSkip2Pnl: round2(weightedSkip2),
+      weightedAutonomyAdvantage: round2(advantage),
+      avgAdvantagePerDay: round2(avgAdvPerWeightedDay),
+      avgWR: wrWeightSum > 0 ? Math.round((wrWeighted / wrWeightSum) * 10) / 10 : null,
+      decayHalfLifeDays: HALF_LIFE_DAYS,
+      liveWeight: LIVE_WEIGHT,
+      backfillWeight: BACKFILL_WEIGHT,
+      recommendation,
     },
   };
+}
+
+/**
+ * Generate the daily briefing — morning preview or evening recap.
+ * Returns markdown body suitable for Discord/email push or UI display.
+ *
+ * brief_type='morning':
+ *   - Headline = today's date, day-of-week, JARVIS posture
+ *   - Body = recent rolling stats, today's filter outlook, what to expect
+ *
+ * brief_type='evening':
+ *   - Headline = today's date, # trades, net P&L
+ *   - Body = per-trade detail, counterfactuals, drift, anomalies
+ */
+function generateDailyBriefing(db, tradeDate, briefType = 'morning') {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(tradeDate)) throw new Error('tradeDate must be YYYY-MM-DD');
+  if (!['morning', 'evening', 'weekly'].includes(briefType)) throw new Error('briefType must be morning|evening|weekly');
+
+  const recent = readRecentLearningRows(db, 90);
+  const r = recent.rolling;
+  const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(`${tradeDate}T12:00:00Z`).getUTCDay()];
+
+  let headline, body;
+  if (briefType === 'morning') {
+    headline = `${dow} ${tradeDate} — JARVIS morning brief`;
+    const recBlurb = {
+      insufficient_data: '⏳ Building track record. Spec stays at Skip2 until enough data.',
+      keep_skip2: `✅ Skip2 advantage holds (+$${r.avgAdvantagePerDay}/day weighted). Continuing Skip2 autonomy.`,
+      fallback_to_nearest: `⚠️ Skip2 underperforming (${r.avgAdvantagePerDay} per-day weighted). Considering fallback to Nearest.`,
+      hold_steady: `↔️ Specs roughly tied. Skip2 advantage = $${r.avgAdvantagePerDay}/day weighted. Holding.`,
+    }[r.recommendation] || 'Unknown rec.';
+
+    const wedSkip = dow === 'Wed' ? '\n- ⛔ Wednesday — skip filter active today.' : '';
+    body = [
+      `**JARVIS posture today:** ${r.recommendation.replace(/_/g,' ').toUpperCase()}`,
+      `**Recent track (${recent.rows.length} days, effective n=${r.effectiveN}):**`,
+      `- Live trades captured: ${r.liveCount}`,
+      `- Backfill comparison: ${r.backfillCount} days`,
+      `- Weighted Skip2 P&L: $${r.weightedSkip2Pnl}   Nearest counterfactual: $${r.weightedNearestPnl}`,
+      `- Weighted advantage: $${r.weightedAutonomyAdvantage} (avg $${r.avgAdvantagePerDay}/day)`,
+      ``,
+      `**Engine recommendation:** ${recBlurb}${wedSkip}`,
+    ].join('\n');
+  } else if (briefType === 'evening') {
+    const dailyRow = db.prepare('SELECT * FROM l4_daily_learning_row WHERE trade_date=?').get(tradeDate) || {};
+    const tradesToday = db.prepare(
+      "SELECT * FROM l4_trade_postmortem WHERE trade_date=? AND status='closed' ORDER BY id ASC"
+    ).all(tradeDate);
+    const liveCount = Number(dailyRow.n_live_trades || 0);
+    const livePnl = Number(dailyRow.live_total_pnl_dollars || 0);
+    headline = `${dow} ${tradeDate} evening recap — ${liveCount} trade(s), ${livePnl >= 0 ? '+' : ''}$${livePnl}`;
+    const tradeLines = tradesToday.length === 0 ? ['_No live trades today._'] : tradesToday.map(t => {
+      const pnl = Number(t.live_actual_pnl_dollars || 0);
+      const reason = t.live_exit_reason || 'open';
+      const nearCF = Number(t.counterfactual_nearest_pnl ?? 0);
+      const diff = pnl - nearCF;
+      return `- ${t.direction?.toUpperCase()} ${t.symbol} @ ${t.live_entry_price} → ${t.live_exit_price} (${reason}). Actual ${pnl >= 0 ? '+' : ''}$${pnl}. Nearest counterfactual ${nearCF >= 0 ? '+' : ''}$${nearCF}. Diff ${diff >= 0 ? '+' : ''}$${Math.round(diff*100)/100}.`;
+    });
+    body = [
+      `**Today's trades:**`,
+      ...tradeLines,
+      ``,
+      `**Rolling track (weighted):**`,
+      `- Effective n: ${r.effectiveN}   live: ${r.liveCount}   backfill: ${r.backfillCount}`,
+      `- Cumulative Skip2: $${r.weightedSkip2Pnl}   Nearest: $${r.weightedNearestPnl}   Advantage: $${r.weightedAutonomyAdvantage}`,
+      `- Engine posture: ${r.recommendation}`,
+    ].join('\n');
+  } else {
+    // weekly — simple aggregation of last 7 daily rows
+    const wkRows = recent.rows.slice(0, 7);
+    const wkLive = wkRows.reduce((s, x) => s + Number(x.live_total_pnl_dollars || 0), 0);
+    const wkSkip2 = wkRows.reduce((s, x) => s + Number(x.skip2_total_pnl_dollars || 0), 0);
+    const wkNear = wkRows.reduce((s, x) => s + Number(x.nearest_total_pnl_dollars || 0), 0);
+    const wkTrades = wkRows.reduce((s, x) => s + Number(x.n_live_trades || 0), 0);
+    headline = `Weekly recap ending ${tradeDate} — ${wkTrades} trade(s), $${Math.round(wkLive*100)/100} net`;
+    body = [
+      `**Week ending ${tradeDate}:**`,
+      `- Live trades: ${wkTrades}`,
+      `- Live P&L: $${Math.round(wkLive*100)/100}`,
+      `- Skip2 (weighted backfill+live): $${Math.round(wkSkip2*100)/100}`,
+      `- Nearest counterfactual: $${Math.round(wkNear*100)/100}`,
+      `- Advantage: $${Math.round((wkSkip2 - wkNear)*100)/100}`,
+      `- Engine posture: ${r.recommendation}`,
+    ].join('\n');
+  }
+
+  const decisions = { recommendation: r.recommendation, rolling: r };
+  db.prepare(`
+    INSERT INTO l4_daily_briefing (trade_date, brief_type, headline, body_markdown, decisions_json)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(trade_date, brief_type) DO UPDATE SET
+      headline = excluded.headline,
+      body_markdown = excluded.body_markdown,
+      decisions_json = excluded.decisions_json,
+      created_at = datetime('now')
+  `).run(tradeDate, briefType, headline, body, JSON.stringify(decisions));
+
+  return { headline, body, decisions };
 }
 
 module.exports = {
@@ -603,4 +890,6 @@ module.exports = {
   computeCounterfactualPnls,
   aggregateDailyLearning,
   readRecentLearningRows,
+  backfillHistoricalLearningRows,
+  generateDailyBriefing,
 };
