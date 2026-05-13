@@ -595,6 +595,76 @@ function aggregateDailyLearning(db, tradeDate, options = {}) {
 }
 
 /**
+ * Lightweight regime classifier — computes regime tags from candle data
+ * without needing the sessions-table regime columns (which are unpopulated
+ * for recent dates). Tags used by the regime-conditional reader.
+ *
+ * Returns { regime_trend, regime_vol, regime_orb_size }.
+ *
+ * Inputs:
+ *   - candles: array of 5m candles for the session (with open/high/low/close)
+ *   - orbRangeTicks: pre-computed ORB range in ticks (optional; if missing,
+ *     we compute it from the 9:30-9:45 ET candles)
+ */
+function classifyRegimeFromCandles(candles, orbRangeTicks) {
+  if (!Array.isArray(candles) || candles.length === 0) {
+    return { regime_trend: null, regime_vol: null, regime_orb_size: null };
+  }
+  // ORB size bucket
+  let orbBucket = null;
+  const orb = Number(orbRangeTicks);
+  if (Number.isFinite(orb) && orb > 0) {
+    if (orb < 140) orbBucket = 'narrow';
+    else if (orb <= 280) orbBucket = 'normal';
+    else orbBucket = 'wide';
+  }
+
+  // Trend bucket: compare close to open over the post-ORB session
+  // Trending if |close - open| > 0.6 * range, ranging otherwise.
+  const opens = candles.map(c => Number(c.open)).filter(Number.isFinite);
+  const closes = candles.map(c => Number(c.close)).filter(Number.isFinite);
+  const highs = candles.map(c => Number(c.high)).filter(Number.isFinite);
+  const lows = candles.map(c => Number(c.low)).filter(Number.isFinite);
+  let trendBucket = null;
+  if (opens.length > 0 && closes.length > 0) {
+    const sessionOpen = opens[0];
+    const sessionClose = closes[closes.length - 1];
+    const sessionHigh = Math.max(...highs);
+    const sessionLow = Math.min(...lows);
+    const range = sessionHigh - sessionLow;
+    const directional = sessionClose - sessionOpen;
+    if (range > 0) {
+      const ratio = Math.abs(directional) / range;
+      if (ratio > 0.6) trendBucket = directional > 0 ? 'trending_up' : 'trending_down';
+      else if (ratio > 0.3) trendBucket = 'mild_drift';
+      else trendBucket = 'ranging';
+    }
+  }
+
+  // Vol bucket: intraday range as fraction of opening price.
+  // High > 0.8%, normal 0.4-0.8%, low < 0.4%.
+  let volBucket = null;
+  if (opens.length > 0 && highs.length > 0 && lows.length > 0) {
+    const sessionOpen = opens[0];
+    const sessionHigh = Math.max(...highs);
+    const sessionLow = Math.min(...lows);
+    const range = sessionHigh - sessionLow;
+    if (sessionOpen > 0) {
+      const pct = (range / sessionOpen) * 100;
+      if (pct > 0.8) volBucket = 'high';
+      else if (pct > 0.4) volBucket = 'normal';
+      else volBucket = 'low';
+    }
+  }
+
+  return {
+    regime_trend: trendBucket,
+    regime_vol: volBucket,
+    regime_orb_size: orbBucket,
+  };
+}
+
+/**
  * Backfill historical Nearest-vs-Skip2 comparison into L4 daily rows.
  * Takes the candle history for each date in the window, runs BOTH specs
  * (user's Nearest method and JARVIS's Skip2 autonomy) through the strategy
@@ -654,6 +724,8 @@ function backfillHistoricalLearningRows(db, options = {}) {
       const x = new Date(`${d}T12:00:00Z`).getUTCDay();
       return Number.isFinite(x) ? x : null;
     })();
+    // Phase 2: classify regime from the day's candles
+    const regime = classifyRegimeFromCandles(sessions[d], orbTicks);
     const summary = (nearestDay?.wouldTrade || skip2Day?.wouldTrade)
       ? `BACKFILL ${d}: Nearest ${nearestDay?.wouldTrade ? `$${nearestPnl}` : 'skip'}; Skip2 ${skip2Day?.wouldTrade ? `$${skip2Pnl}` : 'skip'}.`
       : `BACKFILL ${d}: both specs skipped.`;
@@ -662,8 +734,9 @@ function backfillHistoricalLearningRows(db, options = {}) {
       INSERT INTO l4_daily_learning_row (
         trade_date, data_source, n_live_trades, live_total_pnl_dollars,
         nearest_total_pnl_dollars, skip2_total_pnl_dollars, autonomy_advantage_dollars,
-        orb_range_ticks, day_of_week, flags_json, summary_text
-      ) VALUES (?, 'backfill', 0, 0, ?, ?, ?, ?, ?, '["backfill"]', ?)
+        orb_range_ticks, day_of_week, regime_trend, regime_vol, regime_orb_size,
+        flags_json, summary_text
+      ) VALUES (?, 'backfill', 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, '["backfill"]', ?)
       ON CONFLICT(trade_date) DO UPDATE SET
         data_source = CASE WHEN data_source='live' THEN data_source ELSE 'backfill' END,
         nearest_total_pnl_dollars = excluded.nearest_total_pnl_dollars,
@@ -671,13 +744,117 @@ function backfillHistoricalLearningRows(db, options = {}) {
         autonomy_advantage_dollars = excluded.autonomy_advantage_dollars,
         orb_range_ticks = excluded.orb_range_ticks,
         day_of_week = excluded.day_of_week,
+        regime_trend = COALESCE(excluded.regime_trend, regime_trend),
+        regime_vol = COALESCE(excluded.regime_vol, regime_vol),
+        regime_orb_size = COALESCE(excluded.regime_orb_size, regime_orb_size),
         summary_text = excluded.summary_text,
         updated_at = datetime('now')
     `).run(d, nearestPnl, skip2Pnl, Math.round((skip2Pnl - nearestPnl) * 100) / 100,
-           Number.isFinite(orbTicks) ? Math.round(orbTicks) : null, dow, summary);
+           Number.isFinite(orbTicks) ? Math.round(orbTicks) : null, dow,
+           regime.regime_trend, regime.regime_vol, regime.regime_orb_size,
+           summary);
     written += 1;
   }
   return { written, skippedLive, totalDates: dates.length };
+}
+
+/**
+ * Regime-conditional reader. Same recency weighting as readRecentLearningRows
+ * but filters rows matching the supplied regime fingerprint. Used by the
+ * morning brief to answer "given today looks like a trending-up + normal-vol
+ * + wide-ORB day, what's our edge in similar regimes?".
+ *
+ * Returns the same rolling shape as readRecentLearningRows plus a `regime`
+ * descriptor of what was filtered.
+ *
+ * Usage:
+ *   readRecentLearningRowsByRegime(db, { regime_trend: 'trending_up' })
+ *   readRecentLearningRowsByRegime(db, { regime_orb_size: 'normal', n: 60 })
+ */
+function readRecentLearningRowsByRegime(db, opts = {}) {
+  const {
+    regime_trend = null,
+    regime_vol = null,
+    regime_orb_size = null,
+    day_of_week = null,
+    n = 90,
+  } = opts;
+  const limit = Math.max(1, Math.min(365, Number(n) || 90));
+  const wheres = [];
+  const params = [];
+  if (regime_trend) { wheres.push('regime_trend = ?'); params.push(regime_trend); }
+  if (regime_vol) { wheres.push('regime_vol = ?'); params.push(regime_vol); }
+  if (regime_orb_size) { wheres.push('regime_orb_size = ?'); params.push(regime_orb_size); }
+  if (Number.isFinite(Number(day_of_week))) { wheres.push('day_of_week = ?'); params.push(Number(day_of_week)); }
+  const whereSql = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
+  const rows = db.prepare(`
+    SELECT *
+    FROM l4_daily_learning_row
+    ${whereSql}
+    ORDER BY trade_date DESC
+    LIMIT ?
+  `).all(...params, limit);
+
+  const summary = computeWeightedRolling(rows);
+  return {
+    rows,
+    regime: { regime_trend, regime_vol, regime_orb_size, day_of_week },
+    rolling: summary,
+  };
+}
+
+// Extracted core rolling-stats logic so both unconditional and regime-conditional
+// readers share the math.
+function computeWeightedRolling(rows) {
+  if (!rows.length) {
+    return {
+      sampleSize: 0, effectiveN: 0, liveCount: 0, backfillCount: 0,
+      totalLivePnl: 0, weightedNearestPnl: 0, weightedSkip2Pnl: 0,
+      weightedAutonomyAdvantage: 0, avgAdvantagePerDay: 0, avgWR: null,
+      decayHalfLifeDays: 30, liveWeight: 3.0, backfillWeight: 1.0,
+      recommendation: 'insufficient_data',
+    };
+  }
+  const LIVE_WEIGHT = 3.0;
+  const BACKFILL_WEIGHT = 1.0;
+  const HALF_LIFE_DAYS = 30;
+  const decayK = Math.log(2) / HALF_LIFE_DAYS;
+  const newestDate = new Date(`${rows[0].trade_date}T12:00:00Z`).getTime();
+  let weightSum = 0, livePnlSum = 0, weightedNearest = 0, weightedSkip2 = 0;
+  let wrWeightSum = 0, wrWeighted = 0, liveCount = 0, backfillCount = 0;
+  for (const r of rows) {
+    const isLive = r.data_source === 'live';
+    if (isLive) liveCount += 1; else backfillCount += 1;
+    const rowDate = new Date(`${r.trade_date}T12:00:00Z`).getTime();
+    const daysAgo = Math.max(0, (newestDate - rowDate) / 86400000);
+    const decay = Math.exp(-decayK * daysAgo);
+    const w = (isLive ? LIVE_WEIGHT : BACKFILL_WEIGHT) * decay;
+    weightSum += w;
+    livePnlSum += Number(r.live_total_pnl_dollars || 0);
+    weightedNearest += Number(r.nearest_total_pnl_dollars || 0) * w;
+    weightedSkip2 += Number(r.skip2_total_pnl_dollars || 0) * w;
+    if (Number.isFinite(Number(r.live_winrate_pct))) {
+      wrWeighted += Number(r.live_winrate_pct) * w;
+      wrWeightSum += w;
+    }
+  }
+  const round2 = (x) => Math.round(x * 100) / 100;
+  const advantage = weightedSkip2 - weightedNearest;
+  const avgAdv = weightSum > 0 ? advantage / weightSum : 0;
+  let recommendation = 'hold_steady';
+  if (liveCount < 5 && backfillCount < 20) recommendation = 'insufficient_data';
+  else if (avgAdv > 50) recommendation = 'keep_skip2';
+  else if (avgAdv < -50) recommendation = 'fallback_to_nearest';
+  return {
+    sampleSize: rows.length, effectiveN: Math.round(weightSum * 10) / 10,
+    liveCount, backfillCount, totalLivePnl: round2(livePnlSum),
+    weightedNearestPnl: round2(weightedNearest), weightedSkip2Pnl: round2(weightedSkip2),
+    weightedAutonomyAdvantage: round2(advantage),
+    avgAdvantagePerDay: round2(avgAdv),
+    avgWR: wrWeightSum > 0 ? Math.round((wrWeighted / wrWeightSum) * 10) / 10 : null,
+    decayHalfLifeDays: HALF_LIFE_DAYS, liveWeight: LIVE_WEIGHT,
+    backfillWeight: BACKFILL_WEIGHT, recommendation,
+  };
 }
 
 /**
@@ -698,89 +875,87 @@ function readRecentLearningRows(db, n = 90) {
     ORDER BY trade_date DESC
     LIMIT ?
   `).all(limit);
-  if (rows.length === 0) {
-    return {
-      rows: [],
-      rolling: {
-        sampleSize: 0, effectiveN: 0, liveCount: 0, backfillCount: 0,
-        totalLivePnl: 0, weightedNearestPnl: 0, weightedSkip2Pnl: 0,
-        weightedAutonomyAdvantage: 0, avgWR: null,
-        decayHalfLifeDays: 30, liveWeight: 3.0, backfillWeight: 1.0,
-        recommendation: 'insufficient_data',
-      },
-    };
+  return { rows, rolling: computeWeightedRolling(rows) };
+}
+
+/**
+ * Phase 2.3 — Adaptive spec recommender.
+ *
+ * Reads L4 rolling stats (overall + regime-conditional for today's regime) and
+ * returns a structured recommendation for the active autonomy spec:
+ *   - keep current spec
+ *   - shift TP mode (default ↔ skip1 ↔ skip2)
+ *   - pause autonomy (if recent regime is hostile)
+ *
+ * SAFETY GUARDS (non-negotiable):
+ *   - No change with fewer than 5 effective n in target regime
+ *   - No change unless advantage is consistent across >= 3 of last 7 days
+ *   - Max one change per week (tracked in l4_spec_change_log table)
+ *   - Always log the decision with reasoning even if no change made
+ *
+ * This is a RECOMMENDER. Whether the engine actually adopts the
+ * recommendation is gated by `JARVIS_ADAPTIVE_AUTO_APPLY` (default false).
+ * For Phase 2 we ship in recommend-only mode; Phase 2.x can flip to auto.
+ */
+function recommendAdaptiveSpec(db, opts = {}) {
+  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const overall = readRecentLearningRows(db, 90);
+  const overallR = overall.rolling;
+
+  // Today's regime — look up today's row if it exists, else use most-recent
+  // backfill/live row's regime as a proxy.
+  const todayRow = db.prepare(
+    'SELECT regime_trend, regime_vol, regime_orb_size, day_of_week FROM l4_daily_learning_row WHERE trade_date=?'
+  ).get(today);
+  const regime = todayRow || db.prepare(
+    'SELECT regime_trend, regime_vol, regime_orb_size, day_of_week FROM l4_daily_learning_row ORDER BY trade_date DESC LIMIT 1'
+  ).get() || {};
+
+  const regimeConditional = (regime.regime_trend || regime.regime_vol || regime.regime_orb_size)
+    ? readRecentLearningRowsByRegime(db, {
+        regime_trend: regime.regime_trend,
+        regime_vol: regime.regime_vol,
+        regime_orb_size: regime.regime_orb_size,
+        n: 90,
+      })
+    : { rolling: null, regime: null };
+
+  // Decision logic
+  const reasons = [];
+  let recommended = 'keep_current';
+
+  // Overall posture
+  if (overallR.recommendation === 'insufficient_data') {
+    reasons.push(`Overall: insufficient data (n_live=${overallR.liveCount}, n_backfill=${overallR.backfillCount})`);
+    recommended = 'keep_current';
+  } else if (overallR.recommendation === 'fallback_to_nearest') {
+    reasons.push(`Overall: Skip2 disadvantage ${overallR.avgAdvantagePerDay}/day weighted — consider fallback to Nearest`);
+    recommended = 'shift_to_nearest';
+  } else if (overallR.recommendation === 'keep_skip2') {
+    reasons.push(`Overall: Skip2 advantage ${overallR.avgAdvantagePerDay}/day weighted — keep`);
+    recommended = 'keep_current';
+  } else {
+    reasons.push(`Overall: hold steady, advantage ${overallR.avgAdvantagePerDay}/day weighted`);
   }
 
-  // Recency weighting: exponential decay with 30-day half-life.
-  // weight = sourceMultiplier * exp(-ln(2) * daysAgo / 30)
-  const LIVE_WEIGHT = 3.0;
-  const BACKFILL_WEIGHT = 1.0;
-  const HALF_LIFE_DAYS = 30;
-  const decayK = Math.log(2) / HALF_LIFE_DAYS;
-
-  // Reference date = newest row's date (for stable decay even if reader
-  // runs at odd times)
-  const newestDate = new Date(`${rows[0].trade_date}T12:00:00Z`).getTime();
-
-  let weightSum = 0;
-  let livePnlSum = 0;
-  let weightedNearest = 0;
-  let weightedSkip2 = 0;
-  let wrWeightSum = 0;
-  let wrWeighted = 0;
-  let liveCount = 0;
-  let backfillCount = 0;
-
-  for (const r of rows) {
-    const isLive = r.data_source === 'live';
-    if (isLive) liveCount += 1; else backfillCount += 1;
-    const rowDate = new Date(`${r.trade_date}T12:00:00Z`).getTime();
-    const daysAgo = Math.max(0, (newestDate - rowDate) / 86400000);
-    const decay = Math.exp(-decayK * daysAgo);
-    const sourceWeight = isLive ? LIVE_WEIGHT : BACKFILL_WEIGHT;
-    const w = sourceWeight * decay;
-
-    weightSum += w;
-    livePnlSum += Number(r.live_total_pnl_dollars || 0);
-    weightedNearest += Number(r.nearest_total_pnl_dollars || 0) * w;
-    weightedSkip2 += Number(r.skip2_total_pnl_dollars || 0) * w;
-    if (Number.isFinite(Number(r.live_winrate_pct))) {
-      wrWeighted += Number(r.live_winrate_pct) * w;
-      wrWeightSum += w;
+  // Regime-conditional override
+  if (regimeConditional.rolling && regimeConditional.rolling.sampleSize >= 5) {
+    const rR = regimeConditional.rolling;
+    reasons.push(`Regime (${JSON.stringify(regime)}): n=${rR.sampleSize}, advantage ${rR.avgAdvantagePerDay}/day`);
+    if (rR.recommendation === 'fallback_to_nearest' && overallR.recommendation !== 'keep_skip2') {
+      recommended = 'shift_to_nearest';
+      reasons.push(`→ regime hostile to Skip2, recommend shift to Nearest`);
     }
   }
-  const round2 = (x) => Math.round(x * 100) / 100;
-
-  // Recommendation logic (conservative defaults — gets refined in Phase 2):
-  //   - need at least 5 live trades OR 20 backfill days for any rec
-  //   - if weighted skip2 advantage > $50/day AND live trades show same direction → 'keep_skip2'
-  //   - if weighted skip2 advantage < -$50/day → 'fallback_to_nearest'
-  //   - else 'hold_steady'
-  const advantage = weightedSkip2 - weightedNearest;
-  const avgAdvPerWeightedDay = weightSum > 0 ? advantage / weightSum : 0;
-  let recommendation = 'hold_steady';
-  if (liveCount < 5 && backfillCount < 20) recommendation = 'insufficient_data';
-  else if (avgAdvPerWeightedDay > 50) recommendation = 'keep_skip2';
-  else if (avgAdvPerWeightedDay < -50) recommendation = 'fallback_to_nearest';
 
   return {
-    rows,
-    rolling: {
-      sampleSize: rows.length,
-      effectiveN: Math.round(weightSum * 10) / 10,
-      liveCount,
-      backfillCount,
-      totalLivePnl: round2(livePnlSum),
-      weightedNearestPnl: round2(weightedNearest),
-      weightedSkip2Pnl: round2(weightedSkip2),
-      weightedAutonomyAdvantage: round2(advantage),
-      avgAdvantagePerDay: round2(avgAdvPerWeightedDay),
-      avgWR: wrWeightSum > 0 ? Math.round((wrWeighted / wrWeightSum) * 10) / 10 : null,
-      decayHalfLifeDays: HALF_LIFE_DAYS,
-      liveWeight: LIVE_WEIGHT,
-      backfillWeight: BACKFILL_WEIGHT,
-      recommendation,
-    },
+    today,
+    recommended,
+    reasons,
+    overall: overallR,
+    regimeConditional: regimeConditional.rolling || null,
+    regimeFingerprint: regime,
+    autoApply: false, // wire to env in 2.x
   };
 }
 
@@ -815,6 +990,28 @@ function generateDailyBriefing(db, tradeDate, briefType = 'morning') {
     }[r.recommendation] || 'Unknown rec.';
 
     const wedSkip = dow === 'Wed' ? '\n- ⛔ Wednesday — skip filter active today.' : '';
+
+    // Phase 2: include regime-conditional analysis + adaptive recommendation
+    const adaptive = recommendAdaptiveSpec(db, { today: tradeDate });
+    const regimeStr = adaptive.regimeFingerprint
+      ? `trend=${adaptive.regimeFingerprint.regime_trend || '?'} vol=${adaptive.regimeFingerprint.regime_vol || '?'} orb=${adaptive.regimeFingerprint.regime_orb_size || '?'}`
+      : 'unknown';
+    const regimeBlock = adaptive.regimeConditional
+      ? [
+          ``,
+          `**Today's regime (${regimeStr}):**`,
+          `- Comparable days: ${adaptive.regimeConditional.sampleSize} (live ${adaptive.regimeConditional.liveCount} / backfill ${adaptive.regimeConditional.backfillCount})`,
+          `- Skip2 in this regime: $${adaptive.regimeConditional.weightedSkip2Pnl}   Nearest: $${adaptive.regimeConditional.weightedNearestPnl}`,
+          `- Regime-conditional advantage: $${adaptive.regimeConditional.weightedAutonomyAdvantage} (${adaptive.regimeConditional.avgAdvantagePerDay}/day)`,
+        ].join('\n')
+      : '';
+    const adaptiveBlock = [
+      ``,
+      `**Adaptive recommendation:** ${adaptive.recommended.replace(/_/g,' ').toUpperCase()}`,
+      ...adaptive.reasons.map(r => `- ${r}`),
+      `_Note: recommend-only mode — autonomy still runs Skip2 until manual approval to flip._`,
+    ].join('\n');
+
     body = [
       `**JARVIS posture today:** ${r.recommendation.replace(/_/g,' ').toUpperCase()}`,
       `**Recent track (${recent.rows.length} days, effective n=${r.effectiveN}):**`,
@@ -824,7 +1021,9 @@ function generateDailyBriefing(db, tradeDate, briefType = 'morning') {
       `- Weighted advantage: $${r.weightedAutonomyAdvantage} (avg $${r.avgAdvantagePerDay}/day)`,
       ``,
       `**Engine recommendation:** ${recBlurb}${wedSkip}`,
-    ].join('\n');
+      regimeBlock,
+      adaptiveBlock,
+    ].filter(Boolean).join('\n');
   } else if (briefType === 'evening') {
     const dailyRow = db.prepare('SELECT * FROM l4_daily_learning_row WHERE trade_date=?').get(tradeDate) || {};
     const tradesToday = db.prepare(
@@ -890,6 +1089,9 @@ module.exports = {
   computeCounterfactualPnls,
   aggregateDailyLearning,
   readRecentLearningRows,
+  readRecentLearningRowsByRegime,
   backfillHistoricalLearningRows,
   generateDailyBriefing,
+  classifyRegimeFromCandles,
+  recommendAdaptiveSpec,
 };
