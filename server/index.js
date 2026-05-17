@@ -87,6 +87,7 @@ const {
   buildPineScriptForStrategy,
 } = require('./jarvis-core/strategy-layers');
 const l4Learning = require('./jarvis-core/l4-learning');
+const { morsePushRaw } = require('./jarvis-core/morse-push');
 const {
   createLiveCandidateObservationLoop,
 } = require('./jarvis-core/live-candidate-observation-loop');
@@ -40276,6 +40277,16 @@ async function runLiveAutonomyExecutionCycle(options = {}) {
       autonomyBracket: autonomyBracketDecision,
     });
 
+    // Morse push — fire-and-forget. Operator sees the trade open on their phone
+    // within seconds of order placement.
+    try {
+      morsePushRaw({
+        title: `JARVIS opened: ${side === 'sell' ? 'SHORT' : 'LONG'} ${qty} ${symbol}`,
+        body: `Entry ≈ ${Number(signal.entry).toFixed(2)}  •  TP ${tpTicks}t / SL ${slTicks}t  •  ${setupName}`,
+        kind: 'trade_open', url: '/jarvis/today',
+      }).catch(() => {});
+    } catch (e) { /* swallow */ }
+
     // L4: record this trade with both the UI recommendation (Nearest) and the
     // actual order placed (Skip2 if autonomy override took effect). Outcome
     // gets filled in by recordTradeOutcome when fills resolve.
@@ -41578,6 +41589,21 @@ app.get('/api/jarvis/l4/shadow/leaderboard', (req, res) => {
     res.json({ status: 'ok', ...out });
   } catch (err) {
     res.status(500).json({ status: 'error', error: err.message || 'l4_leaderboard_failed' });
+  }
+});
+
+// Phase 4 — SPRT-based promotion gate evaluation.
+// GET /api/jarvis/l4/promotion-gate?candidate=shadow_skip2_wider_orb&live=shadow_skip2
+app.get('/api/jarvis/l4/promotion-gate', (req, res) => {
+  try {
+    const db = getDB();
+    l4Learning.ensureL4Tables(db);
+    const candidate = String(req.query.candidate || 'shadow_skip2_wider_orb');
+    const live = String(req.query.live || 'shadow_skip2');
+    const out = l4Learning.evaluatePromotionGate(db, { candidateKey: candidate, liveKey: live });
+    res.json({ status: 'ok', ...out });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'promotion_gate_failed' });
   }
 });
 
@@ -43372,8 +43398,15 @@ cron.schedule('30 8 * * 1-5', () => {
     const db = getDB();
     const today = new Date().toLocaleString('en-CA', { timeZone: 'America/New_York' }).slice(0, 10);
     l4Learning.ensureL4Tables(db);
-    l4Learning.generateDailyBriefing(db, today, 'morning');
+    const brief = l4Learning.generateDailyBriefing(db, today, 'morning');
     console.log(`[L4] Morning briefing generated for ${today}.`);
+    // Push to Morse — short summary so it fits the lock screen
+    const firstLine = (brief.body || '').split('\n').find(l => l.includes('posture')) || 'Brief ready.';
+    morsePushRaw({
+      title: brief.headline || `JARVIS morning brief — ${today}`,
+      body: firstLine.replace(/\*\*/g, '').slice(0, 200),
+      kind: 'briefing_morning', url: '/jarvis/today',
+    }).catch(() => {});
   } catch (err) {
     console.error('[L4] Morning briefing failed:', err.message);
   }
@@ -43392,13 +43425,20 @@ cron.schedule('0 17 * * 1-5', () => {
         runPlanBacktest, SHADOW_SPECS, classifyRegimeFromCandles: l4Learning.classifyRegimeFromCandles,
       });
     } catch (e) { console.warn('[L4] Shadow run for today failed:', e.message); }
-    l4Learning.generateDailyBriefing(db, today, 'evening');
+    const brief = l4Learning.generateDailyBriefing(db, today, 'evening');
     // Weekly on Fridays
     const dow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short' });
     if (dow === 'Fri') {
       l4Learning.generateDailyBriefing(db, today, 'weekly');
     }
     console.log(`[L4] Evening briefing generated for ${today}.`);
+    // Morse push — surface live P&L + key change
+    const summary = (brief.body || '').split('\n').slice(0, 3).join(' ').replace(/\*\*/g, '').slice(0, 200);
+    morsePushRaw({
+      title: brief.headline || `JARVIS evening recap — ${today}`,
+      body: summary,
+      kind: 'briefing_evening', url: '/jarvis/today',
+    }).catch(() => {});
   } catch (err) {
     console.error('[L4] Evening briefing failed:', err.message);
   }

@@ -33,28 +33,47 @@ const ORIGINAL_PLAN_SPEC = Object.freeze({
   }),
 });
 
-// 2026-04-25 — JARVIS Autonomy spec (independent track from user's UI guidance).
-// Per user directive: JARVIS's own trades on PRAC-V2 use Skip2 TP (data-backed
-// in 5y backtest at +$3,755 / PF 1.13). User continues trading Nearest TP via
-// UI guidance from ORIGINAL_PLAN_SPEC. L4 logs both decisions on every live
-// trade so we get a real, parallel A/B comparison in the current regime.
+// 2026-04-25 v1 → 2026-05-17 v2 — JARVIS Autonomy spec (independent track
+// from user's UI guidance).
 //
-// Same filters and entry logic as ORIGINAL_PLAN_SPEC — only tpMode differs.
-// This spec is consumed by the live autonomy loop in index.js
-// (runLiveAutonomyExecutionCycle) to override TP/SL ticks at order placement.
-const JARVIS_AUTONOMY_SPEC = Object.freeze({
+// v2 PROMOTION (2026-05-17, after Phase 3 leaderboard surfaced evidence):
+//   - 67% of recent 64 trading days are HIGH-VOL + WIDE-ORB regime
+//   - The 140-360 ORB filter was calibrated on 5y data dominated by NORMAL-vol
+//   - Recent 90-day backfill: shadow_skip2_wider_orb (ORB 100-500) caught 20
+//     trades for $99.50 weighted P&L vs shadow_skip2 (ORB 140-360) at -$38.47
+//   - Operator approved the flip on the regime-shift reasoning
+//
+// Same TP mode (Skip2), same Wed/holiday filters — only ORB range loosened
+// to match current regime. v1 retained as JARVIS_AUTONOMY_SPEC_V1 for
+// comparison and as a fallback if v2 underperforms (auto-demotion criteria
+// in l4-learning.js).
+const JARVIS_AUTONOMY_SPEC_V1 = Object.freeze({
   key: 'jarvis_autonomy_skip2_v1',
+  layer: 'autonomy_legacy',
+  name: 'JARVIS Autonomy Skip2 v1 (2026-04-25, demoted 2026-05-17)',
+  description: 'Previous live spec. ORB 140-360. Held until v2 promotion based on regime-shift evidence.',
+  engineOptions: Object.freeze({
+    longOnly: false, skipMonday: false, maxEntryHour: null, tpMode: 'skip2',
+  }),
+  filters: Object.freeze({
+    orbRange: Object.freeze({ min: 140, max: 360 }),
+    skipWednesday: true, skipHoliday: true,
+  }),
+});
+
+const JARVIS_AUTONOMY_SPEC = Object.freeze({
+  key: 'jarvis_autonomy_skip2_v2',
   layer: 'autonomy',
-  name: 'JARVIS Autonomy Skip2 (v1, 2026-04-25)',
-  description: 'JARVIS\'s own live-trading spec on PRAC-V2. Skip2 TP per 5y backtest data. Same entry logic and filters as user-method spec; differs only in TP/SL distance.',
+  name: 'JARVIS Autonomy Skip2 v2 (2026-05-17, wider ORB)',
+  description: 'Active autonomy spec. Skip2 TP + ORB 100-500 (loosened from v1\'s 140-360 to match current high-vol regime).',
   engineOptions: Object.freeze({
     longOnly: false,
     skipMonday: false,
     maxEntryHour: null,
-    tpMode: 'skip2',         // <-- THIS is what differs from ORIGINAL_PLAN_SPEC
+    tpMode: 'skip2',
   }),
   filters: Object.freeze({
-    orbRange: Object.freeze({ min: 140, max: 360 }),
+    orbRange: Object.freeze({ min: 100, max: 500 }),  // <-- v2 change
     skipWednesday: true,
     skipHoliday: true,
   }),
@@ -7391,6 +7410,7 @@ function buildCommandCenterPanels(input = {}) {
 module.exports = {
   ORIGINAL_PLAN_SPEC,
   JARVIS_AUTONOMY_SPEC,
+  JARVIS_AUTONOMY_SPEC_V1,
   SHADOW_SPECS,
   LEGACY_V0_SPEC,
   DEFAULT_VARIANT_SPECS,

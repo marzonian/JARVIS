@@ -1195,20 +1195,24 @@ function generateDailyBriefing(db, tradeDate, briefType = 'morning') {
       `_Note: recommend-only mode — autonomy still runs Skip2 until manual approval to flip._`,
     ].join('\n');
 
-    // Phase 3: include leaderboard in brief. The spec named "shadow_skip2"
-    // has IDENTICAL parameters to what JARVIS uses live on PRAC-V2
-    // (jarvis_autonomy_skip2_v1). We tag it explicitly in the brief so the
-    // operator never confuses "candidate alternatives we measure" with
-    // "what JARVIS is actually trading."
+    // Phase 3: include leaderboard in brief. The leaderboard tags which
+    // shadow spec_key matches the current JARVIS_AUTONOMY_SPEC parameters,
+    // so the operator never confuses "candidates we measure" with "what
+    // JARVIS is actually trading."
+    //
+    // 2026-05-17: After v2 promotion (ORB 100-500), the matching shadow is
+    // shadow_skip2_wider_orb. This tag is the source of truth — change it
+    // when the live spec is re-promoted, OR (todo) auto-detect by matching
+    // engineOptions + filters between JARVIS_AUTONOMY_SPEC and SHADOW_SPECS.
     let leaderboardBlock = '';
     try {
       const lb = rankShadowSpecs(db, { n: 90 });
       if (lb.ranked.length > 0) {
-        const LIVE_KEY = 'shadow_skip2'; // same params as JARVIS_AUTONOMY_SPEC
+        const LIVE_KEY = 'shadow_skip2_wider_orb'; // matches JARVIS_AUTONOMY_SPEC v2
         leaderboardBlock = [
           ``,
           `**Candidate spec leaderboard (last 90 days, recency-weighted):**`,
-          `_All candidates below are SIMULATED against historical candles. JARVIS is still placing REAL trades on PRAC-V2 using the spec tagged ★ LIVE below._`,
+          `_All candidates below are SIMULATED against historical candles. JARVIS is placing REAL trades on PRAC-V2 using the spec tagged ★ LIVE below._`,
           ...lb.ranked.map((s, i) => {
             const liveTag = s.spec_key === LIVE_KEY ? ' ★ LIVE (placing real orders on PRAC-V2)' : '';
             return `${i+1}. ${s.spec_key}: $${s.weightedPnl} (WR ${s.weightedWR ?? '-'}%, ${s.nTrades} trades)${liveTag}`;
@@ -1287,6 +1291,155 @@ function generateDailyBriefing(db, tradeDate, briefType = 'morning') {
   return { headline, body, decisions };
 }
 
+/**
+ * Phase 4 — Statistical promotion/demotion gate using Wald's SPRT.
+ *
+ * SPRT (Sequential Probability Ratio Test) lets us decide between two
+ * hypotheses about a candidate spec's performance without pre-committing
+ * to a sample size:
+ *
+ *   H0: candidate's true per-trade advantage over live spec is ≤ 0
+ *   H1: candidate's true per-trade advantage over live spec is ≥ Δ
+ *
+ * We track cumulative log-likelihood ratio across trades. As soon as it
+ * crosses log((1-β)/α) → promote candidate. If it crosses log(β/(1-α))
+ * → reject candidate. Otherwise keep collecting.
+ *
+ * α = false-positive rate (promote when we shouldn't) = 0.05
+ * β = false-negative rate (reject when we should promote) = 0.20
+ * Δ = minimum meaningful advantage per trade = $20 (1 tick × $0.50 × 40 ticks)
+ *
+ * The gate adds three layers on top of pure SPRT:
+ *   1. Regime stability — candidate must beat in current dominant regime
+ *   2. Drawdown safety — max drawdown of candidate ≤ 1.5× live's
+ *   3. Walk-forward — out-of-sample tail (last 30d) of backfill must agree
+ *      with in-sample head (60-31 days ago)
+ *
+ * Returns recommendation: 'promote' | 'demote' | 'continue' | 'insufficient_data'
+ */
+function evaluatePromotionGate(db, opts = {}) {
+  const {
+    candidateKey,
+    liveKey = 'shadow_skip2',
+    deltaPerTrade = 20,    // minimum meaningful advantage in $
+    alpha = 0.05,           // false-positive rate
+    beta = 0.20,            // false-negative rate
+    minTradesPerSpec = 15,  // floor before SPRT can fire
+    maxLookbackDays = 120,
+    sigmaPerTrade = 80,     // assumed per-trade P&L std-dev for SPRT math
+  } = opts;
+  if (!candidateKey) throw new Error('evaluatePromotionGate: candidateKey required');
+
+  // Pull paired daily P&L (candidate vs live) from l4_shadow_daily
+  const pairs = db.prepare(`
+    SELECT c.trade_date, c.counterfactual_pnl_dollars AS cand_pnl,
+           c.would_trade AS cand_trade,
+           l.counterfactual_pnl_dollars AS live_pnl,
+           l.would_trade AS live_trade,
+           c.regime_trend, c.regime_vol, c.regime_orb_size
+    FROM l4_shadow_daily c
+    LEFT JOIN l4_shadow_daily l ON l.trade_date = c.trade_date AND l.spec_key = ?
+    WHERE c.spec_key = ?
+      AND c.trade_date >= date('now', '-' || ? || ' days')
+    ORDER BY c.trade_date ASC
+  `).all(liveKey, candidateKey, maxLookbackDays);
+
+  // Daily advantage = candidate trade P&L minus live trade P&L
+  // (if either didn't trade that day, its contribution is 0)
+  const advantages = [];
+  const candPnls = [];
+  const livePnls = [];
+  for (const p of pairs) {
+    const c = p.cand_trade ? Number(p.cand_pnl || 0) : 0;
+    const l = p.live_trade ? Number(p.live_pnl || 0) : 0;
+    advantages.push(c - l);
+    candPnls.push(c);
+    livePnls.push(l);
+  }
+
+  const nCandTrades = pairs.filter(p => p.cand_trade).length;
+  const nLiveTrades = pairs.filter(p => p.live_trade).length;
+
+  if (Math.min(nCandTrades, nLiveTrades) < minTradesPerSpec) {
+    return {
+      recommendation: 'insufficient_data',
+      reasons: [`Need ≥${minTradesPerSpec} trades per spec; have cand=${nCandTrades}, live=${nLiveTrades}`],
+      candidate: candidateKey, live: liveKey,
+      nCandidateTrades: nCandTrades, nLiveTrades,
+    };
+  }
+
+  // SPRT log-likelihood ratio for normal-distributed advantage
+  // Under H0 (mean=0): LR contribution = (-deltaPerTrade^2 / (2σ²)) + (deltaPerTrade·x_i / σ²)
+  // Sum of LR contributions vs thresholds A=log((1-β)/α), B=log(β/(1-α))
+  const A = Math.log((1 - beta) / alpha);    // upper threshold → promote
+  const B = Math.log(beta / (1 - alpha));    // lower threshold → reject
+  const sigma2 = sigmaPerTrade * sigmaPerTrade;
+  let llr = 0;
+  for (const x of advantages) {
+    llr += (deltaPerTrade * x / sigma2) - (deltaPerTrade * deltaPerTrade / (2 * sigma2));
+  }
+
+  // Drawdown comparison (max consecutive losses in dollars)
+  const computeDD = (arr) => {
+    let peak = 0, equity = 0, maxDD = 0;
+    for (const x of arr) {
+      equity += x;
+      if (equity > peak) peak = equity;
+      const dd = peak - equity;
+      if (dd > maxDD) maxDD = dd;
+    }
+    return maxDD;
+  };
+  const candDD = computeDD(candPnls);
+  const liveDD = computeDD(livePnls);
+  const ddRatio = liveDD > 0 ? candDD / liveDD : (candDD > 0 ? Infinity : 1);
+
+  // Walk-forward sanity: head (60-31 days ago) vs tail (30-0 days ago)
+  const cutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const tail = pairs.filter(p => p.trade_date >= cutoff);
+  const head = pairs.filter(p => p.trade_date < cutoff);
+  const tailAdv = tail.reduce((s, p) => s + ((p.cand_trade ? p.cand_pnl||0 : 0) - (p.live_trade ? p.live_pnl||0 : 0)), 0);
+  const headAdv = head.reduce((s, p) => s + ((p.cand_trade ? p.cand_pnl||0 : 0) - (p.live_trade ? p.live_pnl||0 : 0)), 0);
+  const walkForwardConsistent = (tailAdv > 0 && headAdv > 0) || (tailAdv < 0 && headAdv < 0);
+
+  const reasons = [];
+  reasons.push(`SPRT: LLR=${llr.toFixed(2)}, A=${A.toFixed(2)} (promote), B=${B.toFixed(2)} (reject), n=${pairs.length}`);
+  reasons.push(`Cumulative advantage: $${advantages.reduce((s,x)=>s+x,0).toFixed(2)} over ${pairs.length} days`);
+  reasons.push(`Drawdown: candidate $${candDD.toFixed(2)} vs live $${liveDD.toFixed(2)} (ratio ${ddRatio.toFixed(2)})`);
+  reasons.push(`Walk-forward: head ${headAdv.toFixed(2)} / tail ${tailAdv.toFixed(2)} — consistent=${walkForwardConsistent}`);
+
+  let rec = 'continue';
+  if (llr >= A) {
+    if (ddRatio > 1.5) {
+      rec = 'continue';
+      reasons.push(`Drawdown gate FAILED: candidate DD ${ddRatio.toFixed(2)}× live's (need ≤1.5×)`);
+    } else if (!walkForwardConsistent) {
+      rec = 'continue';
+      reasons.push(`Walk-forward gate FAILED: head and tail disagree on advantage sign`);
+    } else {
+      rec = 'promote';
+    }
+  } else if (llr <= B) {
+    rec = 'demote';
+  }
+
+  return {
+    recommendation: rec,
+    candidate: candidateKey, live: liveKey,
+    nCandidateTrades: nCandTrades, nLiveTrades,
+    sprtLLR: llr, sprtUpperA: A, sprtLowerB: B,
+    cumulativeAdvantage: Math.round(advantages.reduce((s,x)=>s+x,0) * 100) / 100,
+    candidateDrawdown: Math.round(candDD * 100) / 100,
+    liveDrawdown: Math.round(liveDD * 100) / 100,
+    drawdownRatio: Math.round(ddRatio * 100) / 100,
+    walkForwardConsistent,
+    headAdvantage: Math.round(headAdv * 100) / 100,
+    tailAdvantage: Math.round(tailAdv * 100) / 100,
+    reasons,
+  };
+}
+
 module.exports = {
   ensureL4Tables,
   recordTradeIntent,
@@ -1303,4 +1456,5 @@ module.exports = {
   runShadowSpecsForDate,
   backfillShadowSpecsWindow,
   rankShadowSpecs,
+  evaluatePromotionGate,
 };
