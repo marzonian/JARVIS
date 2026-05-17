@@ -90,16 +90,28 @@ const l4Learning = require('./jarvis-core/l4-learning');
 const { morsePushRaw } = require('./jarvis-core/morse-push');
 const { adbPushNotification } = require('./jarvis-core/adb-push');
 
-// 2026-05-17 — unified phone-push wrapper. Fires Web Push (in-app chat
-// fallback) AND ADB notification (real Android system notification).
-// Either succeeding is enough. Both async, fire-and-forget.
+// 2026-05-17 — unified phone-push wrapper.
+//
+// Primary: Web Push → MVRSE → WebSocket → Morse Android app, which now
+// (after the Kotlin notification fix) posts a real Android system
+// notification. Single notification, proper styling, lock-screen visible.
+//
+// Fallback: ADB-direct notification post. Only fires if env
+// JARVIS_PUSH_USE_ADB=true. Keep as a backup for when:
+//   - Morse app is killed (no WebSocket)
+//   - Tailscale link to MVRSE is down
+//   - Mid-rebuild of the APK
+// Both paths are fire-and-forget.
+const ADB_PUSH_ENABLED = String(process.env.JARVIS_PUSH_USE_ADB || 'false').toLowerCase() === 'true';
 function pushToPhone({ title, body, kind = 'jarvis', url = '/', tag = null }) {
-  try {
-    adbPushNotification({ title, body, tag: tag || `jarvis_${kind}` }).catch(() => {});
-  } catch {}
   try {
     morsePushRaw({ title, body, kind, url }).catch(() => {});
   } catch {}
+  if (ADB_PUSH_ENABLED) {
+    try {
+      adbPushNotification({ title, body, tag: tag || `jarvis_${kind}` }).catch(() => {});
+    } catch {}
+  }
 }
 const {
   createLiveCandidateObservationLoop,
