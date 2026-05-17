@@ -89,6 +89,7 @@ const {
 const l4Learning = require('./jarvis-core/l4-learning');
 const { morsePushRaw } = require('./jarvis-core/morse-push');
 const { adbPushNotification } = require('./jarvis-core/adb-push');
+const expressGlance = require('./jarvis-core/express-glance');
 
 // 2026-05-17 — unified phone-push wrapper.
 //
@@ -43414,6 +43415,42 @@ cron.schedule('*/2 8-16 * * 1-5', () => {
     }
   })();
 }, { timezone: 'America/New_York' });
+
+// EXPRESS-V2 live glance card — sticky notification refreshes every N seconds.
+// READ-ONLY view of the EXPRESS-V2 account (no orders ever placed here).
+// Env-gated: JARVIS_EXPRESS_GLANCE_ENABLED=true to activate.
+// Two cadences: 30s during RTH, 5min off-hours (configurable).
+// Same tag = the same notification cell gets updated, not appended.
+{
+  let glanceState = { lastRunMs: 0, lastError: null };
+  const tickGlance = async () => {
+    if (!expressGlance.ENABLED) return;
+    const now = Date.now();
+    const interval = (expressGlance.isRthNowEt() ? expressGlance.INTERVAL_RTH : expressGlance.INTERVAL_OFF) * 1000;
+    if (now - glanceState.lastRunMs < interval) return;
+    glanceState.lastRunMs = now;
+    try {
+      const r = await expressGlance.pushExpressGlance(getDB(), {});
+      glanceState.lastError = r.ok ? null : (r.error || r.reason || 'unknown');
+    } catch (err) {
+      glanceState.lastError = String(err?.message || err);
+      console.warn('[Express Glance] tick failed:', glanceState.lastError);
+    }
+  };
+  // Tick every 15s; tick() internally decides whether to actually refresh
+  // based on RTH vs off-hours cadence. Cheap to call when no-op.
+  cron.schedule('*/15 * * * * *', () => { tickGlance().catch(() => {}); });
+}
+
+// Manual force-refresh endpoint (useful for testing / one-off check)
+app.post('/api/jarvis/express-glance/refresh', async (req, res) => {
+  try {
+    const r = await expressGlance.pushExpressGlance(getDB(), { force: true });
+    res.json({ status: r.ok ? 'ok' : 'error', ...r });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message || 'glance_refresh_failed' });
+  }
+});
 
 // L4 Daily Briefing crons — morning (8:30 AM ET) and evening (5:00 PM ET)
 // Generates a markdown briefing per day, stored in l4_daily_briefing.
