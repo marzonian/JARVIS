@@ -88,6 +88,19 @@ const {
 } = require('./jarvis-core/strategy-layers');
 const l4Learning = require('./jarvis-core/l4-learning');
 const { morsePushRaw } = require('./jarvis-core/morse-push');
+const { adbPushNotification } = require('./jarvis-core/adb-push');
+
+// 2026-05-17 — unified phone-push wrapper. Fires Web Push (in-app chat
+// fallback) AND ADB notification (real Android system notification).
+// Either succeeding is enough. Both async, fire-and-forget.
+function pushToPhone({ title, body, kind = 'jarvis', url = '/', tag = null }) {
+  try {
+    adbPushNotification({ title, body, tag: tag || `jarvis_${kind}` }).catch(() => {});
+  } catch {}
+  try {
+    morsePushRaw({ title, body, kind, url }).catch(() => {});
+  } catch {}
+}
 const {
   createLiveCandidateObservationLoop,
 } = require('./jarvis-core/live-candidate-observation-loop');
@@ -40277,15 +40290,15 @@ async function runLiveAutonomyExecutionCycle(options = {}) {
       autonomyBracket: autonomyBracketDecision,
     });
 
-    // Morse push — fire-and-forget. Operator sees the trade open on their phone
-    // within seconds of order placement.
-    try {
-      morsePushRaw({
-        title: `JARVIS opened: ${side === 'sell' ? 'SHORT' : 'LONG'} ${qty} ${symbol}`,
-        body: `Entry ≈ ${Number(signal.entry).toFixed(2)}  •  TP ${tpTicks}t / SL ${slTicks}t  •  ${setupName}`,
-        kind: 'trade_open', url: '/jarvis/today',
-      }).catch(() => {});
-    } catch (e) { /* swallow */ }
+    // Phone push — fires both ADB (real Android notification) AND Web Push
+    // (in-app chat). Operator sees the trade open on their phone within
+    // ~2 seconds.
+    pushToPhone({
+      title: `JARVIS opened: ${side === 'sell' ? 'SHORT' : 'LONG'} ${qty} ${symbol}`,
+      body: `Entry ≈ ${Number(signal.entry).toFixed(2)}  •  TP ${tpTicks}t / SL ${slTicks}t  •  ${setupName}`,
+      kind: 'trade_open', url: '/jarvis/today',
+      tag: `jarvis_trade_${Date.now()}`,
+    });
 
     // L4: record this trade with both the UI recommendation (Nearest) and the
     // actual order placed (Skip2 if autonomy override took effect). Outcome
@@ -43400,13 +43413,13 @@ cron.schedule('30 8 * * 1-5', () => {
     l4Learning.ensureL4Tables(db);
     const brief = l4Learning.generateDailyBriefing(db, today, 'morning');
     console.log(`[L4] Morning briefing generated for ${today}.`);
-    // Push to Morse — short summary so it fits the lock screen
     const firstLine = (brief.body || '').split('\n').find(l => l.includes('posture')) || 'Brief ready.';
-    morsePushRaw({
+    pushToPhone({
       title: brief.headline || `JARVIS morning brief — ${today}`,
       body: firstLine.replace(/\*\*/g, '').slice(0, 200),
       kind: 'briefing_morning', url: '/jarvis/today',
-    }).catch(() => {});
+      tag: 'jarvis_brief_morning',
+    });
   } catch (err) {
     console.error('[L4] Morning briefing failed:', err.message);
   }
@@ -43432,13 +43445,13 @@ cron.schedule('0 17 * * 1-5', () => {
       l4Learning.generateDailyBriefing(db, today, 'weekly');
     }
     console.log(`[L4] Evening briefing generated for ${today}.`);
-    // Morse push — surface live P&L + key change
     const summary = (brief.body || '').split('\n').slice(0, 3).join(' ').replace(/\*\*/g, '').slice(0, 200);
-    morsePushRaw({
+    pushToPhone({
       title: brief.headline || `JARVIS evening recap — ${today}`,
       body: summary,
       kind: 'briefing_evening', url: '/jarvis/today',
-    }).catch(() => {});
+      tag: 'jarvis_brief_evening',
+    });
   } catch (err) {
     console.error('[L4] Evening briefing failed:', err.message);
   }
